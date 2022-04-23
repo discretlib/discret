@@ -6,6 +6,12 @@ pub enum VaultError {
     VaultDontExists,
     #[error("A Vault allready exists for this pass phase")]
     VaultAllreadyExists,
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("Invalid KeyPair")]
+    InvalidKeyPair,
+    #[error("Invalid Public Key")]
+    InvalidPublicKey,
     #[error("unknown vaulterror")]
     Unknown,
 }
