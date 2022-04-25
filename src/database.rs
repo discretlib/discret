@@ -22,7 +22,7 @@ pub struct Database {
 impl Database {
     pub fn new(data_folder: impl Into<PathBuf>, secret: [u8; 32]) -> Self {
         //this key format avoids additional key derivation from SQLCipher
-        let sqlcipher_key = vec!["x'".to_string(), hex::encode(&secret), "'".to_string()].concat();
+        let sqlcipher_key = format!("x'{}'", hex::encode(&secret));
 
         //hash the secret to get the database file name
         let file_name = hex::encode(cryptography::hash(&secret));
@@ -76,12 +76,7 @@ impl Database {
     fn create_connection(&self) -> Result<Connection, rusqlite::Error> {
         let conn = rusqlite::Connection::open(self.path.clone())?;
         {
-            let query = vec![
-                "PRAGMA key = \"".to_string(),
-                self.secret.clone(),
-                "'\"".to_string(),
-            ]
-            .concat();
+            let query = format!("PRAGMA key=\"{}\" ", self.secret);
             let res: String = conn.query_row(&query, [], |row| row.get(0))?;
             assert_eq!("ok", res)
         }
@@ -126,10 +121,8 @@ mod tests {
     fn test_pool_encryption() -> Result<(), rusqlite::Error> {
         let db_path = "test/data/";
         let secret: [u8; 4] = [1, 2, 3, 4];
-        let wrong_secret: [u8; 4] = [4, 3, 2, 1];
 
         let poule = Database::new(db_path, cryptography::hash(&secret));
-        let bad_poule = Database::new(db_path, cryptography::hash(&wrong_secret));
         // println!("Poule size  {:?}", poule.len());
         //brace to quickly push the Connection out of scope
         {
@@ -141,6 +134,7 @@ mod tests {
                 )",
                 [], // empty list of parameters.
             )?;
+            good_conn_1.execute("DELETE FROM person", [])?;
             let me = Person {
                 id: 0,
                 name: "Steven".to_string(),
@@ -163,15 +157,21 @@ mod tests {
                 assert_eq!(p.name, "Steven");
             }
 
-            let bad_conn_1 = bad_poule.get_connection()?;
-            let ressult: Result<i32, rusqlite::Error> =
-                bad_conn_1.query_row("SELECT id FROM person", [], |row| row.get(0));
-            ressult.expect_err("all is fine");
+            let bad_conn_1 = poule.get_connection()?;
+            //setup a bad passwpord
+            let query = "PRAGMA key=\"x'00081d171425a36312fa058d8712d5d05135a991ec20351ce9d65cdb19a05432'\" ";
+            let res: String = bad_conn_1.query_row(&query, [], |row| row.get(0))?;
+            assert_eq!("ok", res);
 
-            good_conn_2.execute("DELETE FROM person", [])?;
+            let result: Result<i32, rusqlite::Error> =
+                bad_conn_1.query_row("SELECT id FROM person", [], |row| row.get(0));
+            let error_message = result
+                .expect_err("Should have failed due to wrong database password")
+                .to_string();
+            assert_eq!("file is not a database", error_message);
         }
-        assert_eq!(poule.pool_len(), 2);
-        assert_eq!(bad_poule.pool_len(), 1);
+        assert_eq!(poule.pool_len(), 3);
+
         Ok(())
     }
 }

@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 mod cryptography;
 mod database;
 mod errors;
+mod networking;
 use cryptography::*;
 use database::Database;
 

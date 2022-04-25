@@ -17,7 +17,6 @@ pub fn hash(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).as_bytes().to_owned()
 }
 
-#[allow(dead_code)]
 pub fn create_random_key_pair() -> Keypair {
     let mut csprng = OsRng {};
     let mut random: [u8; 32] = [0; 32];
@@ -27,7 +26,6 @@ pub fn create_random_key_pair() -> Keypair {
     create_key_pair(&random)
 }
 
-#[allow(dead_code)]
 pub fn create_key_pair(random: &[u8; 32]) -> Keypair {
     let sk: SecretKey = SecretKey::from_bytes(random).unwrap();
     let pk: PublicKey = (&sk).into();
@@ -37,51 +35,37 @@ pub fn create_key_pair(random: &[u8; 32]) -> Keypair {
     }
 }
 
-#[allow(dead_code)]
 pub fn import_keypair(keypair: [u8; 64]) -> Result<Keypair, VaultError> {
-    match Keypair::from_bytes(&keypair) {
-        Ok(val) => Ok(val),
-        Err(_) => Err(VaultError::InvalidKeyPair),
-    }
+    Keypair::from_bytes(&keypair).or_else(|_| Err(VaultError::InvalidKeyPair))
 }
 
-#[allow(dead_code)]
 pub fn export_keypair(keypair: &Keypair) -> [u8; 64] {
     keypair.to_bytes()
 }
 
-#[allow(dead_code)]
 pub fn import_public_key(public_key: [u8; 32]) -> Result<PublicKey, VaultError> {
-    match PublicKey::from_bytes(&public_key) {
-        Ok(val) => Ok(val),
-        Err(_) => Err(VaultError::InvalidPublicKey),
-    }
+    PublicKey::from_bytes(&public_key).or_else(|_| Err(VaultError::InvalidPublicKey))
 }
 
-#[allow(dead_code)]
 pub fn export_public_key(public_key: &PublicKey) -> [u8; 32] {
     public_key.to_bytes()
 }
 
-#[allow(dead_code)]
 pub fn sign(keypair: &Keypair, message: &[u8]) -> Signature {
     let signature = keypair.sign(message);
     signature
 }
 
-#[allow(dead_code)]
 pub fn verify(
     public_key: &PublicKey,
     message: &[u8],
     signature: Signature,
 ) -> Result<(), VaultError> {
-    match public_key.verify(&message, &signature) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(VaultError::InvalidSignature),
-    }
+    public_key
+        .verify(&message, &signature)
+        .or_else(|_| Err(VaultError::InvalidSignature))
 }
 
-#[allow(dead_code)]
 //Provides human readable smaller hash
 //do not use as a primary key!!
 //length:7 provides only about 25 000 000 000 different combinations
@@ -92,7 +76,6 @@ pub fn reduce_hash_for_humans(hash: &[u8; 32], length: usize) -> String {
         "X", "Z",
     ];
     let vowel = ["A", "E", "I", "O", "U", "Y"];
-    //, "AE", "AO", "AI", "AU", "AY", "EA", "EI", "EU", "IA", "IO", "OI", "OU", "UA", "UI",
     let mut v: Vec<&str> = vec![];
 
     let mut use_vowel = false;
