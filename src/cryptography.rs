@@ -66,6 +66,21 @@ pub fn verify(
         .or_else(|_| Err(VaultError::InvalidSignature))
 }
 
+pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
+    let mut param = rcgen::CertificateParams::new(vec!["".into()]);
+    param.alg = &rcgen::PKCS_ED25519;
+
+    let cert = rcgen::Certificate::from_params(param).unwrap();
+
+    let key = cert.serialize_private_key_der();
+    let secret_key = rustls::PrivateKey(key);
+
+    let cert = cert.serialize_der().unwrap();
+    let pub_key = rustls::Certificate(cert);
+
+    (pub_key, secret_key)
+}
+
 //Provides human readable smaller hash
 //do not use as a primary key!!
 //length:7 provides only about 25 000 000 000 different combinations
@@ -126,5 +141,22 @@ mod tests {
 
         assert_eq!("BEDOGYJ-24", reduce_hash_for_humans(&bytes, 7));
         assert_eq!("BEDOGYJEL-30", reduce_hash_for_humans(&bytes, 9));
+    }
+
+    #[test]
+    pub fn generate_self_signed_certificate_test() {
+        /*     let mut param = rcgen::CertificateParams::new(vec!["vault.self.signed".into()]);
+        param.alg = &rcgen::PKCS_ED25519;
+
+        let cert = rcgen::Certificate::from_params(param).unwrap();
+
+        let key = cert.serialize_private_key_der();
+        let secret_key = rustls::PrivateKey(key);
+
+        let cert = cert.serialize_der().unwrap();
+        let pub_key = rustls::Certificate(cert); */
+
+        let (pub_key, _) = generate_self_signed_certificate();
+        println!("{}", pub_key.0.len());
     }
 }
