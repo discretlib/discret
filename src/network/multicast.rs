@@ -1,10 +1,10 @@
 use bincode;
 
-use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 use crate::error::Error;
+use crate::message::Message;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
@@ -16,16 +16,19 @@ use tokio::time::{sleep, Duration};
 //maximum message size
 const MULTICAST_MTU: usize = 1330;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub enum Message {
-    TestMessage,
-    TestMessage2,
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct Announce {
+    port: u16,
+    pub_key: [u8; 32],
+    certificate: Vec<u8>,
+    signature: Vec<u8>,
+    tokens: Vec<Vec<u8>>,
 }
 
 pub async fn star_multicast_discovery(
     multicast_adress: SocketAddr,
     announce_frequency: Duration,
-) -> Result<(Sender<Message>, Receiver<Result<Message, Error>>), Error> {
+) -> Result<(Sender<Announce>, Receiver<Result<Message, Error>>), Error> {
     let socket_sender = new_sender();
     if socket_sender.is_err() {
         return Err(socket_sender.expect_err("").into());
@@ -38,7 +41,7 @@ pub async fn star_multicast_discovery(
     }
     let socket_listener = socket_listener.unwrap();
 
-    let (sender, mut internal_reciever): (Sender<Message>, Receiver<Message>) = mpsc::channel(2);
+    let (sender, mut internal_reciever): (Sender<Announce>, Receiver<Announce>) = mpsc::channel(2);
 
     let (internal_sender, reciever): (
         Sender<Result<Message, Error>>,
@@ -99,18 +102,27 @@ pub async fn star_multicast_discovery(
         loop {
             let ms = socket_listener.recv_from(&mut buf).await;
             match ms {
-                Ok((len, _remote_addr)) => {
+                Ok((len, remote_addr)) => {
                     if len > buf.len() {
                         let _ = internal_sender
                             .send(Err(Error::MsgDeserialisationToLong(len, MULTICAST_MTU)))
                             .await;
                         continue;
                     };
-                    let msg: Result<Message, Box<bincode::ErrorKind>> =
+                    let res: Result<Announce, Box<bincode::ErrorKind>> =
                         bincode::deserialize(&buf[0..len]);
-                    let _ = match msg {
-                        Ok(message) => internal_sender.send(Ok(message)).await,
-                        Err(e) => internal_sender.send(Err(e.into())).await,
+
+                    match res {
+                        Ok(announce) => {
+                            let message = Message::MulticastCandidate {
+                                ip: remote_addr.ip(),
+                                announce,
+                            };
+                            let _ = internal_sender.send(Ok(message)).await;
+                        }
+                        Err(e) => {
+                            let _ = internal_sender.send(Err(e.into())).await;
+                        }
                     };
                 }
                 Err(e) => {
@@ -183,23 +195,41 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn multicast_discovery_test() -> Result<(), Box<dyn Error>> {
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22401);
-        let announce_frequency = 1;
+        let announce_frequency = 10;
         let (sender, mut receiver) =
             star_multicast_discovery(multicast_adress, Duration::from_millis(announce_frequency))
                 .await
                 .unwrap();
-        let _ = sender.send(Message::TestMessage).await;
-        let message = receiver.recv().await.unwrap()?;
-        assert_eq!(message, Message::TestMessage);
-        let _ = sender.send(Message::TestMessage2).await;
-        let message = receiver.recv().await.unwrap()?;
-        assert_eq!(message, Message::TestMessage2);
+
+        let ann = Announce {
+            port: 8,
+            pub_key: [0; 32],
+            certificate: vec![1, 2, 3, 4],
+            signature: vec![1, 2, 3],
+            tokens: vec![vec![4, 3, 2, 1]],
+        };
+
+        let _ = sender.send(ann.clone()).await;
+        let received = receiver.recv().await.unwrap()?;
+
+        let ipr;
+        match &received {
+            Message::MulticastCandidate { ip, announce } => {
+                assert_eq!(announce, &ann);
+                ipr = ip;
+            }
+        }
 
         //sleep enought time for one announce
         thread::sleep(Duration::from_millis(announce_frequency));
-        let message = receiver.recv().await.unwrap()?;
-        assert_eq!(message, Message::TestMessage2);
-
+        let msg = receiver.recv().await.unwrap()?;
+        match &msg {
+            Message::MulticastCandidate { ip, announce } => {
+                assert_eq!(announce, &ann);
+                assert_eq!(ip, ipr);
+            }
+        }
+        assert_eq!(received, msg);
         Ok(())
     }
 

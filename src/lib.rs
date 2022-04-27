@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-mod cryptography;
-mod database;
-mod error;
-mod network;
+pub mod cryptography;
+pub mod database;
+pub mod error;
+pub mod message;
+pub mod network;
+
 use cryptography::*;
 use database::Database;
 

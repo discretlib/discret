@@ -1,2 +1,2 @@
-mod multicast;
-mod p2p;
+pub mod multicast;
+pub mod p2p;
