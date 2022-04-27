@@ -2,17 +2,17 @@
 
 mod cryptography;
 mod database;
-mod errors;
+mod error;
 mod network;
 use cryptography::*;
 use database::Database;
 
-pub fn create(pass_phrase: String) -> Result<Database, errors::VaultError> {
+pub fn create(pass_phrase: String) -> Result<Database, error::Error> {
     let secret = derive_pass_phrase(pass_phrase);
     Ok(start_database(secret))
 }
 
-pub fn open(pass_phrase: String) -> Result<Database, errors::VaultError> {
+pub fn open(pass_phrase: String) -> Result<Database, error::Error> {
     let secret = derive_pass_phrase(pass_phrase);
     Ok(start_database(secret))
 }

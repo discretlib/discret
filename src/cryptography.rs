@@ -1,4 +1,4 @@
-use crate::errors::VaultError;
+use crate::error::Error;
 use argon2::{self, Config};
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
@@ -35,16 +35,16 @@ pub fn create_key_pair(random: &[u8; 32]) -> Keypair {
     }
 }
 
-pub fn import_keypair(keypair: [u8; 64]) -> Result<Keypair, VaultError> {
-    Keypair::from_bytes(&keypair).or_else(|_| Err(VaultError::InvalidKeyPair))
+pub fn import_keypair(keypair: [u8; 64]) -> Result<Keypair, Error> {
+    Keypair::from_bytes(&keypair).or_else(|_| Err(Error::InvalidKeyPair))
 }
 
 pub fn export_keypair(keypair: &Keypair) -> [u8; 64] {
     keypair.to_bytes()
 }
 
-pub fn import_public_key(public_key: [u8; 32]) -> Result<PublicKey, VaultError> {
-    PublicKey::from_bytes(&public_key).or_else(|_| Err(VaultError::InvalidPublicKey))
+pub fn import_public_key(public_key: [u8; 32]) -> Result<PublicKey, Error> {
+    PublicKey::from_bytes(&public_key).or_else(|_| Err(Error::InvalidPublicKey))
 }
 
 pub fn export_public_key(public_key: &PublicKey) -> [u8; 32] {
@@ -56,14 +56,10 @@ pub fn sign(keypair: &Keypair, message: &[u8]) -> Signature {
     signature
 }
 
-pub fn verify(
-    public_key: &PublicKey,
-    message: &[u8],
-    signature: Signature,
-) -> Result<(), VaultError> {
+pub fn verify(public_key: &PublicKey, message: &[u8], signature: Signature) -> Result<(), Error> {
     public_key
         .verify(&message, &signature)
-        .or_else(|_| Err(VaultError::InvalidSignature))
+        .or_else(|_| Err(Error::InvalidSignature))
 }
 
 pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
