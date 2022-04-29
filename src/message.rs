@@ -1,12 +1,31 @@
 use serde::{Deserialize, Serialize};
 
-use crate::network::multicast;
+use crate::network::{beacon, multicast};
 use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum Message {
-    MulticastCandidate {
+    MulticastCandidates {
         ip: IpAddr,
-        announce: multicast::Announce,
+        announce: Box<multicast::Announce>,
     },
+    BeaconCandidate {
+        peer_info: Box<beacon::PeerInfo>,
+        connection_token: Vec<u8>,
+    },
+}
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    #[test]
+    fn test_size() {
+        // if cfg!(debug_assertions) {
+        //     println!("Debugging enabled");
+        // } else {
+        //     println!("Debugging disabled");
+        // }
+
+        println!("Size is {}", std::mem::size_of::<Message>());
+    }
 }

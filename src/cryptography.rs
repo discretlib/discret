@@ -78,10 +78,10 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
 }
 
 //Provides human readable smaller hash
+//
+//usefull to remember an item and search it later
 //do not use as a primary key!!
-//length:7 provides only about 25 000 000 000 different combinations
-//no bound checking length should be small
-pub fn reduce_hash_for_humans(hash: &[u8; 32], length: usize) -> String {
+pub fn humanise_hash(hash: &[u8; 32], length: usize) -> String {
     let consonnant = [
         "B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W",
         "X", "Z",
@@ -135,8 +135,8 @@ mod tests {
             24, 25, 26, 27, 28, 29, 30, 31,
         ];
 
-        assert_eq!("BEDOGYJ-24", reduce_hash_for_humans(&bytes, 7));
-        assert_eq!("BEDOGYJEL-30", reduce_hash_for_humans(&bytes, 9));
+        assert_eq!("BEDOGYJ-24", humanise_hash(&bytes, 7));
+        assert_eq!("BEDOGYJEL-30", humanise_hash(&bytes, 9));
     }
 
     #[test]

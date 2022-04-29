@@ -19,8 +19,8 @@ const MULTICAST_MTU: usize = 1330;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Announce {
     port: u16,
-    pub_key: [u8; 32],
     certificate: Vec<u8>,
+    pub_key: [u8; 32],
     signature: Vec<u8>,
     tokens: Vec<Vec<u8>>,
 }
@@ -28,7 +28,8 @@ pub struct Announce {
 pub async fn star_multicast_discovery(
     multicast_adress: SocketAddr,
     announce_frequency: Duration,
-) -> Result<(Sender<Announce>, Receiver<Result<Message, Error>>), Error> {
+    send_to: Sender<Result<Message, Error>>,
+) -> Result<Sender<Announce>, Error> {
     let socket_sender = new_sender();
     if socket_sender.is_err() {
         return Err(socket_sender.expect_err("").into());
@@ -39,16 +40,11 @@ pub async fn star_multicast_discovery(
     if socket_listener.is_err() {
         return Err(socket_listener.expect_err("").into());
     }
-    let socket_listener = socket_listener.unwrap();
+    let socket_listener: UdpSocket = socket_listener.unwrap();
 
-    let (sender, mut internal_reciever): (Sender<Announce>, Receiver<Announce>) = mpsc::channel(2);
+    let (sender, mut internal_reciever): (Sender<Announce>, Receiver<Announce>) = mpsc::channel(1);
 
-    let (internal_sender, reciever): (
-        Sender<Result<Message, Error>>,
-        Receiver<Result<Message, Error>>,
-    ) = mpsc::channel(1);
-
-    let error_channel = internal_sender.clone();
+    let error_channel = send_to.clone();
 
     tokio::spawn(async move {
         let mut buf: Vec<u8> = Vec::with_capacity(MULTICAST_MTU);
@@ -98,41 +94,35 @@ pub async fn star_multicast_discovery(
     });
 
     tokio::spawn(async move {
-        let mut buf = [0u8; MULTICAST_MTU];
+        let buf: [u8; 1330] = [0u8; MULTICAST_MTU];
         loop {
-            let ms = socket_listener.recv_from(&mut buf).await;
-            match ms {
-                Ok((len, remote_addr)) => {
-                    if len > buf.len() {
-                        let _ = internal_sender
-                            .send(Err(Error::MsgDeserialisationToLong(len, MULTICAST_MTU)))
-                            .await;
-                        continue;
-                    };
-                    let res: Result<Announce, Box<bincode::ErrorKind>> =
-                        bincode::deserialize(&buf[0..len]);
-
-                    match res {
-                        Ok(announce) => {
-                            let message = Message::MulticastCandidate {
-                                ip: remote_addr.ip(),
-                                announce,
-                            };
-                            let _ = internal_sender.send(Ok(message)).await;
-                        }
-                        Err(e) => {
-                            let _ = internal_sender.send(Err(e.into())).await;
-                        }
-                    };
-                }
-                Err(e) => {
-                    let _ = internal_sender.send(Err(e.into())).await;
-                }
-            }
+            let mess = handle_receive(&socket_listener, buf).await;
+            let _ = send_to.send(mess).await;
         }
     });
 
-    Ok((sender, reciever))
+    Ok(sender)
+}
+
+async fn handle_receive(
+    socket_listener: &UdpSocket,
+    mut buf: [u8; MULTICAST_MTU],
+) -> Result<Message, Error> {
+    let (len, remote_addr) = socket_listener
+        .recv_from(&mut buf)
+        .await
+        .map_err(|e| Error::from(e))?;
+
+    if len > buf.len() {
+        return Err(Error::MsgDeserialisationToLong(len, MULTICAST_MTU));
+    };
+
+    let announce: Announce = bincode::deserialize(&buf[0..len]).map_err(|e| Error::from(e))?;
+    let message = Message::MulticastCandidates {
+        ip: remote_addr.ip(),
+        announce: Box::new(announce),
+    };
+    Ok(message)
 }
 
 fn new_listener(multicast_adress: SocketAddr) -> io::Result<UdpSocket> {
@@ -189,17 +179,27 @@ fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std::thread;
+
     use super::*;
-    use std::{error::Error, thread};
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn multicast_discovery_test() -> Result<(), Box<dyn Error>> {
+    async fn multicast_discovery_test() -> Result<(), Box<dyn std::error::Error>> {
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22401);
         let announce_frequency = 10;
-        let (sender, mut receiver) =
-            star_multicast_discovery(multicast_adress, Duration::from_millis(announce_frequency))
-                .await
-                .unwrap();
+
+        let (sender, mut receiver): (
+            Sender<Result<Message, Error>>,
+            Receiver<Result<Message, Error>>,
+        ) = mpsc::channel(1);
+
+        let sender = star_multicast_discovery(
+            multicast_adress,
+            Duration::from_millis(announce_frequency),
+            sender,
+        )
+        .await
+        .unwrap();
 
         let ann = Announce {
             port: 8,
@@ -212,29 +212,31 @@ mod test {
         let _ = sender.send(ann.clone()).await;
         let received = receiver.recv().await.unwrap()?;
 
-        let ipr;
+        let mut ipr = &multicast_adress.ip();
         match &received {
-            Message::MulticastCandidate { ip, announce } => {
-                assert_eq!(announce, &ann);
+            Message::MulticastCandidates { ip, announce } => {
+                assert_eq!(announce.as_ref(), &ann);
                 ipr = ip;
             }
+            _ => {}
         }
 
         //sleep enought time for one announce
         thread::sleep(Duration::from_millis(announce_frequency));
         let msg = receiver.recv().await.unwrap()?;
         match &msg {
-            Message::MulticastCandidate { ip, announce } => {
-                assert_eq!(announce, &ann);
+            Message::MulticastCandidates { ip, announce } => {
+                assert_eq!(announce.as_ref(), &ann);
                 assert_eq!(ip, ipr);
             }
+            _ => {}
         }
         assert_eq!(received, msg);
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn ipv4_multicast_tokio_test() -> Result<(), Box<dyn Error>> {
+    async fn ipv4_multicast_tokio_test() -> Result<(), Box<dyn std::error::Error>> {
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
 
         let listener = new_listener(multicast_adress).expect("failed to create listener");
