@@ -1,3 +1,5 @@
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, Result};
@@ -5,6 +7,7 @@ use futures::StreamExt;
 use quinn::{Endpoint, IdleTimeout, ServerConfig, TransportConfig, VarInt};
 
 use std::sync::Mutex as stdMutex;
+use std::time::Duration;
 use std::{collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -14,14 +17,13 @@ use tracing_futures::Instrument as _;
 pub const BEACON_MTU: usize = 1330;
 pub static KEEP_ALIVE_INTERVAL: u64 = 8;
 pub static MAX_IDLE_TIMEOUT: u32 = 10_000;
-const PUBLISH_EVERY_S_HINT: u16 = 60;
+pub const PUBLISH_EVERY_S_HINT: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum OutboundMessage {
     BeaconParam {
         your_ip: Box<SocketAddr>,
         token: [u8; 4],
-        publish_every: u16,
     },
     Candidate {
         peer_info: Box<PeerInfo>,
@@ -40,10 +42,10 @@ pub enum InbounddMessage {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct PeerInfo {
-    ip: SocketAddr,
-    certificate: Vec<u8>,
-    pub_key: [u8; 32],
-    signature: Vec<u8>,
+    pub ip: SocketAddr,
+    pub certificate: Vec<u8>,
+    pub pub_key: [u8; 32],
+    pub signature: Vec<u8>,
 }
 type ConnMap = Arc<stdMutex<HashMap<Vec<u8>, Vec<Arc<Peer>>>>>;
 
@@ -66,7 +68,11 @@ pub fn start_beacon_server(
     let (endpoint, mut incoming) = Endpoint::server(server_config, bind_addr)?;
 
     let connection_map: ConnMap = Arc::new(stdMutex::new(HashMap::new()));
-    let token: Arc<stdMutex<[u8; 4]>> = Arc::new(stdMutex::new([0_u8; 4]));
+
+    let mut csprng = OsRng {};
+    let mut random: [u8; 4] = [0_u8; 4];
+    csprng.fill_bytes(&mut random);
+    let token: Arc<stdMutex<[u8; 4]>> = Arc::new(stdMutex::new(random));
 
     tokio::spawn(async move {
         while let Some(conn) = incoming.next().await {
@@ -126,8 +132,7 @@ async fn handle_connection(
             let conn_map = connection_map.clone();
             let token = token.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_request(stream, socket_adress.clone(), conn_map, token).await
-                {
+                if let Err(e) = handle_request(stream, socket_adress, conn_map, token).await {
                     error!("failed: {reason}", reason = e.to_string());
                 }
             });
@@ -170,7 +175,7 @@ async fn handle_request(
             .await
             .map_err(|e| anyhow!("failed reading request: {}", e))?;
 
-        let message: InbounddMessage = bincode::deserialize(&message_buff)
+        let message: InbounddMessage = bincode::deserialize(&message_buff[0..res])
             .map_err(|e| anyhow!("failed deserialise request: {}", e))?;
 
         outbuffer.clear();
@@ -200,7 +205,7 @@ async fn handle_request(
 async fn handle_hello_message(
     adress: &SocketAddr,
     token: &Arc<stdMutex<[u8; 4]>>,
-    mut outbuffer: &mut Vec<u8>,
+    outbuffer: &mut Vec<u8>,
     send: &Arc<Mutex<quinn::SendStream>>,
 ) -> Result<()> {
     let tok;
@@ -211,19 +216,9 @@ async fn handle_hello_message(
     let out = OutboundMessage::BeaconParam {
         your_ip: Box::new(adress.clone()),
         token: tok,
-        publish_every: PUBLISH_EVERY_S_HINT,
     };
 
-    outbuffer.clear();
-    bincode::serialize_into(&mut outbuffer, &out)
-        .map_err(|e| anyhow!("failed to seliralise Hello answer: {}", e))?;
-
-    send.lock()
-        .await
-        .write_all(&outbuffer[..])
-        .await
-        .map_err(|e| anyhow!("failed to send Hello answer: {}", e))?;
-
+    write_all(send, outbuffer, out).await?;
     Ok(())
 }
 
@@ -239,20 +234,11 @@ async fn handle_announce_message(
         let vp = find_matched_peer(&connection_map, &token, &peer);
         if vp.is_some() {
             for valid_peer in vp.unwrap() {
-                outbuffer.clear();
                 let local_answer = OutboundMessage::Candidate {
                     peer_info: valid_peer.peer_info.clone(),
                     connection_token: token.clone(),
                 };
-                bincode::serialize_into(&mut outbuffer, &local_answer)
-                    .map_err(|e| anyhow!("failed to serialize answer: {}", e))?;
-                {
-                    send.lock()
-                        .await
-                        .write_all(&outbuffer[..])
-                        .await
-                        .map_err(|e| anyhow!("failed to send answer: {}", e))?;
-                }
+                write_all(send, outbuffer, local_answer).await?;
 
                 outbuffer.clear();
                 let remote_answer = OutboundMessage::Candidate {
@@ -262,15 +248,8 @@ async fn handle_announce_message(
                 bincode::serialize_into(&mut outbuffer, &remote_answer)
                     .map_err(|e| anyhow!("failed to send response: {}", e))?;
 
-                if let Err(e) = valid_peer
-                    .send_stream
-                    .lock()
-                    .await
-                    .write_all(&outbuffer[..])
-                    .await
-                    .map_err(|e| anyhow!("failed to send response: {}", e))
-                {
-                    //log the error but do not fail the connection
+                if let Err(e) = write_all(send, outbuffer, remote_answer).await {
+                    //log the error but do not fail the
                     trace!(
                         "failed to send candidate : {reason}",
                         reason = e.to_string()
@@ -280,6 +259,31 @@ async fn handle_announce_message(
         }
     }
 
+    Ok(())
+}
+
+async fn write_all(
+    send: &Arc<Mutex<quinn::SendStream>>,
+    mut outbuffer: &mut Vec<u8>,
+    data: OutboundMessage,
+) -> Result<()> {
+    outbuffer.clear();
+    bincode::serialize_into(&mut outbuffer, &data)
+        .map_err(|e| anyhow!("failed to seliralise Hello answer: {}", e))?;
+
+    let len: u16 = u16::try_from(outbuffer.len())?;
+    let len_buff = bincode::serialize(&len)?;
+
+    let mut mut_send = send.lock().await;
+    mut_send
+        .write_all(&len_buff[..])
+        .await
+        .map_err(|e| anyhow!("failed to send Hello answer: {}", e))?;
+
+    mut_send
+        .write_all(&outbuffer[..])
+        .await
+        .map_err(|e| anyhow!("failed to send Hello answer: {}", e))?;
     Ok(())
 }
 
@@ -343,14 +347,4 @@ fn find_matched_peer(db: &ConnMap, key: &Vec<u8>, value: &Arc<Peer>) -> Option<V
 
         None => None,
     }
-}
-
-#[cfg(test)]
-mod test {
-
-    use super::*;
-    // #[test]
-    // fn test_size() {
-    //     println!("Size is {}", std::mem::size_of::<Message>());
-    // }
 }

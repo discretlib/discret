@@ -20,7 +20,6 @@ const MULTICAST_MTU: usize = 1330;
 pub struct Announce {
     port: u16,
     certificate: Vec<u8>,
-    pub_key: [u8; 32],
     signature: Vec<u8>,
     tokens: Vec<Vec<u8>>,
 }
@@ -203,7 +202,6 @@ mod test {
 
         let ann = Announce {
             port: 8,
-            pub_key: [0; 32],
             certificate: vec![1, 2, 3, 4],
             signature: vec![1, 2, 3],
             tokens: vec![vec![4, 3, 2, 1]],

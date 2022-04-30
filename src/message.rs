@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::network::{beacon, multicast};
+use crate::network::{beacon_server, multicast};
 use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -10,7 +10,7 @@ pub enum Message {
         announce: Box<multicast::Announce>,
     },
     BeaconCandidate {
-        peer_info: Box<beacon::PeerInfo>,
+        peer_info: Box<beacon_server::PeerInfo>,
         connection_token: Vec<u8>,
     },
 }
