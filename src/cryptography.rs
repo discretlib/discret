@@ -3,6 +3,9 @@ use argon2::{self, Config};
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
 
+//magic number for the ALPN protocol that allows for less roundtrip during tls negociation
+pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
+
 pub fn derive_pass_phrase(pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = b"Static salt, we whant deterministic result";

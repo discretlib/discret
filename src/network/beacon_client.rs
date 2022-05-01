@@ -5,7 +5,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::sleep;
+use tracing::debug;
 
+use crate::cryptography::ALPN_QUIC_HTTP;
 use crate::network::beacon_server::OutboundMessage;
 use crate::network::beacon_server::PeerInfo;
 use crate::{error::Error, message::Message};
@@ -14,10 +16,9 @@ use super::beacon_server::InbounddMessage;
 use super::beacon_server::BEACON_MTU;
 use super::beacon_server::KEEP_ALIVE_INTERVAL;
 use super::beacon_server::MAX_IDLE_TIMEOUT;
-use super::beacon_server::PUBLISH_EVERY_S_HINT;
-use super::multicast::Announce;
+use super::beacon_server::MAX_PUBLISH_RATE_SEC;
 
-pub const BEACON_DATA_SIZE: usize = BEACON_DATA_SIZE;
+pub const BEACON_DATA_SIZE: usize = BEACON_MTU - 2;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct PeerRequest {
@@ -37,9 +38,9 @@ impl AnnounceBuilder {
     }
 
     fn build(&self) -> InbounddMessage {
-        let pr = &self.peer_request.clone().unwrap();
+        let pr = self.peer_request.clone().unwrap();
         let pi = PeerInfo {
-            ip: &self.adress.unwrap().clone(),
+            ip: self.adress.unwrap().clone(),
             certificate: pr.certificate,
             pub_key: pr.pub_key,
             signature: pr.signature,
@@ -67,7 +68,7 @@ pub async fn star_beacon_client(
     let mut endpoint = quinn::Endpoint::client(bind_adress)?;
     endpoint.set_default_client_config(client_tls_config());
 
-    let new_conn = endpoint.connect(beacon_adress, "")?.await?;
+    let new_conn = endpoint.connect(beacon_adress, "_")?.await?;
     let quinn::NewConnection {
         connection: conn, ..
     } = new_conn;
@@ -84,14 +85,30 @@ pub async fn star_beacon_client(
             adress: None,
             peer_request: None,
         };
-
+        //send first hello
+        write_all(
+            &mut send_stream,
+            &mut write_buffer,
+            InbounddMessage::Hello {},
+            &mut send_to,
+        )
+        .await;
         loop {
             tokio::select! {
                 peer_request = internal_reciever.recv() => {
                     if peer_request.is_none() {
                         return;
                     }
+                    let previously_not_ready:bool  = !annouce_builder.is_ready();
                     annouce_builder.peer_request= peer_request;
+                    if annouce_builder.is_ready() && previously_not_ready{
+                        send_announce_if_ready(
+                            &annouce_builder,
+                            &mut send_stream,
+                            &mut write_buffer,
+                            &mut send_to,
+                        ).await;
+                    };
                 },
                 read_fut = receiv_stream.read_exact(&mut read_header) => {
                     handle_response(
@@ -100,30 +117,38 @@ pub async fn star_beacon_client(
                             &read_header,
                             &mut read_buffer,
                             &mut send_to,
-                            &mut annouce_builder
+                            &mut annouce_builder,
+                            &mut send_stream,
+                            &mut write_buffer,
                         ).await;
                 },
-                _ = sleep(PUBLISH_EVERY_S_HINT) => {
-
+                _ = sleep(Duration::from_secs(MAX_PUBLISH_RATE_SEC)) => {
                     write_all(&mut send_stream, &mut write_buffer,InbounddMessage::Hello {  }, &mut send_to).await;
-
                 },
             };
-
-            if annouce_builder.is_ready() {
-                write_all(
-                    &mut send_stream,
-                    &mut write_buffer,
-                    annouce_builder.build(),
-                    &mut send_to,
-                )
-                .await;
-            }
         }
     });
 
     Ok(sender)
 }
+
+async fn send_announce_if_ready(
+    annouce_builder: &AnnounceBuilder,
+    mut send_stream: &mut quinn::SendStream,
+    mut write_buffer: &mut Vec<u8>,
+    mut error_channel: &mut Sender<Result<Message, Error>>,
+) {
+    if annouce_builder.is_ready() {
+        write_all(
+            &mut send_stream,
+            &mut write_buffer,
+            annouce_builder.build(),
+            &mut error_channel,
+        )
+        .await;
+    }
+}
+
 async fn write_all(
     send_stream: &mut quinn::SendStream,
     mut write_buffer: &mut Vec<u8>,
@@ -160,8 +185,10 @@ async fn handle_response(
     receiv: &mut quinn::RecvStream,
     read_header: &[u8; 2],
     read_buffer: &mut [u8; BEACON_DATA_SIZE],
-    send_to: &mut Sender<Result<Message, Error>>,
+    mut send_to: &mut Sender<Result<Message, Error>>,
     annouce_builder: &mut AnnounceBuilder,
+    mut send_stream: &mut quinn::SendStream,
+    mut write_buffer: &mut Vec<u8>,
 ) {
     let err: Result<(), Error> = async {
         read_fut.map_err(|e| Error::from(e))?;
@@ -180,11 +207,20 @@ async fn handle_response(
             OutboundMessage::BeaconParam { your_ip, token } => {
                 annouce_builder.adress = Some(*your_ip);
                 let _t = token;
+
+                send_announce_if_ready(
+                    &annouce_builder,
+                    &mut send_stream,
+                    &mut write_buffer,
+                    &mut send_to,
+                )
+                .await;
             }
             OutboundMessage::Candidate {
                 peer_info,
                 connection_token,
             } => {
+                debug!("Candidate received {}", &peer_info.ip);
                 let _ = send_to
                     .send(Ok(Message::BeaconCandidate {
                         peer_info,
@@ -202,11 +238,11 @@ async fn handle_response(
 }
 
 fn client_tls_config() -> ClientConfig {
-    let tls_config = rustls::ClientConfig::builder()
+    let mut tls_config = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(Arc::new(ServerCertVerifier {}))
         .with_no_client_auth();
-
+    tls_config.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
     let mut config = ClientConfig::new(Arc::new(tls_config));
     let mut transport: TransportConfig = Default::default();
     transport
@@ -229,5 +265,72 @@ impl rustls::client::ServerCertVerifier for ServerCertVerifier {
         _now: std::time::SystemTime,
     ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
         Ok(rustls::client::ServerCertVerified::assertion())
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    // use std::thread;
+
+    //use tracing::Level;
+
+    use super::*;
+    use crate::{
+        cryptography::generate_self_signed_certificate, network::beacon_server::start_beacon_server,
+    };
+    #[allow(dead_code)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multicast_discovery_test() -> Result<(), Box<dyn std::error::Error>> {
+        /*tracing_subscriber::fmt()
+        .with_max_level(Level::DEBUG)
+        .init();*/
+
+        let bind_addr: SocketAddr = "0.0.0.0:4242".parse().unwrap();
+        let (pub_key, secret_key) = generate_self_signed_certificate();
+        start_beacon_server(bind_addr, pub_key, secret_key)?;
+
+        let beacon_adress: SocketAddr = "127.0.0.1:4242".parse().unwrap();
+
+        let valid_token = vec![1_u8, 2, 3];
+
+        let (cli1_send, mut cli1_receiv) = mpsc::channel(5);
+        let client1 = star_beacon_client(beacon_adress, cli1_send).await?;
+        let req = PeerRequest {
+            certificate: vec![1_u8, 1, 1],
+            pub_key: [1_u8; 32],
+            signature: vec![1_u8, 1, 1],
+            connection_tokens: vec![valid_token.clone(), vec![1_u8, 2, 4, 5]],
+        };
+
+        let (cli2_send, mut cli2_receiv) = mpsc::channel(5);
+        let client2 = star_beacon_client(beacon_adress, cli2_send).await?;
+        let req2 = PeerRequest {
+            certificate: vec![2_u8, 2, 2],
+            pub_key: [2_u8; 32],
+            signature: vec![2_u8, 2, 2],
+            connection_tokens: vec![valid_token.clone()],
+        };
+        let _s = client2.send(req2).await?;
+        let _s = client1.send(req).await?;
+
+        let candidate1 = cli1_receiv.recv().await.unwrap()?;
+
+        match candidate1 {
+            Message::BeaconCandidate {
+                peer_info: _,
+                connection_token: _,
+            } => assert!(true),
+            _ => assert!(false),
+        }
+        let candidate2 = cli2_receiv.recv().await.unwrap()?;
+        match candidate2 {
+            Message::BeaconCandidate {
+                peer_info: _,
+                connection_token: _,
+            } => assert!(true),
+            _ => assert!(false),
+        }
+        Ok(())
     }
 }

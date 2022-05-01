@@ -38,5 +38,8 @@ pub enum Error {
     MsgDeserialisationToLong(usize, usize),
 
     #[error("{0}")]
+    UnacceptableBehavior(String),
+
+    #[error("{0}")]
     Unknown(String),
 }
