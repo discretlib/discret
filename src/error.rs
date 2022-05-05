@@ -3,9 +3,9 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("No Vault defined for this pass phase")]
-    VaultDontExists,
+    InvalidAccount,
     #[error("A Vault allready exists for this pass phase")]
-    VaultAllreadyExists,
+    AccountExists,
     #[error("Invalid signature")]
     InvalidSignature,
     #[error("Invalid KeyPair")]

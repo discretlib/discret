@@ -1,7 +1,6 @@
-use crate::cryptography;
 use object_pool::{Pool, Reusable};
 use rusqlite::Connection;
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 /*
 let hook = |_: Action, _: &str, _: &str, _: i64| {
@@ -13,35 +12,16 @@ let hook = |_: Action, _: &str, _: &str, _: i64| {
 db.update_hook(Some(hook)); */
 
 pub struct Database {
-    pub file_name: String,
     path: PathBuf,
     secret: String,
     pool: Pool<Connection>,
 }
 
 impl Database {
-    pub fn new(data_folder: impl Into<PathBuf>, secret: [u8; 32]) -> Self {
+    pub fn new(path: PathBuf, secret: [u8; 32]) -> Self {
         //this key format avoids additional key derivation from SQLCipher
         let sqlcipher_key = format!("x'{}'", hex::encode(&secret));
-
-        //hash the secret to get the database file name
-        let file_name = hex::encode(cryptography::hash(&secret));
-
-        let subfolder = &file_name[0..2];
-        let mut path = data_folder.into();
-        path.push(subfolder);
-
-        let _c = fs::create_dir_all(&path).expect(
-            format!(
-                "Could not create create database folder path: {} ",
-                &path.canonicalize().unwrap().to_str().unwrap()
-            )
-            .as_str(),
-        );
-        path.push(&file_name);
-
         Database {
-            file_name,
             path,
             secret: sqlcipher_key,
             //start with zero capacity so the init closure  is never called
@@ -87,13 +67,14 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::cryptography;
+    use crate::{build_path, database_file_name_for};
     use rusqlite::params;
     #[test]
     fn test_pool_reuse() -> Result<(), rusqlite::Error> {
-        let secret: [u8; 3] = [1, 2, 3];
-
-        let poule = Database::new("test/data/", cryptography::hash(&secret));
+        let secret = [1; 32];
+        let file_name = database_file_name_for(&secret);
+        let path = build_path("test/data/", &file_name).unwrap();
+        let poule = Database::new(path, secret);
         // println!("Poule size  {:?}", poule.len());
         //brace to quickly push the Connection out of scope
         assert_eq!(poule.pool_len(), 0);
@@ -120,9 +101,11 @@ mod tests {
     #[test]
     fn test_pool_encryption() -> Result<(), rusqlite::Error> {
         let db_path = "test/data/";
-        let secret: [u8; 4] = [1, 2, 3, 4];
+        let secret = [1; 32];
+        let file_name = database_file_name_for(&secret);
+        let path = build_path(db_path, &file_name).unwrap();
 
-        let poule = Database::new(db_path, cryptography::hash(&secret));
+        let poule = Database::new(path.clone(), secret);
         // println!("Poule size  {:?}", poule.len());
         //brace to quickly push the Connection out of scope
         {
@@ -157,11 +140,10 @@ mod tests {
                 assert_eq!(p.name, "Steven");
             }
 
-            let bad_conn_1 = poule.get_connection()?;
-            //setup a bad passwpord
-            let query = "PRAGMA key=\"x'00081d171425a36312fa058d8712d5d05135a991ec20351ce9d65cdb19a05432'\" ";
-            let res: String = bad_conn_1.query_row(&query, [], |row| row.get(0))?;
-            assert_eq!("ok", res);
+            //setup a bad secret
+            let secret = [5; 32];
+            let bad_poule = Database::new(path, secret);
+            let bad_conn_1 = bad_poule.get_connection()?;
 
             let result: Result<i32, rusqlite::Error> =
                 bad_conn_1.query_row("SELECT id FROM person", [], |row| row.get(0));
@@ -170,7 +152,6 @@ mod tests {
                 .to_string();
             assert_eq!("file is not a database", error_message);
         }
-        assert_eq!(poule.pool_len(), 3);
 
         Ok(())
     }

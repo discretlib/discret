@@ -1,16 +1,22 @@
 use crate::error::Error;
-use argon2::{self, Config};
+use argon2::{self, Config, ThreadMode, Variant};
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
 
 //magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
-pub fn derive_pass_phrase(pass_phrase: String) -> [u8; 32] {
+pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
-    let salt = b"Static salt, we whant deterministic result";
-    let config = Config::default();
-    let hashed = argon2::hash_encoded(password, salt, &config).unwrap();
+    let salt = hash(login.as_bytes());
+    let mut config = Config::default();
+
+    config.mem_cost = 8192;
+    config.time_cost = 3;
+    config.variant = Variant::Argon2id;
+    config.lanes = 2;
+    config.thread_mode = ThreadMode::Parallel;
+    let hashed = argon2::hash_encoded(password, &salt, &config).unwrap();
     let matches = argon2::verify_encoded(&hashed, password).unwrap();
     assert!(matches);
     hash(hashed.as_bytes())
@@ -122,12 +128,15 @@ mod tests {
     use super::*;
     #[test]
     fn derive_pass_phrase_test() {
+        let login = "test".to_string();
         let pass_phrase = "testphrase".to_string();
-        let hashed = derive_pass_phrase(pass_phrase);
+
+        let hashed = derive_pass_phrase(login, pass_phrase);
         assert_eq!(hex::encode(hashed).len(), 64);
+
         assert_eq!(
             hex::encode(hashed),
-            "f553b655b9515fc0f126b74bf485bb38c53954ba38fcaac16217554267a36646"
+            "2c186859ce3e3e70684c9c9be14f9c64fc7634666dd60c990bbefb487441965b"
         );
     }
 

@@ -13,6 +13,7 @@ use crate::network::beacon_server::PeerInfo;
 use crate::{error::Error, message::Message};
 
 use super::beacon_server::InbounddMessage;
+use super::beacon_server::Token;
 use super::beacon_server::BEACON_MTU;
 use super::beacon_server::KEEP_ALIVE_INTERVAL;
 use super::beacon_server::MAX_IDLE_TIMEOUT;
@@ -23,9 +24,8 @@ pub const BEACON_DATA_SIZE: usize = BEACON_MTU - 2;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct PeerRequest {
     certificate: Vec<u8>,
-    pub_key: [u8; 32],
     signature: Vec<u8>,
-    connection_tokens: Vec<Vec<u8>>,
+    connection_tokens: Vec<Token>,
 }
 
 struct AnnounceBuilder {
@@ -42,7 +42,6 @@ impl AnnounceBuilder {
         let pi = PeerInfo {
             ip: self.adress.unwrap().clone(),
             certificate: pr.certificate,
-            pub_key: pr.pub_key,
             signature: pr.signature,
         };
         InbounddMessage::Announce {
@@ -79,7 +78,7 @@ pub async fn star_beacon_client(
     tokio::spawn(async move {
         let mut write_buffer: Vec<u8> = Vec::with_capacity(BEACON_MTU);
         let mut read_header: [u8; 2] = [0_u8; 2];
-        let mut read_buffer: [u8; 1328] = [0_u8; BEACON_DATA_SIZE];
+        let mut read_buffer: [u8; BEACON_DATA_SIZE] = [0_u8; BEACON_DATA_SIZE];
 
         let mut annouce_builder = AnnounceBuilder {
             adress: None,
@@ -204,7 +203,10 @@ async fn handle_response(
         let message: OutboundMessage = bincode::deserialize(&read_buffer[0..res])?;
 
         match message {
-            OutboundMessage::BeaconParam { your_ip, token } => {
+            OutboundMessage::BeaconParam {
+                your_ip,
+                hash_token: token,
+            } => {
                 annouce_builder.adress = Some(*your_ip);
                 let _t = token;
 
@@ -277,14 +279,48 @@ mod test {
 
     use super::*;
     use crate::{
-        cryptography::generate_self_signed_certificate, network::beacon_server::start_beacon_server,
+        cryptography::generate_self_signed_certificate,
+        network::beacon_server::{start_beacon_server, TOKEN_SIZE},
     };
-    #[allow(dead_code)]
+
+    #[test]
+    fn test_max_token() -> Result<(), Box<dyn std::error::Error>> {
+        let (pub_key, _secret_key) = generate_self_signed_certificate();
+        let serialised_cert = pub_key.as_ref().clone();
+        let vect = Vec::from(serialised_cert);
+        let s: SocketAddr = "[::]:0".parse().unwrap();
+
+        let pi = PeerInfo {
+            ip: s,
+            certificate: vect,
+            signature: vec![1_u8; 64],
+        };
+        let msg = InbounddMessage::Announce {
+            peer_info: Box::new(pi.clone()),
+            connection_tokens: vec![],
+        };
+        let val = bincode::serialize(&msg).unwrap();
+        println!("header len: {}", val.len());
+        let mut v: Vec<Token> = vec![];
+        for i in 0..100 {
+            v.push([i; TOKEN_SIZE]);
+        }
+
+        let msg = InbounddMessage::Announce {
+            peer_info: Box::new(pi),
+            connection_tokens: v,
+        };
+        let val = bincode::serialize(&msg).unwrap();
+        println!("message len: {}", val.len());
+
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn multicast_discovery_test() -> Result<(), Box<dyn std::error::Error>> {
-        /*tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
-        .init();*/
+    async fn beacon_discovery_test() -> Result<(), Box<dyn std::error::Error>> {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
 
         let bind_addr: SocketAddr = "0.0.0.0:4242".parse().unwrap();
         let (pub_key, secret_key) = generate_self_signed_certificate();
@@ -292,22 +328,20 @@ mod test {
 
         let beacon_adress: SocketAddr = "127.0.0.1:4242".parse().unwrap();
 
-        let valid_token = vec![1_u8, 2, 3];
+        let valid_token = [1_u8; TOKEN_SIZE];
 
         let (cli1_send, mut cli1_receiv) = mpsc::channel(5);
         let client1 = star_beacon_client(beacon_adress, cli1_send).await?;
         let req = PeerRequest {
             certificate: vec![1_u8, 1, 1],
-            pub_key: [1_u8; 32],
             signature: vec![1_u8, 1, 1],
-            connection_tokens: vec![valid_token.clone(), vec![1_u8, 2, 4, 5]],
+            connection_tokens: vec![valid_token.clone(), [2; TOKEN_SIZE]],
         };
 
         let (cli2_send, mut cli2_receiv) = mpsc::channel(5);
         let client2 = star_beacon_client(beacon_adress, cli2_send).await?;
         let req2 = PeerRequest {
             certificate: vec![2_u8, 2, 2],
-            pub_key: [2_u8; 32],
             signature: vec![2_u8, 2, 2],
             connection_tokens: vec![valid_token.clone()],
         };

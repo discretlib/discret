@@ -16,20 +16,24 @@ use tracing_futures::Instrument as _;
 
 use crate::cryptography::ALPN_QUIC_HTTP;
 
-pub const BEACON_MTU: usize = 1330;
-pub static KEEP_ALIVE_INTERVAL: u64 = 8;
-pub static MAX_IDLE_TIMEOUT: u32 = 10_000;
+pub const BEACON_MTU: usize = 1200;
+pub const KEEP_ALIVE_INTERVAL: u64 = 8;
+pub const MAX_IDLE_TIMEOUT: u32 = 10_000;
 pub const MAX_PUBLISH_RATE_SEC: u64 = 2;
+
+type ConnMap = Arc<stdMutex<HashMap<Token, Vec<Arc<Peer>>>>>;
+pub const TOKEN_SIZE: usize = 8;
+pub type Token = [u8; TOKEN_SIZE];
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum OutboundMessage {
     BeaconParam {
         your_ip: Box<SocketAddr>,
-        token: [u8; 4],
+        hash_token: Token,
     },
     Candidate {
         peer_info: Box<PeerInfo>,
-        connection_token: Vec<u8>,
+        connection_token: Token,
     },
 }
 
@@ -38,7 +42,7 @@ pub enum InbounddMessage {
     Hello {},
     Announce {
         peer_info: Box<PeerInfo>,
-        connection_tokens: Vec<Vec<u8>>,
+        connection_tokens: Vec<Token>,
     },
 }
 
@@ -46,10 +50,14 @@ pub enum InbounddMessage {
 pub struct PeerInfo {
     pub ip: SocketAddr,
     pub certificate: Vec<u8>,
-    pub pub_key: [u8; 32],
     pub signature: Vec<u8>,
 }
-type ConnMap = Arc<stdMutex<HashMap<Vec<u8>, Vec<Arc<Peer>>>>>;
+
+struct Peer {
+    send_stream: Arc<Mutex<quinn::SendStream>>,
+    peer_info: Box<PeerInfo>,
+    connection_tokens: Vec<Token>,
+}
 
 pub fn start_beacon_server(
     bind_addr: SocketAddr,
@@ -78,13 +86,13 @@ pub fn start_beacon_server(
     server_config.transport = Arc::new(transport);
 
     let (endpoint, mut incoming) = Endpoint::server(server_config, bind_addr)?;
-
+    println!("{}", endpoint.local_addr().unwrap());
     let connection_map: ConnMap = Arc::new(stdMutex::new(HashMap::new()));
 
     let mut csprng = OsRng {};
-    let mut random: [u8; 4] = [0_u8; 4];
+    let mut random: Token = [0_u8; TOKEN_SIZE];
     csprng.fill_bytes(&mut random);
-    let token: Arc<stdMutex<[u8; 4]>> = Arc::new(stdMutex::new(random));
+    let token: Arc<stdMutex<Token>> = Arc::new(stdMutex::new(random));
 
     tokio::spawn(async move {
         while let Some(conn) = incoming.next().await {
@@ -101,16 +109,10 @@ pub fn start_beacon_server(
     Ok(endpoint)
 }
 
-struct Peer {
-    send_stream: Arc<Mutex<quinn::SendStream>>,
-    peer_info: Box<PeerInfo>,
-    connection_tokens: Vec<Vec<u8>>,
-}
-
 async fn handle_connection(
     conn: quinn::Connecting,
     connection_map: ConnMap,
-    token: Arc<stdMutex<[u8; 4]>>,
+    token: Arc<stdMutex<Token>>,
 ) -> Result<()> {
     let quinn::NewConnection {
         connection,
@@ -160,41 +162,39 @@ async fn handle_request(
     (send, mut recv): (quinn::SendStream, quinn::RecvStream),
     adress: SocketAddr,
     connection_map: ConnMap,
-    token: Arc<stdMutex<[u8; 4]>>,
+    token: Arc<stdMutex<Token>>,
 ) -> Result<()> {
     const MAX_LENGTH: usize = BEACON_MTU - 2;
 
-    let mut message_length_buff = [0_u8; 2];
-    let mut message_buff = [0_u8; MAX_LENGTH];
-    let mut outbuffer: Vec<u8> = Vec::with_capacity(128);
     let send: Arc<Mutex<quinn::SendStream>> = Arc::new(Mutex::new(send));
     let mut _peer_cleaner: PeerCleaner;
     let mut instant: Option<Instant> = None;
 
     loop {
+        let mut message_length_buff = [0_u8; 2];
+
         recv.read_exact(&mut message_length_buff)
             .await
             .map_err(|e| anyhow!("failed reading request: {}", e))?;
 
-        let res: u16 = bincode::deserialize(&message_length_buff)
+        let len: u16 = bincode::deserialize(&message_length_buff)
             .map_err(|e| anyhow!("failed deserialise request: {}", e))?;
 
-        let res = usize::from(res);
-        if res > MAX_LENGTH {
-            return Err(anyhow!("message lenght too large: {}", res));
+        let len = usize::from(len);
+        if len > MAX_LENGTH {
+            return Err(anyhow!("message lenght too large: {}", len));
         }
-
-        recv.read_exact(&mut message_buff[0..res])
+        let mut message_buff = vec![0; len]; //do not allocat array outside the look to quikly free memory
+        recv.read_exact(&mut message_buff[0..len])
             .await
             .map_err(|e| anyhow!("failed reading request: {}", e))?;
 
-        let message: InbounddMessage = bincode::deserialize(&message_buff[0..res])
+        let message: InbounddMessage = bincode::deserialize(&message_buff[0..len])
             .map_err(|e| anyhow!("failed deserialise request: {}", e))?;
 
-        outbuffer.clear();
         match message {
             InbounddMessage::Hello {} => {
-                handle_hello_message(&adress, &token, &mut outbuffer, &send).await?;
+                handle_hello_message(&adress, &token, &send).await?;
             }
             InbounddMessage::Announce {
                 peer_info,
@@ -221,7 +221,7 @@ async fn handle_request(
                     peer: peer.clone(),
                     connection_map: connection_map.clone(),
                 };
-                handle_announce_message(peer, &connection_map, &mut outbuffer, &send).await?;
+                handle_announce_message(peer, &connection_map, &send).await?;
             }
         }
     }
@@ -230,10 +230,10 @@ async fn handle_request(
 
 async fn handle_hello_message(
     adress: &SocketAddr,
-    token: &Arc<stdMutex<[u8; 4]>>,
-    outbuffer: &mut Vec<u8>,
+    token: &Arc<stdMutex<Token>>,
     send: &Arc<Mutex<quinn::SendStream>>,
 ) -> Result<()> {
+    let mut outbuffer: Vec<u8> = Vec::with_capacity(128);
     let tok;
     {
         tok = token.lock().unwrap().clone();
@@ -241,21 +241,21 @@ async fn handle_hello_message(
 
     let out = OutboundMessage::BeaconParam {
         your_ip: Box::new(adress.clone()),
-        token: tok,
+        hash_token: tok,
     };
 
-    write_all(send, outbuffer, out).await?;
+    write_all(send, &mut outbuffer, out).await?;
     Ok(())
 }
 
 async fn handle_announce_message(
     peer: Arc<Peer>,
     connection_map: &ConnMap,
-    outbuffer: &mut Vec<u8>,
     send: &Arc<Mutex<quinn::SendStream>>,
 ) -> Result<()> {
     debug!("Received Announce from  {}", peer.peer_info.ip);
-    let tokens: &Vec<Vec<u8>> = peer.connection_tokens.as_ref();
+    let mut outbuffer: Vec<u8> = Vec::with_capacity(256); //avoid realocating buffer reallocate buffer every time
+    let tokens: &Vec<Token> = peer.connection_tokens.as_ref();
     for token in tokens {
         insert_peer(&connection_map, token.clone(), &peer);
         let vp = find_matched_peer(&connection_map, &token, &peer);
@@ -265,15 +265,16 @@ async fn handle_announce_message(
                     peer_info: valid_peer.peer_info.clone(),
                     connection_token: token.clone(),
                 };
-                write_all(send, outbuffer, local_answer).await?;
+                write_all(send, &mut outbuffer, local_answer).await?;
 
-                outbuffer.clear();
                 let remote_answer = OutboundMessage::Candidate {
                     peer_info: peer.peer_info.clone(),
                     connection_token: token.clone(),
                 };
 
-                if let Err(e) = write_all(&valid_peer.send_stream, outbuffer, remote_answer).await {
+                if let Err(e) =
+                    write_all(&valid_peer.send_stream, &mut outbuffer, remote_answer).await
+                {
                     //log the error but do not fail the
                     trace!(
                         "failed to send candidate : {reason}",
@@ -318,7 +319,7 @@ struct PeerCleaner {
 }
 impl Drop for PeerCleaner {
     fn drop(&mut self) {
-        let tokens: &Vec<Vec<u8>> = self.peer.connection_tokens.as_ref();
+        let tokens: &Vec<Token> = self.peer.connection_tokens.as_ref();
 
         for token in tokens {
             remove_peer(&self.connection_map, token, &self.peer);
@@ -326,7 +327,7 @@ impl Drop for PeerCleaner {
     }
 }
 
-fn remove_peer(db: &ConnMap, key: &Vec<u8>, value: &Arc<Peer>) {
+fn remove_peer(db: &ConnMap, key: &Token, value: &Arc<Peer>) {
     let mut map = db.lock().unwrap();
     let v = map.get_mut(key);
     match v {
@@ -340,7 +341,7 @@ fn remove_peer(db: &ConnMap, key: &Vec<u8>, value: &Arc<Peer>) {
     };
 }
 
-fn insert_peer(db: &ConnMap, key: Vec<u8>, value: &Arc<Peer>) {
+fn insert_peer(db: &ConnMap, key: Token, value: &Arc<Peer>) {
     let mut map = db.lock().unwrap();
 
     let v = map.get_mut(&key);
@@ -352,7 +353,7 @@ fn insert_peer(db: &ConnMap, key: Vec<u8>, value: &Arc<Peer>) {
     };
 }
 
-fn find_matched_peer(db: &ConnMap, key: &Vec<u8>, value: &Arc<Peer>) -> Option<Vec<Arc<Peer>>> {
+fn find_matched_peer(db: &ConnMap, key: &Token, value: &Arc<Peer>) -> Option<Vec<Arc<Peer>>> {
     let map = db.lock().unwrap();
 
     let v = map.get(key);
