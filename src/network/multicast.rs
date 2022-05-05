@@ -1,10 +1,9 @@
 use bincode;
 
+use super::error::Error;
+use crate::message::Message;
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-
-use crate::error::Error;
-use crate::message::Message;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;

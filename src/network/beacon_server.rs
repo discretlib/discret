@@ -11,10 +11,9 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::cryptography::ALPN_QUIC_HTTP;
 use tracing::{debug, error, info, info_span, trace};
 use tracing_futures::Instrument as _;
-
-use crate::cryptography::ALPN_QUIC_HTTP;
 
 pub const BEACON_MTU: usize = 1200;
 pub const KEEP_ALIVE_INTERVAL: u64 = 8;

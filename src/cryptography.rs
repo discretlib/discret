@@ -1,7 +1,17 @@
-use crate::error::Error;
 use argon2::{self, Config, ThreadMode, Variant};
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("Invalid KeyPair")]
+    InvalidKeyPair,
+    #[error("Invalid Public Key")]
+    InvalidPublicKey,
+}
 
 //magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];

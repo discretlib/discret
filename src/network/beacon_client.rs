@@ -8,9 +8,9 @@ use tokio::time::sleep;
 use tracing::debug;
 
 use crate::cryptography::ALPN_QUIC_HTTP;
+use crate::message::Message;
 use crate::network::beacon_server::OutboundMessage;
 use crate::network::beacon_server::PeerInfo;
-use crate::{error::Error, message::Message};
 
 use super::beacon_server::InbounddMessage;
 use super::beacon_server::Token;
@@ -18,6 +18,7 @@ use super::beacon_server::BEACON_MTU;
 use super::beacon_server::KEEP_ALIVE_INTERVAL;
 use super::beacon_server::MAX_IDLE_TIMEOUT;
 use super::beacon_server::MAX_PUBLISH_RATE_SEC;
+use super::error::Error;
 
 pub const BEACON_DATA_SIZE: usize = BEACON_MTU - 2;
 
@@ -318,9 +319,9 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn beacon_discovery_test() -> Result<(), Box<dyn std::error::Error>> {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
+        // tracing_subscriber::fmt()
+        //     .with_max_level(tracing::Level::DEBUG)
+        //     .init();
 
         let bind_addr: SocketAddr = "0.0.0.0:4242".parse().unwrap();
         let (pub_key, secret_key) = generate_self_signed_certificate();

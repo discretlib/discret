@@ -15,10 +15,10 @@ use std::{
 
 use cryptography::*;
 use database::Database;
-static DATA_PATH: &str = "test/data/";
+static DATA_PATH: &str = "data/discret";
 
 lazy_static::lazy_static! {
-    pub static ref LOGGED_USERS: Arc<Mutex<HashMap<String, Database>>> =
+    pub static ref LOGGED_USERS: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>> =
     Arc::new(Mutex::new(HashMap::new()));
 }
 
@@ -39,7 +39,7 @@ pub fn new_account(login: String, pass_phrase: String) -> Result<String, error::
         LOGGED_USERS
             .lock()
             .unwrap()
-            .insert(file_name.clone(), database);
+            .insert(file_name.clone(), Arc::new(Mutex::new(database)));
     }
     Ok(file_name)
 }
@@ -62,9 +62,51 @@ pub fn login(login: String, pass_phrase: String) -> Result<String, error::Error>
         LOGGED_USERS
             .lock()
             .unwrap()
-            .insert(file_name.clone(), database);
+            .insert(file_name.clone(), Arc::new(Mutex::new(database)));
     }
     Ok(file_name)
+}
+
+pub struct QueryResult {
+    columns: Vec<String>,
+    data: Vec<Vec<String>>,
+}
+
+pub fn query(database: String, query: String) -> Result<QueryResult, error::Error> {
+    let sdq = get_database(database);
+    let db = sdq.unwrap();
+    let db = db.lock().unwrap();
+    let conn = db.get_connection()?;
+
+    let mut stmt = conn.prepare(&query)?;
+    let colu = stmt.column_names();
+    let mut columns: Vec<String> = vec![];
+    for s in colu.iter() {
+        columns.push(s.to_string());
+    }
+
+    let row_iter = stmt.query_map([], |row| {
+        let mut line: Vec<String> = vec![];
+        for i in 0..columns.len() {
+            line.push(row.get(i)?);
+        }
+        Ok(line)
+    })?;
+
+    let mut data: Vec<Vec<String>> = vec![];
+    for row in row_iter {
+        data.push(row?);
+    }
+    Ok(QueryResult { columns, data })
+}
+
+fn get_database(database: String) -> Result<Arc<Mutex<Database>>, error::Error> {
+    let map = LOGGED_USERS.lock().unwrap();
+    let db = map.get(&database);
+    if db.is_none() {
+        return Err(error::Error::Unknown("Invalid database name".to_string()));
+    }
+    Ok(db.unwrap().clone())
 }
 
 fn database_file_name_for(secret: &[u8; 32]) -> String {
