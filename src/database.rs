@@ -1,3 +1,4 @@
+use futures::channel::mpsc::Receiver;
 use rusqlite::{types::Value, Connection, Row};
 use std::{path::PathBuf, thread, time::Duration};
 use tokio::sync::{mpsc, oneshot};
@@ -131,10 +132,16 @@ pub struct WriteQuery {
 // Write queries are buffered while the database thread is working.
 // When the database thread is ready, the buffer is sent and is processed in one single transaction
 // This greatly increase insertion and update rate, compared to autocommit.
+//      To get an idea of the perforance différence, a very simple bechmak on a laptop with 10000 insertions:
+//      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
+//      Buffer size: 10     Insert/seconds: 500
+//      Buffer size: 100    Insert/seconds: 3000
+//      Buffer size: 1000   Insert/seconds: 32000
 //
 // If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
 // This should not be an issue as insert query are not expected to fail.
-// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk)
+// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
+// And in both case it is ok to fail the last insertions.
 //
 // Only one writer should be used per database, as are write transactions are serialized
 //
@@ -151,12 +158,15 @@ impl BufferedDatabaseWriter {
 
         let (send_ready, mut receive_ready): (mpsc::Sender<bool>, mpsc::Receiver<bool>) =
             mpsc::channel::<bool>(2);
-
-        let (send_buffer, mut receive_buffer) = mpsc::channel::<Vec<WriteQuery>>(1);
+        let buffered_channel_size = 2;
+        let (send_buffer, mut receive_buffer): (
+            mpsc::Sender<Vec<WriteQuery>>,
+            mpsc::Receiver<Vec<WriteQuery>>,
+        ) = mpsc::channel::<Vec<WriteQuery>>(buffered_channel_size);
 
         tokio::spawn(async move {
             let mut query_buffer: Vec<WriteQuery> = vec![];
-            let mut is_ready = false;
+            let mut inflight = 0;
             loop {
                 tokio::select! {
                     write_query = receive_write.recv() => {
@@ -169,21 +179,38 @@ impl BufferedDatabaseWriter {
                         if ready.is_none() {
                             break;
                         }
-                        is_ready = true;
+                        if inflight > 0{
+                            inflight -=1;
+                        }
                     }
                 };
 
-                if (!query_buffer.is_empty() && is_ready) || query_buffer.len() >= buffer_size {
+                if query_buffer.len() >= buffer_size {
+                    //if send_buffer is full, wait for the insertion insertion thread
+                    if inflight >= buffered_channel_size {
+                        let ready = receive_ready.recv().await;
+                        if ready.is_none() {
+                            break;
+                        }
+                        if inflight > 0 {
+                            inflight -= 1;
+                        }
+                    }
+                    inflight += 1;
                     let _s = send_buffer.send(query_buffer).await;
-                    is_ready = false;
+
+                    query_buffer = vec![];
+                } else if !query_buffer.is_empty() && inflight == 0 {
+                    inflight += 1;
+                    let _s = send_buffer.send(query_buffer).await;
+
                     query_buffer = vec![];
                 }
+                //  tokio::task::yield_now().await;
             }
         });
 
         thread::spawn(move || {
-            let _s = send_ready.blocking_send(true);
-
             while let Some(buffer) = receive_buffer.blocking_recv() {
                 let result = Self::process_batch_write(&buffer, &conn);
                 match result {
@@ -205,6 +232,10 @@ impl BufferedDatabaseWriter {
         });
 
         Self { sender: send_write }
+    }
+
+    fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<WriteQuery>>) -> Option<Vec<WriteQuery>> {
+        receive_buffer.blocking_recv()
     }
 
     pub async fn send_async(&self, msg: WriteQuery) -> Result<(), Error> {
@@ -392,7 +423,7 @@ pub fn create_connection(
 }
 
 //Attach an encrypted database to the connection
-//
+//the maximum number of attached databases is 10
 //  path: database file path. Panic if the path is not valid utf-8
 //  name: the name that will be used in query. will fail if it contains spaces
 //  secret: the encryption key
@@ -464,10 +495,12 @@ pub fn build_params_from_json(
 #[cfg(test)]
 mod tests {
 
+    use futures::channel::oneshot::Receiver;
+
     use crate::cryptography::hash;
 
     use super::*;
-    use std::error::Error;
+    use std::{error::Error, time::Instant};
     #[derive(Debug)]
     struct Person {
         id: i32,
@@ -488,7 +521,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn async_queries() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/select_queries.db".into();
+        let path: PathBuf = "test/data/database/async_queries.db".into();
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
         let writer = BufferedDatabaseWriter::start(10, conn).await;
@@ -541,7 +574,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn blocking_queries() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/select_queries.db".into();
+        let path: PathBuf = "test/data/database/blocking_queries.db".into();
         let secret = hash(b"bytes");
         let writer_conn = create_connection(&path, &secret, 1024, false)?;
         let writer = BufferedDatabaseWriter::start(10, writer_conn).await;
@@ -588,6 +621,134 @@ mod tests {
             //     print!("");
         })
         .join();
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn buffered_writes_size1() -> Result<(), Box<dyn Error>> {
+        let path: PathBuf = "test/data/database/buffered_writes.db".into();
+        let secret = hash(b"bytes");
+        let conn = create_connection(&path, &secret, 1024, false)?;
+        let writer = BufferedDatabaseWriter::start(1, conn).await;
+
+        writer
+            .write_async(
+                "CREATE TABLE IF NOT EXISTS person (
+            id              INTEGER PRIMARY KEY,
+            name            TEXT NOT NULL,
+            surname         TEXT
+            ) STRICT"
+                    .to_string(),
+                vec![],
+            )
+            .await??;
+
+        writer
+            .write_async("DELETE FROM person".to_string(), vec![])
+            .await??;
+
+        let loop_number = 10;
+        let start = Instant::now();
+        let mut reply_list = vec![];
+        for i in 0..loop_number {
+            let per = Person {
+                id: 0,
+                name: format!("Steven-{}", i),
+                surname: "Bob".to_string(),
+            };
+            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+
+            let query = WriteQuery {
+                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
+                params: vec![Value::Text(per.name), Value::Text(per.surname)],
+                reply: reply,
+            };
+            writer.send_async(query).await?;
+            reply_list.push(reciev);
+        }
+        reply_list.pop().unwrap().await??;
+        println!("Time buffered {}", start.elapsed().as_millis());
+
+        // let start = Instant::now();
+
+        let conn = create_connection(&path, &secret, 8192, false)?;
+        let reader = DatabaseReader::start(conn);
+        let res = reader
+            .query_async(
+                "SELECT * FROM person ORDER BY id".to_string(),
+                vec![],
+                Person::from_row(),
+            )
+            .await?;
+        assert_eq!(res.len(), loop_number);
+        assert_eq!(res[0].id, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn buffered_writes_size10() -> Result<(), Box<dyn Error>> {
+        let path: PathBuf = "test/data/database/buffered_writes10.db".into();
+        let secret = hash(b"bytes");
+        let conn = create_connection(&path, &secret, 1024, false)?;
+        let writer = BufferedDatabaseWriter::start(10, conn).await;
+
+        writer
+            .write_async(
+                "CREATE TABLE IF NOT EXISTS person (
+            id              INTEGER PRIMARY KEY,
+            name            TEXT NOT NULL,
+            surname         TEXT
+            ) STRICT"
+                    .to_string(),
+                vec![],
+            )
+            .await??;
+
+        writer
+            .write_async("DELETE FROM person".to_string(), vec![])
+            .await??;
+
+        let loop_number = 100;
+        let start = Instant::now();
+        let mut reply_list = vec![];
+        for i in 0..loop_number {
+            let per = Person {
+                id: 0,
+                name: format!("Steven-{}", i),
+                surname: "Bob".to_string(),
+            };
+            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+
+            let query = WriteQuery {
+                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
+                params: vec![Value::Text(per.name), Value::Text(per.surname)],
+                reply: reply,
+            };
+            writer.send_async(query).await?;
+            reply_list.push(reciev);
+        }
+        reply_list.pop().unwrap().await??;
+        println!(
+            "Time {} rows in {} ms",
+            loop_number,
+            start.elapsed().as_millis()
+        );
+
+        // let start = Instant::now();
+
+        let conn = create_connection(&path, &secret, 8192, false)?;
+        let reader = DatabaseReader::start(conn);
+        let res = reader
+            .query_async(
+                "SELECT * FROM person ORDER BY id".to_string(),
+                vec![],
+                Person::from_row(),
+            )
+            .await?;
+        assert_eq!(res.len(), loop_number);
+        assert_eq!(res[0].id, 1);
 
         Ok(())
     }
