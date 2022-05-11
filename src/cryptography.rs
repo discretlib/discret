@@ -19,13 +19,16 @@ pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = hash(login.as_bytes());
-    let mut config = Config::default();
 
-    config.mem_cost = 8192;
-    config.time_cost = 3;
-    config.variant = Variant::Argon2id;
-    config.lanes = 2;
-    config.thread_mode = ThreadMode::Parallel;
+    let config = Config::<'_> {
+        mem_cost: 8192,
+        time_cost: 3,
+        variant: Variant::Argon2id,
+        lanes: 2,
+        thread_mode: ThreadMode::Parallel,
+        ..Default::default()
+    };
+
     let hashed = argon2::hash_encoded(password, &salt, &config).unwrap();
     let matches = argon2::verify_encoded(&hashed, password).unwrap();
     assert!(matches);
@@ -42,10 +45,10 @@ pub fn create_random_key_pair() -> Keypair {
 
     csprng.fill_bytes(&mut random);
 
-    create_key_pair(&random)
+    create_ed25519_key_pair(&random)
 }
 
-pub fn create_key_pair(random: &[u8; 32]) -> Keypair {
+pub fn create_ed25519_key_pair(random: &[u8; 32]) -> Keypair {
     let sk: SecretKey = SecretKey::from_bytes(random).unwrap();
     let pk: PublicKey = (&sk).into();
     Keypair {
@@ -54,31 +57,30 @@ pub fn create_key_pair(random: &[u8; 32]) -> Keypair {
     }
 }
 
-pub fn import_keypair(keypair: [u8; 64]) -> Result<Keypair, Error> {
-    Keypair::from_bytes(&keypair).or_else(|_| Err(Error::InvalidKeyPair))
+pub fn import_ed25519_keypair(keypair: [u8; 64]) -> Result<Keypair, Error> {
+    Keypair::from_bytes(&keypair).map_err(|_| Error::InvalidKeyPair)
 }
 
-pub fn export_keypair(keypair: &Keypair) -> [u8; 64] {
+pub fn export_ed25519_keypair(keypair: &Keypair) -> [u8; 64] {
     keypair.to_bytes()
 }
 
-pub fn import_public_key(public_key: [u8; 32]) -> Result<PublicKey, Error> {
-    PublicKey::from_bytes(&public_key).or_else(|_| Err(Error::InvalidPublicKey))
+pub fn import_ed25519_public_key(public_key: [u8; 32]) -> Result<PublicKey, Error> {
+    PublicKey::from_bytes(&public_key).map_err(|_| Error::InvalidPublicKey)
 }
 
-pub fn export_public_key(public_key: &PublicKey) -> [u8; 32] {
+pub fn export_ed25519_public_key(public_key: &PublicKey) -> [u8; 32] {
     public_key.to_bytes()
 }
 
 pub fn sign(keypair: &Keypair, message: &[u8]) -> Signature {
-    let signature = keypair.sign(message);
-    signature
+    keypair.sign(message)
 }
 
-pub fn verify(public_key: &PublicKey, message: &[u8], signature: Signature) -> Result<(), Error> {
+pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> Result<(), Error> {
     public_key
-        .verify(&message, &signature)
-        .or_else(|_| Err(Error::InvalidSignature))
+        .verify(message, signature)
+        .map_err(|_| Error::InvalidSignature)
 }
 
 pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
@@ -100,6 +102,7 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
 //
 //usefull to remember an item and search it later
 //do not use as a primary key!!
+#[allow(clippy::needless_range_loop)]
 pub fn humanise_hash(hash: &[u8; 32], length: usize) -> String {
     let consonnant = [
         "B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W",

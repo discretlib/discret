@@ -12,6 +12,9 @@ pub enum Error {
     #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),
 
+    #[error("{0}")]
+    DatabaseWriteError(String),
+
     #[error(transparent)]
     IoError(#[from] std::io::Error),
 

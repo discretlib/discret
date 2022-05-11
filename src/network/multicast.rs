@@ -23,7 +23,8 @@ pub struct Announce {
     tokens: Vec<Vec<u8>>,
 }
 
-pub async fn star_multicast_discovery(
+#[allow(clippy::unnecessary_unwrap)]
+pub async fn start_multicast_discovery(
     multicast_adress: SocketAddr,
     announce_frequency: Duration,
     send_to: Sender<Result<Message, Error>>,
@@ -47,12 +48,13 @@ pub async fn star_multicast_discovery(
     tokio::spawn(async move {
         let mut buf: Vec<u8> = Vec::with_capacity(MULTICAST_MTU);
         let msg_option = internal_reciever.recv().await;
-        let mut msg;
-        if msg_option.is_none() {
-            return;
+
+        let mut msg = if msg_option.is_some() {
+            msg_option.unwrap()
         } else {
-            msg = msg_option.unwrap();
-        }
+            return;
+        };
+
         loop {
             buf.clear();
             match bincode::serialize_into(&mut buf, &msg) {
@@ -63,13 +65,9 @@ pub async fn star_multicast_discovery(
                             .await;
                         buf.clear();
                         buf.shrink_to(MULTICAST_MTU)
-                    } else {
-                        match socket_sender.send_to(&buf[..], &multicast_adress).await {
-                            Err(e) => {
-                                let _ = error_channel.send(Err(e.into())).await;
-                            }
-                            _ => (),
-                        };
+                    } else if let Err(e) = socket_sender.send_to(&buf[..], &multicast_adress).await
+                    {
+                        let _ = error_channel.send(Err(e.into())).await;
                     }
                 }
                 Err(e) => {
@@ -109,13 +107,13 @@ async fn handle_receive(
     let (len, remote_addr) = socket_listener
         .recv_from(&mut buf)
         .await
-        .map_err(|e| Error::from(e))?;
+        .map_err(Error::from)?;
 
     if len > buf.len() {
         return Err(Error::MsgDeserialisationToLong(len, MULTICAST_MTU));
     };
 
-    let announce: Announce = bincode::deserialize(&buf[0..len]).map_err(|e| Error::from(e))?;
+    let announce: Announce = bincode::deserialize(&buf[0..len]).map_err(Error::from)?;
     let message = Message::MulticastCandidates {
         ip: remote_addr.ip(),
         announce: Box::new(announce),
@@ -191,7 +189,7 @@ mod test {
             Receiver<Result<Message, Error>>,
         ) = mpsc::channel(1);
 
-        let sender = star_multicast_discovery(
+        let sender = start_multicast_discovery(
             multicast_adress,
             Duration::from_millis(announce_frequency),
             sender,

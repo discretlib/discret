@@ -1,117 +1,322 @@
-use rusqlite::{types::Value, Connection, Row, ToSql};
-use std::path::PathBuf;
+use rusqlite::{types::Value, Connection, Row};
+use std::{path::PathBuf, thread, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
-struct WriteQuery {
-    query: String,
-    params: Vec<Value>,
-    reply: oneshot::Sender<Result<(), rusqlite::Error>>,
+use crate::error::Error;
+
+// pub struct SelectQuery<T> {
+//     query: String,
+//     params: Vec<Value>,
+//     mapper: fn(&Row) -> Result<T, rusqlite::Error>,
+// }
+
+type ReaderFn = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
+type MappingFn<T> = fn(&Row) -> Result<Box<T>, rusqlite::Error>;
+pub trait FromRow {
+    fn from_row() -> MappingFn<Self>;
+}
+// Main entry point to perform SELECT queries
+//
+// Clone it to safely perform queries across different thread
+//
+// Sqlite in WAL mode support READ/WRITE concurency, wich makes the separation between read and write thread efficient
+// it is possible to open several reader but beware that each reader can consume up to 8Mb of memory
+//
+#[derive(Clone)]
+pub struct DatabaseReader {
+    sender: mpsc::Sender<ReaderFn>,
+}
+impl DatabaseReader {
+    pub fn start(mut conn: Connection) -> Self {
+        //enforce read only behavior for this connection
+        //any attempt to CREATE, DELETE, DROP, INSERT, or UPDATE will result in an SQLITE_READONLY error
+        let _ = set_pragma("query_only", "1", &conn);
+        let (send_query, mut receiv_query) = mpsc::channel::<ReaderFn>(10);
+
+        thread::spawn(move || {
+            while let Some(f) = receiv_query.blocking_recv() {
+                f(&mut conn);
+            }
+        });
+
+        Self { sender: send_query }
+    }
+
+    pub async fn query_async<T: Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Value>,
+        mapping: MappingFn<T>,
+    ) -> Result<Vec<T>, Error> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+
+        let _ = &self
+            .sender
+            .send(Box::new(move |conn| {
+                let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+
+                let _ = send_response.send(result);
+            }))
+            .await;
+
+        receive_response
+            .await
+            .map_err(|e| Error::Unknown(e.to_string()))?
+    }
+
+    pub fn query_blocking<T: FromRow + Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Value>,
+        mapping: MappingFn<T>,
+    ) -> Result<Vec<T>, Error> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+
+        let _ = &self.sender.blocking_send(Box::new(move |conn| {
+            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+
+            let _ = send_response.send(result);
+        }));
+
+        receive_response
+            .blocking_recv()
+            .map_err(|e| Error::Unknown(e.to_string()))?
+    }
+
+    fn select<T: Send + Sized + 'static>(
+        query: &str,
+        params: &Vec<Value>,
+        mapping: &MappingFn<T>,
+        conn: &Connection,
+    ) -> Result<Vec<T>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(query)?;
+
+        let params = rusqlite::params_from_iter(params);
+
+        let iter = stmt.query_map(params, mapping)?;
+
+        let mut result: Vec<T> = vec![];
+        for res in iter {
+            let s = res?;
+            result.push(*s)
+        }
+
+        Ok(result)
+    }
 }
 
-struct SelectQuery<T> {
+// fn process_select<T>(query: &SelectQuery<T>, conn: &Connection) -> Result<Vec<T>, rusqlite::Error> {
+//     let mut stmt = conn.prepare_cached(&query.query)?;
+
+//     let params = rusqlite::params_from_iter(&query.params);
+
+//     let iter = stmt.query_map(params, &query.mapper)?;
+
+//     let mut result: Vec<T> = vec![];
+//     for res in iter {
+//         result.push(res?)
+//     }
+
+//     Ok(result)
+// }
+pub struct WriteQuery {
     query: String,
     params: Vec<Value>,
-    reply: oneshot::Sender<Result<Vec<T>, rusqlite::Error>>,
-    mapper: fn(&Row) -> Result<T, rusqlite::Error>,
+    reply: oneshot::Sender<Result<(), Error>>,
 }
+// Main entry point to insert data in the database
+//
+// Clone it to safely perform queries across different thread
+//
+// Write queries are buffered while the database thread is working.
+// When the database thread is ready, the buffer is sent and is processed in one single transaction
+// This greatly increase insertion and update rate, compared to autocommit.
+//
+// If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
+// This should not be an issue as insert query are not expected to fail.
+// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk)
+//
+// Only one writer should be used per database, as are write transactions are serialized
+//
+#[derive(Clone)]
+pub struct BufferedDatabaseWriter {
+    sender: mpsc::Sender<WriteQuery>,
+}
+impl BufferedDatabaseWriter {
+    pub async fn start(buffer_size: usize, conn: Connection) -> Self {
+        let (send_write, mut receive_write): (
+            mpsc::Sender<WriteQuery>,
+            mpsc::Receiver<WriteQuery>,
+        ) = mpsc::channel::<WriteQuery>(buffer_size);
 
-fn buffered_database_writer(buffer_size: usize, conn: Connection) -> mpsc::Sender<WriteQuery> {
-    let (send_write, mut receive_write): (mpsc::Sender<WriteQuery>, mpsc::Receiver<WriteQuery>) =
-        mpsc::channel::<WriteQuery>(20);
+        let (send_ready, mut receive_ready): (mpsc::Sender<bool>, mpsc::Receiver<bool>) =
+            mpsc::channel::<bool>(2);
 
-    let (send_ready, mut receive_ready): (mpsc::Sender<bool>, mpsc::Receiver<bool>) =
-        mpsc::channel::<bool>(20);
+        let (send_buffer, mut receive_buffer) = mpsc::channel::<Vec<WriteQuery>>(1);
 
-    let (send_buffer, mut receive_buffer) = mpsc::channel::<Vec<WriteQuery>>(buffer_size);
-
-    tokio::spawn(async move {
-        let mut query_buffer: Vec<WriteQuery> = vec![];
-        loop {
-            tokio::select! {
-                write_query = receive_write.recv() => {
-                    match write_query {
-                        Some(val) => query_buffer.push(val),
-                        None => break,
+        tokio::spawn(async move {
+            let mut query_buffer: Vec<WriteQuery> = vec![];
+            let mut is_ready = false;
+            loop {
+                tokio::select! {
+                    write_query = receive_write.recv() => {
+                        match write_query {
+                            Some(val) => query_buffer.push(val),
+                            None => break,
+                        }
+                    },
+                    ready = receive_ready.recv() => {
+                        if ready.is_none() {
+                            break;
+                        }
+                        is_ready = true;
                     }
-                },
-                ready = receive_ready.recv() => {
-                    if ready.is_none() {
-                        break;
-                    }
-                    if query_buffer.len() > 0 {
-                        let _s = send_buffer.send(query_buffer).await;
-                        query_buffer = vec![];
-                    }
-                }
-            };
-            if query_buffer.len() >= buffer_size {
-                let ready = receive_ready.recv().await;
-                if ready.is_none() {
-                    break;
-                }
-                if query_buffer.len() > 0 {
+                };
+
+                if (!query_buffer.is_empty() && is_ready) || query_buffer.len() >= buffer_size {
                     let _s = send_buffer.send(query_buffer).await;
+                    is_ready = false;
                     query_buffer = vec![];
                 }
             }
-        }
-    });
+        });
 
-    tokio::task::spawn_blocking(move || {
-        let _s = send_ready.blocking_send(true);
-        while let Some(buffer) = receive_buffer.blocking_recv() {
-            let result = process_batch_write(&buffer, &conn);
-            match result {
-                Ok(_) => {
-                    for write in buffer {
-                        let _r = write.reply.send(Ok(()));
-                    }
-                }
-                Err(e) => {
-                    for write in buffer {
-                        let _r = write
-                            .reply
-                            .send(Err(rusqlite::Error::ModuleError(e.to_string())));
-                    }
-                }
-            }
+        thread::spawn(move || {
             let _s = send_ready.blocking_send(true);
+
+            while let Some(buffer) = receive_buffer.blocking_recv() {
+                let result = Self::process_batch_write(&buffer, &conn);
+                match result {
+                    Ok(_) => {
+                        for write in buffer {
+                            let _r = write.reply.send(Ok(()));
+                        }
+                    }
+                    Err(e) => {
+                        for write in buffer {
+                            let _r = write
+                                .reply
+                                .send(Err(Error::DatabaseWriteError(e.to_string())));
+                        }
+                    }
+                }
+                let _s = send_ready.blocking_send(true);
+            }
+        });
+
+        Self { sender: send_write }
+    }
+
+    pub async fn send_async(&self, msg: WriteQuery) -> Result<(), Error> {
+        self.sender
+            .send(msg)
+            .await
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub fn send_blocking(&self, msg: WriteQuery) -> Result<(), Error> {
+        self.sender
+            .blocking_send(msg)
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub async fn write_async(
+        &self,
+        query: String,
+        params: Vec<Value>,
+    ) -> Result<Result<(), Error>, Error> {
+        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let _ = self
+            .sender
+            .send(WriteQuery {
+                query,
+                params,
+                reply,
+            })
+            .await;
+        reciev.await.map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub fn write_blocking(
+        &self,
+        query: String,
+        params: Vec<Value>,
+    ) -> Result<Result<(), Error>, Error> {
+        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let _ = self.sender.blocking_send(WriteQuery {
+            query,
+            params,
+            reply,
+        });
+        reciev
+            .blocking_recv()
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    fn process_batch_write(
+        buffer: &Vec<WriteQuery>,
+        conn: &Connection,
+    ) -> Result<(), rusqlite::Error> {
+        conn.execute("BEGIN TRANSACTION", [])?;
+        for write in buffer {
+            Self::process_write(write, conn)?;
+        }
+        conn.execute("COMMIT", [])?;
+        Ok(())
+    }
+
+    fn process_write(query: &WriteQuery, conn: &Connection) -> Result<(), rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(&query.query)?;
+        let params = rusqlite::params_from_iter(&query.params);
+        stmt.execute(params)?;
+        Ok(())
+    }
+}
+
+//Perform sqlite optimize task on a frequency basis
+//
+//The receiver MUST be consumed, otherwise the optimise task will be run only once
+//
+//Optimize: Attempt to optimize the database
+//  Recompute statistics when needed
+//  Must be run on a regular basis to get good performances
+//  frequency: every hours?
+pub fn house_keeper(
+    frequency: Duration,
+    conn: Connection,
+) -> mpsc::Receiver<Result<(), rusqlite::Error>> {
+    let (send_status, receive_status) = mpsc::channel::<Result<(), rusqlite::Error>>(1);
+    thread::spawn(move || loop {
+        thread::sleep(frequency);
+        let result = optimize(&conn);
+        let s = send_status.blocking_send(result);
+        if s.is_err() {
+            break;
         }
     });
-
-    send_write
+    receive_status
 }
 
-fn process_batch_write(buffer: &Vec<WriteQuery>, conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute("BEGIN TRANSACTION", [])?;
-    for write in buffer {
-        process_write(&write, &conn)?;
-    }
-    conn.execute("COMMIT", [])?;
-    Ok(())
-}
-
-fn process_write(query: &WriteQuery, conn: &Connection) -> Result<(), rusqlite::Error> {
-    let mut stmt = conn.prepare_cached(&query.query)?;
-    let params = rusqlite::params_from_iter(&query.params);
-    stmt.execute(params)?;
-    Ok(())
-}
-
-fn process_select<T>(query: &SelectQuery<T>, conn: &Connection) -> Result<Vec<T>, rusqlite::Error> {
-    let mut stmt = conn.prepare_cached(&query.query)?;
-    let params = rusqlite::params_from_iter(&query.params);
-    let iter = stmt.query_map(params, &query.mapper)?;
-    let mut result: Vec<T> = vec![];
-    for res in iter {
-        result.push(res?)
-    }
-    Ok(result)
-}
-
-fn create_connection(
+//Create a sqlcipher database connection
+//
+//path: database file path
+//
+//secret: the encryption key
+//
+//cache_size:
+//  the discret app set its to 8Mb for SELECT conn and 1Mb for Insert conn to get a relatively low memory usage,
+//  but the more you have the better. Large values will increase performances by reducing number of disk read.
+//
+//enable_memory_security: Prevents memory to be written into swap and zeroise memory after free
+//  Can be disabled because of a huge performance impact (about 50%),
+//  When this feature is disabled, locking/unlocking of the memory address only occur for the internal SQLCipher
+//  data structures used to store key material, and cryptographic structures.
+//  source: https://discuss.zetetic.net/t/what-is-the-purpose-of-pragma-cipher-memory-security/3953
+//
+pub fn create_connection(
     path: &PathBuf,
     secret: &[u8; 32],
+    cache_size_in_kb: u32,
     enable_memory_security: bool,
 ) -> Result<Connection, rusqlite::Error> {
     //let conn = rusqlite::Connection::open(path)?;
@@ -144,12 +349,7 @@ fn create_connection(
 
     //Enable/disable memory security.
     //
-    //Prevents memory to be written into swap and zeroise memory after free
-    //Can be disabled because of a huge performance impact (about 50%),
-    //When this feature is disabled, locking/unlocking of the memory address only occur for the internal SQLCipher
-    //data structures used to store key material, and cryptographic structures.
-    //source: https://discuss.zetetic.net/t/what-is-the-purpose-of-pragma-cipher-memory-security/3953
-    //
+
     if enable_memory_security {
         set_pragma("cipher_memory_security", "1", &conn)?;
     } else {
@@ -169,7 +369,7 @@ fn create_connection(
     set_pragma("mmap_size", "268435456", &conn)?;
 
     //8mb cache size.
-    set_pragma("cache_size", "-8192", &conn)?;
+    set_pragma("cache_size", &format!("-{}", cache_size_in_kb), &conn)?;
 
     //WAL journaling system allows for concurent READ/WRITE.
     set_pragma("journal_mode", "WAL", &conn)?;
@@ -191,22 +391,40 @@ fn create_connection(
     Ok(conn)
 }
 
-//Attempt to optimize the database
-//Recompute statistics when needed
-//Must be run on a regular basis to get good performances
-//planned setup:every hours
-fn optimize(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
-    let mut stmt = conn.prepare("PRAGMA optimize")?;
+//Attach an encrypted database to the connection
+//
+//  path: database file path. Panic if the path is not valid utf-8
+//  name: the name that will be used in query. will fail if it contains spaces
+//  secret: the encryption key
+pub fn attach(
+    path: PathBuf,
+    name: String,
+    secret: &[u8; 32],
+    conn: &rusqlite::Connection,
+) -> Result<(), rusqlite::Error> {
+    let secr = hex::encode(secret);
+    let path_string: String = path.to_str().unwrap().to_string();
+    let query = format!(
+        "ATTACH DATABASE '{}' AS {} KEY \"x'{}'\"",
+        path_string, name, secr
+    );
+    conn.execute(&query, [])?;
+    Ok(())
+}
+
+//Vaccumm: Defragment database to reduce the database size and increase performances
+//  should be run from time to time
+//  this is a long running task that blocks writes and temporarilly double the database size
+//  frequency: manually? every month?
+//
+pub fn vaccuum(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("VACUUM")?;
     let _rows = stmt.query([])?;
     Ok(())
 }
 
-//Defragment database to reduce the database size and increase performances
-//should be run from time to time
-//this is a long running task that blocks writes and temporarilly double the database size
-//planned setup: manually? every month?
-fn vaccuum(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
-    let mut stmt = conn.prepare("VACUUM")?;
+fn optimize(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA optimize")?;
     let _rows = stmt.query([])?;
     Ok(())
 }
@@ -221,262 +439,156 @@ fn set_pragma(
     Ok(())
 }
 
+pub fn build_params_from_json(
+    params: Vec<serde_json::Value>,
+) -> rusqlite::ParamsFromIter<Vec<Value>> {
+    let mut temp_param: Vec<Value> = vec![];
+
+    for par in params {
+        if par.is_string() {
+            temp_param.push(Value::Text(
+                //removes the " " delimiters from the json string. ex: "value" becomes: value
+                par.as_str().unwrap().to_string(),
+            ));
+        } else if par.is_i64() {
+            temp_param.push(Value::Integer(par.as_i64().unwrap()));
+        } else if par.is_f64() {
+            temp_param.push(Value::Real(par.as_f64().unwrap()));
+        } else {
+            temp_param.push(Value::Text(par.to_string()));
+        }
+    }
+    rusqlite::params_from_iter(temp_param)
+}
+
 #[cfg(test)]
 mod tests {
-    use rusqlite::{params, Params};
 
     use crate::cryptography::hash;
 
     use super::*;
     use std::error::Error;
-
     #[derive(Debug)]
     struct Person {
         id: i32,
         name: String,
         surname: String,
     }
+    impl FromRow for Person {
+        fn from_row() -> fn(&Row) -> Result<Box<Self>, rusqlite::Error> {
+            |row| {
+                Ok(Box::new(Person {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    surname: row.get(2)?,
+                }))
+            }
+        }
+    }
 
-    #[test]
-    fn test_query() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/test.db".into();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn async_queries() -> Result<(), Box<dyn Error>> {
+        let path: PathBuf = "test/data/select_queries.db".into();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, false)?;
+        let conn = create_connection(&path, &secret, 1024, false)?;
+        let writer = BufferedDatabaseWriter::start(10, conn).await;
 
-        let create = "CREATE TABLE IF NOT EXISTS person (
+        writer
+            .write_async(
+                "CREATE TABLE IF NOT EXISTS person (
             id              INTEGER PRIMARY KEY,
             name            TEXT NOT NULL,
-            data            BLOB
-            )"
-        .to_string();
+            surname         TEXT
+            ) STRICT"
+                    .to_string(),
+                vec![],
+            )
+            .await??;
 
-        let (reply, _write) = oneshot::channel::<Result<(), rusqlite::Error>>();
-        let query = WriteQuery {
-            query: create,
-            params: vec![],
-            reply: reply,
-        };
-        process_write(&query, &conn)?;
-        conn.execute("DELETE FROM person", [])?;
-        let me = Person {
+        writer
+            .write_async("DELETE FROM person".to_string(), vec![])
+            .await??;
+
+        let per = Person {
             id: 0,
             name: "Steven".to_string(),
             surname: "Bob".to_string(),
         };
 
-        let (reply, _write) = oneshot::channel::<Result<(), rusqlite::Error>>();
+        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
         let query = WriteQuery {
-            query: "INSERT INTO person (name, data) VALUES (?, ?)".to_string(),
-            params: vec![Value::Text(me.name), Value::Text(me.surname)],
+            query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
+            params: vec![Value::Text(per.name), Value::Text(per.surname)],
             reply: reply,
         };
+        writer.send_async(query).await?;
+        reciev.await??;
 
-        //  process_write(&query, &conn)?;
-
-        process_write(&query, &conn)?;
-        process_write(&query, &conn)?;
-
-        let (reply, _write) = oneshot::channel::<Result<Vec<Person>, rusqlite::Error>>();
-        let query = SelectQuery {
-            query: "SELECT * FROM person".to_string(),
-            params: vec![],
-            reply: reply,
-            mapper: |row| {
-                Ok(Person {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    surname: row.get(2)?,
-                })
-            },
-        };
-
-        let rs = process_select(&query, &conn)?;
-        for per in rs {
-            println!(
-                "id:{}   name:{}   surname:{}",
-                per.id, per.name, per.surname
-            );
-        }
+        let conn = create_connection(&path, &secret, 8192, false)?;
+        let reader = DatabaseReader::start(conn);
+        let res = reader
+            .query_async(
+                "SELECT * FROM person".to_string(),
+                vec![],
+                Person::from_row(),
+            )
+            .await?;
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].id, 1);
 
         Ok(())
     }
 
-    fn display_query(query: &str, conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
-        let mut stmt = conn.prepare(query)?;
-        let len = stmt.column_count();
-        let mut rows = stmt.query([])?;
-
-        while let Some(row) = rows.next()? {
-            for idx in 0..len {
-                let val: rusqlite::types::ValueRef = row.get_ref(idx)?;
-                match val {
-                    rusqlite::types::ValueRef::Null => print!(" NULL |"),
-                    rusqlite::types::ValueRef::Integer(val) => print!(" {} |", val),
-                    rusqlite::types::ValueRef::Real(val) => print!(" {} |", val),
-                    rusqlite::types::ValueRef::Text(val) => {
-                        print!(" {} |", String::from_utf8_lossy(val))
-                    }
-                    rusqlite::types::ValueRef::Blob(_val) => print!(" BLOB |"),
-                };
-                println!("");
-            }
-        }
-
-        Ok(())
-    }
-}
-/*
-let hook = |_: Action, _: &str, _: &str, _: i64| {
-    if let Ok(ref mut mutex) = locked.try_lock() {
-        **mutex = ();
-    }
-};
-
-db.update_hook(Some(hook)); */
-
-/* pub struct Database {
-    path: PathBuf,
-    secret: String,
-    pool: Pool<Connection>,
-}
-
-impl Database {
-    pub fn new(path: PathBuf, secret: [u8; 32]) -> Self {
-        //this key format avoids additional key derivation from SQLCipher
-        let sqlcipher_key = format!("x'{}'", hex::encode(&secret));
-        Database {
-            path,
-            secret: sqlcipher_key,
-            //start with zero capacity so the init closure  is never called
-            //this avoid potential io error during initialisation
-            pool: Pool::new(0, || Connection::open_in_memory().unwrap()),
-        }
-    }
-
-    pub fn exist(&self) -> bool {
-        self.path.exists()
-    }
-
-    pub fn pool_len(&self) -> usize {
-        self.pool.len()
-    }
-
-    pub fn get_connection(&self) -> Result<Reusable<Connection>, rusqlite::Error> {
-        let conn = self.pool.try_pull();
-        match conn {
-            Some(i) => Ok(i),
-            None => {
-                let newconn = self.create_connection()?;
-                self.pool.attach(newconn);
-                let newreusable = self.pool.try_pull().unwrap_or_else(|| {
-                    panic!("This should never occur, we just put a new connection in the pool!")
-                });
-                Ok(newreusable)
-            }
-        }
-    }
-
-    fn create_connection(&self) -> Result<Connection, rusqlite::Error> {
-        let conn = rusqlite::Connection::open(self.path.clone())?;
-        {
-            let query = format!("PRAGMA key=\"{}\" ", self.secret);
-            let res: String = conn.query_row(&query, [], |row| row.get(0))?;
-            assert_eq!("ok", res)
-        }
-        Ok(conn)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Database;
-    use crate::{build_path, database_file_name_for};
-    use rusqlite::params;
-    #[test]
-    fn test_pool_reuse() -> Result<(), rusqlite::Error> {
-        let secret = [1; 32];
-        let file_name = database_file_name_for(&secret);
-        let path = build_path("test/data/", &file_name).unwrap();
-        let poule = Database::new(path, secret);
-        // println!("Poule size  {:?}", poule.len());
-        //brace to quickly push the Connection out of scope
-        assert_eq!(poule.pool_len(), 0);
-        {
-            let conn = poule.get_connection()?;
-            assert_eq!(poule.pool_len(), 0);
-            let _t: i32 = conn.query_row("SELECT $1", [42], |row| row.get(0))?;
-        }
-        assert_eq!(poule.pool_len(), 1);
-        {
-            let conn = poule.get_connection()?;
-            assert_eq!(poule.pool_len(), 0);
-            let _t: i32 = conn.query_row("SELECT $1", [42], |row| row.get(0))?;
-        }
-        assert_eq!(poule.pool_len(), 1);
-        Ok(())
-    }
-
-    struct Person {
-        id: i32,
-        name: String,
-    }
-
-    #[test]
-    fn test_pool_encryption() -> Result<(), rusqlite::Error> {
-        let db_path = "test/data/";
-        let secret = [1; 32];
-        let file_name = database_file_name_for(&secret);
-        let path = build_path(db_path, &file_name).unwrap();
-
-        let poule = Database::new(path.clone(), secret);
-        // println!("Poule size  {:?}", poule.len());
-        //brace to quickly push the Connection out of scope
-        {
-            let good_conn_1 = poule.get_connection()?;
-            good_conn_1.execute(
+    #[tokio::test(flavor = "multi_thread")]
+    async fn blocking_queries() -> Result<(), Box<dyn Error>> {
+        let path: PathBuf = "test/data/select_queries.db".into();
+        let secret = hash(b"bytes");
+        let writer_conn = create_connection(&path, &secret, 1024, false)?;
+        let writer = BufferedDatabaseWriter::start(10, writer_conn).await;
+        let reader_conn = create_connection(&path, &secret, 8192, false)?;
+        let _ = thread::spawn(move || {
+            let _ = writer.write_blocking(
                 "CREATE TABLE IF NOT EXISTS person (
-                    id    INTEGER PRIMARY KEY,
-                    name  TEXT NOT NULL
-                )",
-                [], // empty list of parameters.
-            )?;
-            good_conn_1.execute("DELETE FROM person", [])?;
-            let me = Person {
+                id              INTEGER PRIMARY KEY,
+                name            TEXT NOT NULL,
+                surname         TEXT
+                ) STRICT"
+                    .to_string(),
+                vec![],
+            );
+
+            let _ = writer
+                .write_blocking("DELETE FROM person".to_string(), vec![])
+                .unwrap();
+            let per = Person {
                 id: 0,
                 name: "Steven".to_string(),
+                surname: "Bob".to_string(),
             };
-            good_conn_1.execute("INSERT INTO person (name) VALUES (?1)", params![me.name])?;
 
-            let good_conn_2 = poule.get_connection()?;
+            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+            let query = WriteQuery {
+                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
+                params: vec![Value::Text(per.name), Value::Text(per.surname)],
+                reply: reply,
+            };
+            let _ = writer.send_blocking(query);
+            let _ = reciev.blocking_recv();
 
-            let mut stmt = good_conn_2.prepare("SELECT id, name FROM person")?;
-            let person_iter = stmt.query_map([], |row| {
-                Ok(Person {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                })
-            })?;
-
-            for person in person_iter {
-                let p = person.unwrap();
-                assert_eq!(p.id, 1);
-                assert_eq!(p.name, "Steven");
-            }
-
-            //setup a bad secret
-            let secret = [5; 32];
-            let bad_poule = Database::new(path, secret);
-            let bad_conn_1 = bad_poule.get_connection()?;
-
-            let result: Result<i32, rusqlite::Error> =
-                bad_conn_1.query_row("SELECT id FROM person", [], |row| row.get(0));
-            let error_message = result
-                .expect_err("Should have failed due to wrong database password")
-                .to_string();
-            assert_eq!("file is not a database", error_message);
-        }
+            let reader = DatabaseReader::start(reader_conn);
+            let res = reader
+                .query_blocking(
+                    "SELECT * FROM person".to_string(),
+                    vec![],
+                    Person::from_row(),
+                )
+                .unwrap();
+            assert_eq!(res.len(), 1);
+            assert_eq!(res[0].id, 1);
+            //     print!("");
+        })
+        .join();
 
         Ok(())
     }
 }
- */

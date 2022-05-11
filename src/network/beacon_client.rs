@@ -41,7 +41,7 @@ impl AnnounceBuilder {
     fn build(&self) -> InbounddMessage {
         let pr = self.peer_request.clone().unwrap();
         let pi = PeerInfo {
-            ip: self.adress.unwrap().clone(),
+            ip: self.adress.unwrap(),
             certificate: pr.certificate,
             signature: pr.signature,
         };
@@ -58,12 +58,11 @@ pub async fn star_beacon_client(
 ) -> Result<Sender<PeerRequest>, Error> {
     let (sender, mut internal_reciever) = mpsc::channel(1);
 
-    let bind_adress: SocketAddr;
-    if beacon_adress.is_ipv4() {
-        bind_adress = "0.0.0.0:0".parse().unwrap();
+    let bind_adress: SocketAddr = if beacon_adress.is_ipv4() {
+        "0.0.0.0:0".parse().unwrap()
     } else {
-        bind_adress = "[::]:0".parse().unwrap();
-    }
+        "[::]:0".parse().unwrap()
+    };
 
     let mut endpoint = quinn::Endpoint::client(bind_adress)?;
     endpoint.set_default_client_config(client_tls_config());
@@ -134,16 +133,16 @@ pub async fn star_beacon_client(
 
 async fn send_announce_if_ready(
     annouce_builder: &AnnounceBuilder,
-    mut send_stream: &mut quinn::SendStream,
-    mut write_buffer: &mut Vec<u8>,
-    mut error_channel: &mut Sender<Result<Message, Error>>,
+    send_stream: &mut quinn::SendStream,
+    write_buffer: &mut Vec<u8>,
+    error_channel: &mut Sender<Result<Message, Error>>,
 ) {
     if annouce_builder.is_ready() {
         write_all(
-            &mut send_stream,
-            &mut write_buffer,
+            send_stream,
+            write_buffer,
             annouce_builder.build(),
-            &mut error_channel,
+            error_channel,
         )
         .await;
     }
@@ -170,7 +169,7 @@ async fn write_all(
         let len_buff = bincode::serialize(&len)?;
 
         send_stream.write_all(&len_buff).await?;
-        send_stream.write_all(&write_buffer).await?;
+        send_stream.write_all(write_buffer).await?;
 
         Ok(())
     }
@@ -179,19 +178,19 @@ async fn write_all(
         let _ = error_channel.send(Err(e)).await;
     }
 }
-
+#[allow(clippy::too_many_arguments)]
 async fn handle_response(
     read_fut: Result<(), quinn::ReadExactError>,
     receiv: &mut quinn::RecvStream,
     read_header: &[u8; 2],
     read_buffer: &mut [u8; BEACON_DATA_SIZE],
-    mut send_to: &mut Sender<Result<Message, Error>>,
+    send_to: &mut Sender<Result<Message, Error>>,
     annouce_builder: &mut AnnounceBuilder,
-    mut send_stream: &mut quinn::SendStream,
-    mut write_buffer: &mut Vec<u8>,
+    send_stream: &mut quinn::SendStream,
+    write_buffer: &mut Vec<u8>,
 ) {
     let err: Result<(), Error> = async {
-        read_fut.map_err(|e| Error::from(e))?;
+        read_fut.map_err(Error::from)?;
         let res: u16 = bincode::deserialize(read_header)?;
 
         let res = usize::from(res);
@@ -211,13 +210,7 @@ async fn handle_response(
                 annouce_builder.adress = Some(*your_ip);
                 let _t = token;
 
-                send_announce_if_ready(
-                    &annouce_builder,
-                    &mut send_stream,
-                    &mut write_buffer,
-                    &mut send_to,
-                )
-                .await;
+                send_announce_if_ready(annouce_builder, send_stream, write_buffer, send_to).await;
             }
             OutboundMessage::Candidate {
                 peer_info,

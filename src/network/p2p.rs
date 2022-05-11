@@ -31,7 +31,7 @@ pub fn endpoint(
     pub_key: rustls::Certificate,
     secret_key: rustls::PrivateKey,
 ) -> Result<(Endpoint, Incoming), Box<dyn Error>> {
-    let cert_chain = vec![pub_key.clone()];
+    let cert_chain = vec![pub_key];
 
     let mut server_config = ServerConfig::with_single_cert(cert_chain, secret_key)?;
 

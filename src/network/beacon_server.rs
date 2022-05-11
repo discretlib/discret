@@ -63,7 +63,7 @@ pub fn start_beacon_server(
     pub_key: rustls::Certificate,
     secret_key: rustls::PrivateKey,
 ) -> Result<Endpoint, Box<dyn Error>> {
-    let cert_chain = vec![pub_key.clone()];
+    let cert_chain = vec![pub_key];
 
     let mut server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
@@ -235,11 +235,11 @@ async fn handle_hello_message(
     let mut outbuffer: Vec<u8> = Vec::with_capacity(128);
     let tok;
     {
-        tok = token.lock().unwrap().clone();
+        tok = *token.lock().unwrap();
     }
 
     let out = OutboundMessage::BeaconParam {
-        your_ip: Box::new(adress.clone()),
+        your_ip: Box::new(*adress),
         hash_token: tok,
     };
 
@@ -256,19 +256,19 @@ async fn handle_announce_message(
     let mut outbuffer: Vec<u8> = Vec::with_capacity(256); //avoid realocating buffer reallocate buffer every time
     let tokens: &Vec<Token> = peer.connection_tokens.as_ref();
     for token in tokens {
-        insert_peer(&connection_map, token.clone(), &peer);
-        let vp = find_matched_peer(&connection_map, &token, &peer);
+        insert_peer(connection_map, *token, &peer);
+        let vp = find_matched_peer(connection_map, token, &peer);
         if vp.is_some() {
             for valid_peer in vp.unwrap() {
                 let local_answer = OutboundMessage::Candidate {
                     peer_info: valid_peer.peer_info.clone(),
-                    connection_token: token.clone(),
+                    connection_token: *token,
                 };
                 write_all(send, &mut outbuffer, local_answer).await?;
 
                 let remote_answer = OutboundMessage::Candidate {
                     peer_info: peer.peer_info.clone(),
-                    connection_token: token.clone(),
+                    connection_token: *token,
                 };
 
                 if let Err(e) =
@@ -368,7 +368,7 @@ fn find_matched_peer(db: &ConnMap, key: &Token, value: &Arc<Peer>) -> Option<Vec
                 .cloned()
                 .collect::<Vec<Arc<Peer>>>();
 
-            if res.len() > 0 {
+            if !res.is_empty() {
                 return Some(res);
             }
             None

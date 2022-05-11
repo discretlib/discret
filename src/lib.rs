@@ -6,12 +6,7 @@ pub mod error;
 pub mod message;
 pub mod network;
 
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fs, path::PathBuf};
 
 use cryptography::*;
 
