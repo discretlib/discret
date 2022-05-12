@@ -1,4 +1,3 @@
-use futures::channel::mpsc::Receiver;
 use rusqlite::{types::Value, Connection, Row};
 use std::{path::PathBuf, thread, time::Duration};
 use tokio::sync::{mpsc, oneshot};
@@ -495,8 +494,6 @@ pub fn build_params_from_json(
 #[cfg(test)]
 mod tests {
 
-    use futures::channel::oneshot::Receiver;
-
     use crate::cryptography::hash;
 
     use super::*;
@@ -692,7 +689,7 @@ mod tests {
         let path: PathBuf = "test/data/database/buffered_writes10.db".into();
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
-        let writer = BufferedDatabaseWriter::start(10, conn).await;
+        let writer = BufferedDatabaseWriter::start(7, conn).await;
 
         writer
             .write_async(
@@ -710,7 +707,7 @@ mod tests {
             .write_async("DELETE FROM person".to_string(), vec![])
             .await??;
 
-        let loop_number = 100;
+        let loop_number = 24;
         let start = Instant::now();
         let mut reply_list = vec![];
         for i in 0..loop_number {

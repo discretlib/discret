@@ -103,7 +103,7 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
 //usefull to remember an item and search it later
 //do not use as a primary key!!
 #[allow(clippy::needless_range_loop)]
-pub fn humanise_hash(hash: &[u8; 32], length: usize) -> String {
+pub fn humanized_hash(hash: &[u8; 32], length: usize) -> String {
     let consonnant = [
         "B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W",
         "X", "Z",
@@ -140,7 +140,7 @@ pub fn humanise_hash(hash: &[u8; 32], length: usize) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn derive_pass_phrase_test() {
+    fn control_derive_pass_phrase() {
         let login = "test".to_string();
         let pass_phrase = "testphrase".to_string();
 
@@ -154,30 +154,45 @@ mod tests {
     }
 
     #[test]
-    fn reduce_hash_for_humans_test() {
+    fn control_hash() {
+        assert_eq!(
+            hex::encode(hash(b"bytes")),
+            "df19b1f105ff929191ce49d0bbfdc5b4edc2a71a40f502dc955359eb33649e24"
+        );
+    }
+
+    #[test]
+    fn control_ed25519() {
+        let rd = hash(b"not random");
+        let keypair = create_ed25519_key_pair(&rd);
+
+        let exp_kp = export_ed25519_keypair(&keypair);
+        println!("{}", hex::encode(&exp_kp));
+
+        assert_eq!(
+            hex::encode(&exp_kp),
+            "4641b4e164ac24b9778ba49328206653eb01db1a9110ad1508cfaa9e3a2af08954ba9f30f212de637f2931d1439b6f7db24aa238b0df3d63a9cbf4a169fed58e"
+        );
+
+        let msg = b"message to sign";
+        let signature = sign(&keypair, msg);
+
+        let keypair = import_ed25519_keypair(exp_kp).unwrap();
+
+        let exp_pub = export_ed25519_public_key(&keypair.public);
+        let imp_pub = import_ed25519_public_key(exp_pub).unwrap();
+
+        verify(&imp_pub, msg, &signature).unwrap();
+    }
+
+    #[test]
+    fn control_humanized_hash() {
         let bytes: [u8; 32] = [
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
             24, 25, 26, 27, 28, 29, 30, 31,
         ];
 
-        assert_eq!("BEDOGYJ-24", humanise_hash(&bytes, 7));
-        assert_eq!("BEDOGYJEL-30", humanise_hash(&bytes, 9));
-    }
-
-    #[test]
-    pub fn generate_self_signed_certificate_test() {
-        /*     let mut param = rcgen::CertificateParams::new(vec!["vault.self.signed".into()]);
-        param.alg = &rcgen::PKCS_ED25519;
-
-        let cert = rcgen::Certificate::from_params(param).unwrap();
-
-        let key = cert.serialize_private_key_der();
-        let secret_key = rustls::PrivateKey(key);
-
-        let cert = cert.serialize_der().unwrap();
-        let pub_key = rustls::Certificate(cert); */
-
-        let (pub_key, _) = generate_self_signed_certificate();
-        println!("{}", pub_key.0.len());
+        assert_eq!("BEDOGYJ-24", humanized_hash(&bytes, 7));
+        assert_eq!("BEDOGYJEL-30", humanized_hash(&bytes, 9));
     }
 }
