@@ -3,8 +3,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, Result};
-use futures::StreamExt;
-use quinn::{Endpoint, IdleTimeout, TransportConfig, VarInt};
+
+use quinn::{Endpoint, IdleTimeout, TransportConfig, VarInt, ConnectionError};
 
 use std::sync::Mutex as stdMutex;
 use std::time::{Duration, Instant};
@@ -12,8 +12,8 @@ use std::{collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::cryptography::ALPN_QUIC_HTTP;
-use tracing::{debug, error, info, info_span, trace};
-use tracing_futures::Instrument as _;
+use tracing::{debug, error, info, trace};
+
 
 pub const BEACON_MTU: usize = 1200;
 pub const KEEP_ALIVE_INTERVAL: u64 = 8;
@@ -62,7 +62,7 @@ pub fn start_beacon_server(
     bind_addr: SocketAddr,
     pub_key: rustls::Certificate,
     secret_key: rustls::PrivateKey,
-) -> Result<Endpoint, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>> {
     let cert_chain = vec![pub_key];
 
     let mut server_crypto = rustls::ServerConfig::builder()
@@ -84,7 +84,7 @@ pub fn start_beacon_server(
 
     server_config.transport = Arc::new(transport);
 
-    let (endpoint, mut incoming) = Endpoint::server(server_config, bind_addr)?;
+    let endpoint = Endpoint::server(server_config, bind_addr)?;
     println!("{}", endpoint.local_addr().unwrap());
     let connection_map: ConnMap = Arc::new(stdMutex::new(HashMap::new()));
 
@@ -94,7 +94,7 @@ pub fn start_beacon_server(
     let token: Arc<stdMutex<Token>> = Arc::new(stdMutex::new(random));
 
     tokio::spawn(async move {
-        while let Some(conn) = incoming.next().await {
+        while let Some(conn) = endpoint.accept().await {
             info!("connection incoming");
             let fut = handle_connection(conn, connection_map.clone(), token.clone());
             tokio::spawn(async move {
@@ -105,34 +105,34 @@ pub fn start_beacon_server(
         }
     });
 
-    Ok(endpoint)
+    Ok(())
 }
 
 async fn handle_connection(
-    conn: quinn::Connecting,
+    connection: quinn::Connecting,
     connection_map: ConnMap,
     token: Arc<stdMutex<Token>>,
-) -> Result<()> {
-    let quinn::NewConnection {
-        connection,
-        mut bi_streams,
-        ..
-    } = conn.await?;
-    let span = info_span!(
-        "connection",
-        remote = %connection.remote_address(),
-        protocol = %connection
-            .handshake_data()
-            .unwrap()
-            .downcast::<quinn::crypto::rustls::HandshakeData>().unwrap()
-            .protocol
-            .map_or_else(|| "<none>".into(), |x| String::from_utf8_lossy(&x).into_owned())
-    );
-    async {
+) -> Result<(), ConnectionError> {
+
+
         info!("established");
         let socket_adress = connection.remote_address();
-        while let Some(stream) = bi_streams.next().await {
-            let stream = match stream {
+  
+        let conn = match connection.await {
+            Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                info!("connection closed");
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e);
+            }
+            Ok(s) => s,
+        };
+
+
+
+        
+            let stream = match conn.accept_bi().await {
                 Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
                     info!("connection closed");
                     return Ok(());
@@ -149,12 +149,9 @@ async fn handle_connection(
                     error!("failed: {reason}", reason = e.to_string());
                 }
             });
-        }
+        
         Ok(())
-    }
-    .instrument(span)
-    .await?;
-    Ok(())
+
 }
 
 async fn handle_request(

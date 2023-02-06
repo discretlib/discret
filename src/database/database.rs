@@ -131,7 +131,7 @@ pub struct WriteQuery {
 // Write queries are buffered while the database thread is working.
 // When the database thread is ready, the buffer is sent and is processed in one single transaction
 // This greatly increase insertion and update rate, compared to autocommit.
-//      To get an idea of the perforance différence, a very simple bechmak on a laptop with 10000 insertions:
+//      To get an idea of the perforance différence, a very simple benchmak on a laptop with 10000 insertions:
 //      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
 //      Buffer size: 10     Insert/seconds: 500
 //      Buffer size: 100    Insert/seconds: 3000
@@ -142,7 +142,7 @@ pub struct WriteQuery {
 // The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
 // And in both case it is ok to fail the last insertions.
 //
-// Only one writer should be used per database, as are write transactions are serialized
+// Only one writer should be used per database
 //
 #[derive(Clone)]
 pub struct BufferedDatabaseWriter {
@@ -185,7 +185,7 @@ impl BufferedDatabaseWriter {
                 };
 
                 if query_buffer.len() >= buffer_size {
-                    //if send_buffer is full, wait for the insertion insertion thread
+                    //if send_buffer is full, wait for the insertion thread
                     if inflight >= buffered_channel_size {
                         let ready = receive_ready.recv().await;
                         if ready.is_none() {
@@ -205,7 +205,6 @@ impl BufferedDatabaseWriter {
 
                     query_buffer = vec![];
                 }
-                //  tokio::task::yield_now().await;
             }
         });
 
@@ -689,7 +688,7 @@ mod tests {
         let path: PathBuf = "test/data/database/buffered_writes10.db".into();
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
-        let writer = BufferedDatabaseWriter::start(7, conn).await;
+        let writer = BufferedDatabaseWriter::start(10, conn).await;
 
         writer
             .write_async(
@@ -707,7 +706,7 @@ mod tests {
             .write_async("DELETE FROM person".to_string(), vec![])
             .await??;
 
-        let loop_number = 24;
+        let loop_number = 100;
         let start = Instant::now();
         let mut reply_list = vec![];
         for i in 0..loop_number {

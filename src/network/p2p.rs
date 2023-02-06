@@ -1,4 +1,4 @@
-use quinn::{ClientConfig, Endpoint, IdleTimeout, Incoming, ServerConfig, TransportConfig, VarInt};
+use quinn::{ClientConfig, Endpoint, IdleTimeout, ServerConfig, TransportConfig, VarInt};
 use std::{
     collections::HashSet,
     error::Error,
@@ -26,11 +26,12 @@ pub fn remove_valid_certificate(certificate: &rustls::Certificate) {
 static KEEP_ALIVE_INTERVAL: u64 = 8;
 static MAX_IDLE_TIMEOUT: u32 = 10_000;
 
-pub fn endpoint(
+pub async fn endpoint(
     bind_addr: SocketAddr,
     pub_key: rustls::Certificate,
     secret_key: rustls::PrivateKey,
-) -> Result<(Endpoint, Incoming), Box<dyn Error>> {
+) -> Result<Endpoint, Box<dyn Error>> {
+    
     let cert_chain = vec![pub_key];
 
     let mut server_config = ServerConfig::with_single_cert(cert_chain, secret_key)?;
@@ -42,10 +43,10 @@ pub fn endpoint(
 
     server_config.transport = Arc::new(transport);
 
-    let (mut endpoint, incoming) = Endpoint::server(server_config, bind_addr)?;
+    let mut endpoint = Endpoint::server(server_config, bind_addr)?;
     endpoint.set_default_client_config(client_tls_config());
 
-    Ok((endpoint, incoming))
+    Ok(endpoint)
 }
 
 /// Constructs a QUIC endpoint configured for use a client only.
@@ -78,7 +79,7 @@ fn client_tls_config() -> ClientConfig {
         .keep_alive_interval(Some(Duration::new(KEEP_ALIVE_INTERVAL, 0)))
         .max_idle_timeout(Some(IdleTimeout::from(VarInt::from(MAX_IDLE_TIMEOUT))));
 
-    config.transport = Arc::new(transport);
+    config.transport_config(Arc::new(transport));
     config
 }
 
@@ -116,7 +117,7 @@ impl rustls::client::ServerCertVerifier for ServerCertVerifier {
 mod tests {
     use super::*;
     use crate::cryptography;
-    use futures::StreamExt;
+
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() -> Result<(), Box<dyn Error>> {
@@ -124,23 +125,23 @@ mod tests {
         let (pub_key, secret_key) = cryptography::generate_self_signed_certificate();
         add_valid_certificate(pub_key.clone());
 
-        let (endpoint, mut incoming) = endpoint(addr, pub_key, secret_key).unwrap();
-
+        let endpoint = endpoint(addr, pub_key, secret_key).await.unwrap();
+        let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
-            let incoming_conn = incoming.next().await.unwrap();
+            let incoming_conn = endpoint.accept().await.unwrap();
             let new_conn = incoming_conn.await.unwrap();
             println!(
                 "[server] connection accepted: addr={}",
-                new_conn.connection.remote_address()
+                new_conn.remote_address()
             );
         });
-        let localadree = endpoint.local_addr().unwrap();
+     
 
         let endpoint = client_ipv4().unwrap();
         let addr = format!("127.0.0.1:{}", localadree.port()).parse().unwrap();
 
-        let quinn::NewConnection { connection, .. } =
-            endpoint.connect(addr, "localhost").unwrap().await.unwrap();
+        
+         let connection =   endpoint.connect(addr, "localhost").unwrap().await.unwrap();
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
         drop(connection);
@@ -155,23 +156,22 @@ mod tests {
         let (pub_key, secret_key) = cryptography::generate_self_signed_certificate();
         add_valid_certificate(pub_key.clone());
 
-        let (endpoint, mut incoming) = endpoint(addr, pub_key, secret_key).unwrap();
-
+        let endpoint = endpoint(addr, pub_key, secret_key).await.unwrap();
+        let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
-            let incoming_conn = incoming.next().await.unwrap();
+            let incoming_conn = endpoint.accept().await.unwrap();
             let new_conn = incoming_conn.await.unwrap();
             println!(
                 "[server] connection accepted: addr={}",
-                new_conn.connection.remote_address()
+                new_conn.remote_address()
             );
         });
-        let localadree = endpoint.local_addr().unwrap();
+        
 
         let endpoint = client_ipv6().unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
-        let quinn::NewConnection { connection, .. } =
-            endpoint.connect(addr, "localhost").unwrap().await.unwrap();
+        let connection =   endpoint.connect(addr, "localhost").unwrap().await.unwrap();
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
         drop(connection);
@@ -188,15 +188,15 @@ mod tests {
         // the server's certificate is not added to the valid list
         // add_valid_certificate(pub_key.clone());
 
-        let (endpoint, mut incoming) = endpoint(addr, pub_key, secret_key).unwrap();
-
+        let endpoint = endpoint(addr, pub_key, secret_key).await.unwrap();
+        let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
-            let incoming_conn = incoming.next().await.unwrap();
+            let incoming_conn = endpoint.accept().await.unwrap();
             incoming_conn
                 .await
                 .expect_err("connection should have failed due to invalid certificate");
         });
-        let localadree = endpoint.local_addr().unwrap();
+       
 
         let endpoint = client_ipv6().unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
