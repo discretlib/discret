@@ -151,6 +151,11 @@ mod tests {
             hex::encode(hashed),
             "2c186859ce3e3e70684c9c9be14f9c64fc7634666dd60c990bbefb487441965b"
         );
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as s64};
+
+   
+        println!("VALUE {}", hex::encode(hashed));
+        println!("VALUE {}", s64.encode(hashed));
     }
 
     #[test]

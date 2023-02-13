@@ -11,7 +11,8 @@ strip = true
 
 [dependencies]
 ## database 
-rusqlite = { version = "0.28.0", features = ["bundled-sqlcipher-vendored-openssl","backup","vtab","url" ,"blob","chrono","serde_json","hooks"] }
+rusqlite = { version = "0.28.0", features = ["bundled-sqlcipher-vendored-openssl","backup","vtab","url" ,"blob","chrono","serde_json","hooks", "window"] }
+zstd = "0.12"
 
 ## Serialisation
 serde = { version = "1.0.152", features = ["derive"] }
@@ -45,6 +46,7 @@ tracing-subscriber = "0.3.16"
 ## Other
 tokio = { version = "1.25.0", features = ["full"] }
 lazy_static = "1.4.0"
+fallible-iterator = "0.2"
 
 [dev-dependencies]
 criterion = "0.4.0"
