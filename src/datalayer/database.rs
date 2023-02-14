@@ -1,337 +1,32 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use blake3::Hasher;
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
 
-use rusqlite::Result;
+
 use rusqlite::{types::Value, Connection, Row};
 use std::{path::PathBuf, thread, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error::Error;
-
 use zstd::bulk::{compress, decompress};
 
-// pub struct SelectQuery<T> {
-//     query: String,
-//     params: Vec<Value>,
-//     mapper: fn(&Row) -> Result<T, rusqlite::Error>,
-// }
+use crate::cryptography::database_id;
+use crate::error::Error;
+
 
 type ReaderFn = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
-type MappingFn<T> = fn(&Row) -> Result<Box<T>, rusqlite::Error>;
+type MappingFn<T> = fn(&Row) -> rusqlite::Result<Box<T>, rusqlite::Error>;
 pub trait FromRow {
     fn from_row() -> MappingFn<Self>;
 }
-// Main entry point to perform SELECT queries
-//
-// Clone it to safely perform queries across different thread
-//
-// Sqlite in WAL mode support READ/WRITE concurency, wich makes the separation between read and write thread efficient
-// it is possible to open several reader but beware that each reader can consume up to 8Mb of memory
-//
-#[derive(Clone)]
-pub struct DatabaseReader {
-    sender: mpsc::Sender<ReaderFn>,
-}
-impl DatabaseReader {
-    pub fn start(mut conn: Connection) -> Self {
-        //enforce read only behavior for this connection
-        //any attempt to CREATE, DELETE, DROP, INSERT, or UPDATE will result in an SQLITE_READONLY error
-        let _ = set_pragma("query_only", "1", &conn);
-        let (send_query, mut receiv_query) = mpsc::channel::<ReaderFn>(10);
 
-        thread::spawn(move || {
-            while let Some(f) = receiv_query.blocking_recv() {
-                f(&mut conn);
-            }
-        });
-
-        Self { sender: send_query }
-    }
-
-    pub async fn query_async<T: Send + Sized + 'static>(
-        &self,
-        query: String,
-        params: Vec<Value>,
-        mapping: MappingFn<T>,
-    ) -> Result<Vec<T>, Error> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
-
-        let _ = &self
-            .sender
-            .send(Box::new(move |conn| {
-                let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
-
-                let _ = send_response.send(result);
-            }))
-            .await;
-
-        receive_response
-            .await
-            .map_err(|e| Error::Unknown(e.to_string()))?
-    }
-
-    pub fn query_blocking<T: FromRow + Send + Sized + 'static>(
-        &self,
-        query: String,
-        params: Vec<Value>,
-        mapping: MappingFn<T>,
-    ) -> Result<Vec<T>, Error> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
-
-        let _ = &self.sender.blocking_send(Box::new(move |conn| {
-            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
-
-            let _ = send_response.send(result);
-        }));
-
-        receive_response
-            .blocking_recv()
-            .map_err(|e| Error::Unknown(e.to_string()))?
-    }
-
-    fn select<T: Send + Sized + 'static>(
-        query: &str,
-        params: &Vec<Value>,
-        mapping: &MappingFn<T>,
-        conn: &Connection,
-    ) -> Result<Vec<T>, rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(query)?;
-
-        let params = rusqlite::params_from_iter(params);
-
-        let iter = stmt.query_map(params, mapping)?;
-
-        let mut result: Vec<T> = vec![];
-        for res in iter {
-            let s = res?;
-            result.push(*s)
-        }
-
-        Ok(result)
-    }
+pub trait Writable {
+    fn write(&self, conn: &Connection) -> Result<(), Error>;
 }
 
-// fn process_select<T>(query: &SelectQuery<T>, conn: &Connection) -> Result<Vec<T>, rusqlite::Error> {
-//     let mut stmt = conn.prepare_cached(&query.query)?;
-
-//     let params = rusqlite::params_from_iter(&query.params);
-
-//     let iter = stmt.query_map(params, &query.mapper)?;
-
-//     let mut result: Vec<T> = vec![];
-//     for res in iter {
-//         result.push(res?)
-//     }
-
-//     Ok(result)
-// }
 pub struct WriteQuery {
-    query: String,
-    params: Vec<Value>,
+    writeable: Box<dyn Writable + Send>,
     reply: oneshot::Sender<Result<(), Error>>,
 }
-// Main entry point to insert data in the database
-//
-// Clone it to safely perform queries across different thread
-//
-// Write queries are buffered while the database thread is working.
-// When the database thread is ready, the buffer is sent and is processed in one single transaction
-// This greatly increase insertion and update rate, compared to autocommit.
-//      To get an idea of the perforance différence, a very simple benchmak on a laptop with 10000 insertions:
-//      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
-//      Buffer size: 10     Insert/seconds: 500
-//      Buffer size: 100    Insert/seconds: 3000
-//      Buffer size: 1000   Insert/seconds: 32000
-//
-// If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
-// This should not be an issue as insert query are not expected to fail.
-// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
-// And in both case it is ok to fail the last insertions.
-//
-// Only one writer should be used per database
-//
-#[derive(Clone)]
-pub struct BufferedDatabaseWriter {
-    sender: mpsc::Sender<WriteQuery>,
-}
-impl BufferedDatabaseWriter {
-    pub async fn start(buffer_size: usize, conn: Connection) -> Self {
-        let (send_write, mut receive_write): (
-            mpsc::Sender<WriteQuery>,
-            mpsc::Receiver<WriteQuery>,
-        ) = mpsc::channel::<WriteQuery>(buffer_size);
 
-        let (send_ready, mut receive_ready): (mpsc::Sender<bool>, mpsc::Receiver<bool>) =
-            mpsc::channel::<bool>(2);
-        let buffered_channel_size = 2;
-        let (send_buffer, mut receive_buffer): (
-            mpsc::Sender<Vec<WriteQuery>>,
-            mpsc::Receiver<Vec<WriteQuery>>,
-        ) = mpsc::channel::<Vec<WriteQuery>>(buffered_channel_size);
-
-        tokio::spawn(async move {
-            let mut query_buffer: Vec<WriteQuery> = vec![];
-            let mut inflight = 0;
-            loop {
-                tokio::select! {
-                    write_query = receive_write.recv() => {
-                        match write_query {
-                            Some(val) => query_buffer.push(val),
-                            None => break,
-                        }
-                    },
-                    ready = receive_ready.recv() => {
-                        if ready.is_none() {
-                            break;
-                        }
-                        if inflight > 0{
-                            inflight -=1;
-                        }
-                    }
-                };
-
-                if query_buffer.len() >= buffer_size {
-                    //if send_buffer is full, wait for the insertion thread
-                    if inflight >= buffered_channel_size {
-                        let ready = receive_ready.recv().await;
-                        if ready.is_none() {
-                            break;
-                        }
-                        if inflight > 0 {
-                            inflight -= 1;
-                        }
-                    }
-                    inflight += 1;
-                    let _s = send_buffer.send(query_buffer).await;
-
-                    query_buffer = vec![];
-                } else if !query_buffer.is_empty() && inflight == 0 {
-                    inflight += 1;
-                    let _s = send_buffer.send(query_buffer).await;
-
-                    query_buffer = vec![];
-                }
-            }
-        });
-
-        thread::spawn(move || {
-            while let Some(buffer) = receive_buffer.blocking_recv() {
-                let result = Self::process_batch_write(&buffer, &conn);
-                match result {
-                    Ok(_) => {
-                        for write in buffer {
-                            let _r = write.reply.send(Ok(()));
-                        }
-                    }
-                    Err(e) => {
-                        for write in buffer {
-                            let _r = write
-                                .reply
-                                .send(Err(Error::DatabaseWriteError(e.to_string())));
-                        }
-                    }
-                }
-                let _s = send_ready.blocking_send(true);
-            }
-        });
-
-        Self { sender: send_write }
-    }
-
-    fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<WriteQuery>>) -> Option<Vec<WriteQuery>> {
-        receive_buffer.blocking_recv()
-    }
-
-    pub async fn send_async(&self, msg: WriteQuery) -> Result<(), Error> {
-        self.sender
-            .send(msg)
-            .await
-            .map_err(|e| Error::Unknown(e.to_string()))
-    }
-
-    pub fn send_blocking(&self, msg: WriteQuery) -> Result<(), Error> {
-        self.sender
-            .blocking_send(msg)
-            .map_err(|e| Error::Unknown(e.to_string()))
-    }
-
-    pub async fn write_async(
-        &self,
-        query: String,
-        params: Vec<Value>,
-    ) -> Result<Result<(), Error>, Error> {
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
-        let _ = self
-            .sender
-            .send(WriteQuery {
-                query,
-                params,
-                reply,
-            })
-            .await;
-        reciev.await.map_err(|e| Error::Unknown(e.to_string()))
-    }
-
-    pub fn write_blocking(
-        &self,
-        query: String,
-        params: Vec<Value>,
-    ) -> Result<Result<(), Error>, Error> {
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
-        let _ = self.sender.blocking_send(WriteQuery {
-            query,
-            params,
-            reply,
-        });
-        reciev
-            .blocking_recv()
-            .map_err(|e| Error::Unknown(e.to_string()))
-    }
-
-    fn process_batch_write(
-        buffer: &Vec<WriteQuery>,
-        conn: &Connection,
-    ) -> Result<(), rusqlite::Error> {
-        conn.execute("BEGIN TRANSACTION", [])?;
-        for write in buffer {
-            Self::process_write(write, conn)?;
-        }
-        conn.execute("COMMIT", [])?;
-        Ok(())
-    }
-
-    fn process_write(query: &WriteQuery, conn: &Connection) -> Result<(), rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(&query.query)?;
-        let params = rusqlite::params_from_iter(&query.params);
-        stmt.execute(params)?;
-        Ok(())
-    }
-}
-
-//Perform sqlite optimize task on a frequency basis
-//
-//The receiver MUST be consumed, otherwise the optimise task will be run only once
-//
-//Optimize: Attempt to optimize the database
-//  Recompute statistics when needed
-//  Must be run on a regular basis to get good performances
-//  frequency: every hours?
-pub fn house_keeper(
-    frequency: Duration,
-    conn: Connection,
-) -> mpsc::Receiver<Result<(), rusqlite::Error>> {
-    let (send_status, receive_status) = mpsc::channel::<Result<(), rusqlite::Error>>(1);
-    thread::spawn(move || loop {
-        thread::sleep(frequency);
-        let result = optimize(&conn);
-        let s = send_status.blocking_send(result);
-        if s.is_err() {
-            break;
-        }
-    });
-    receive_status
-}
 
 //Create a sqlcipher database connection
 //
@@ -426,11 +121,295 @@ pub fn create_connection(
     //enable foreign keys
     set_pragma("foreign_keys", "1", &conn)?;
 
+/*     //enable recursive trigger, delete trigger is triggered when INSERT OR REPLACE is used
+    //mandatory when using triggers that update full text search virtual tables
+    set_pragma("recursive_triggers", "1", &conn)?; */
+    
     add_hash_function(&conn)?;
     add_compression_function(&conn)?;
     add_json_data_function(&conn)?;
     Ok(conn)
 }
+
+
+
+// Main entry point to perform SELECT queries
+//
+// Clone it to safely perform queries across different thread
+//
+// Sqlite in WAL mode support READ/WRITE concurency, wich makes the separation between read and write thread efficient
+// it is possible to open several reader but beware that each reader can consume up to 8Mb of memory
+//
+#[derive(Clone)]
+pub struct DatabaseReader {
+    sender: mpsc::Sender<ReaderFn>,
+}
+impl DatabaseReader {
+    pub fn start(mut conn: Connection) -> Self {
+        //enforce read only behavior for this connection
+        //any attempt to CREATE, DELETE, DROP, INSERT, or UPDATE will result in an SQLITE_READONLY error
+        let _ = set_pragma("query_only", "1", &conn);
+        let (send_query, mut receiv_query) = mpsc::channel::<ReaderFn>(10);
+
+        thread::spawn(move || {
+            while let Some(f) = receiv_query.blocking_recv() {
+                f(&mut conn);
+            }
+        });
+
+        Self { sender: send_query }
+    }
+
+    pub async fn query_async<T: Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Value>,
+        mapping: MappingFn<T>,
+    ) -> Result<Vec<T>, Error> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+
+        let _ = &self
+            .sender
+            .send(Box::new(move |conn| {
+                let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+
+                let _ = send_response.send(result);
+            }))
+            .await;
+
+        receive_response
+            .await
+            .map_err(|e| Error::Unknown(e.to_string()))?
+    }
+
+    pub fn query_blocking<T: FromRow + Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Value>,
+        mapping: MappingFn<T>,
+    ) -> Result<Vec<T>, Error> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+
+        let _ = &self.sender.blocking_send(Box::new(move |conn| {
+            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+
+            let _ = send_response.send(result);
+        }));
+
+        receive_response
+            .blocking_recv()
+            .map_err(|e| Error::Unknown(e.to_string()))?
+    }
+
+    fn select<T: Send + Sized + 'static>(
+        query: &str,
+        params: &Vec<Value>,
+        mapping: &MappingFn<T>,
+        conn: &Connection,
+    ) -> Result<Vec<T>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(query)?;
+
+        let params = rusqlite::params_from_iter(params);
+
+        let iter = stmt.query_map(params, mapping)?;
+
+        let mut result: Vec<T> = vec![];
+        for res in iter {
+            result.push(*res?)
+        }
+
+        Ok(result)
+    }
+}
+
+
+
+
+// Main entry point to insert data in the database
+//
+// Clone it to safely perform queries across different thread
+//
+// Write queries are buffered while the database thread is working.
+// When the database thread is ready, the buffer is sent and is processed in one single transaction
+// This greatly increase insertion and update rate, compared to autocommit.
+//      To get an idea of the perforance différence, a very simple benchmak on a laptop with 10000 insertions:
+//      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
+//      Buffer size: 10     Insert/seconds: 500
+//      Buffer size: 100    Insert/seconds: 3000
+//      Buffer size: 1000   Insert/seconds: 32000
+//
+// If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
+// This should not be an issue as insert query are not expected to fail.
+// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
+// And in both case it is ok to fail the last insertions.
+//
+// Only one writer should be used per database
+//
+#[derive(Clone)]
+pub struct BufferedDatabaseWriter {
+    sender: mpsc::Sender<WriteQuery>,
+}
+impl BufferedDatabaseWriter {
+    pub async fn start(buffer_size: usize, conn: Connection) -> Self {
+        let (send_write, mut receive_write): (
+            mpsc::Sender<WriteQuery>,
+            mpsc::Receiver<WriteQuery>,
+        ) = mpsc::channel::<WriteQuery>(buffer_size);
+
+        let (send_ready, mut receive_ready): (mpsc::Sender<bool>, mpsc::Receiver<bool>) =
+            mpsc::channel::<bool>(2);
+        let buffered_channel_size = 2;
+        let (send_buffer, mut receive_buffer): (
+            mpsc::Sender<Vec<WriteQuery>>,
+            mpsc::Receiver<Vec<WriteQuery>>,
+        ) = mpsc::channel::<Vec<WriteQuery>>(buffered_channel_size);
+
+        tokio::spawn(async move {
+            let mut query_buffer: Vec<WriteQuery> = vec![];
+            let mut inflight:usize = 0;
+            loop {
+                tokio::select! {
+                    write_query = receive_write.recv() => {
+                        match write_query {
+                            Some(val) => query_buffer.push(val),
+                            None => break,
+                        }
+                    },
+                    ready = receive_ready.recv() => {
+                        if ready.is_none() {
+                            break;
+                        }
+                        inflight = inflight.saturating_sub(1);
+                    }
+                };
+
+                if query_buffer.len() >= buffer_size {
+                    //if send_buffer is full, wait for the insertion thread
+                    if inflight >= buffered_channel_size {
+                        let ready = receive_ready.recv().await;
+                        if ready.is_none() {
+                            break;
+                        }
+                        inflight = inflight.saturating_sub(1);
+                    }
+                    inflight += 1;
+                    let _s = send_buffer.send(query_buffer).await;
+
+                    query_buffer = vec![];
+                } else if !query_buffer.is_empty() && inflight == 0 {
+                    inflight += 1;
+                    let _s = send_buffer.send(query_buffer).await;
+
+                    query_buffer = vec![];
+                }
+            }
+        });
+
+        thread::spawn(move || {
+            while let Some(buffer) = receive_buffer.blocking_recv() {
+                let result = Self::process_batch_write(& buffer, &conn);
+                match result {
+                    Ok(_) => {
+                        for write in buffer {
+                            let _r = write.reply.send(Ok(()));
+                        }
+                    }
+                    Err(e) => {
+                        for write in buffer {
+                            let _r = write
+                                .reply
+                                .send(Err(Error::DatabaseWriteError(e.to_string())));
+                        }
+                    }
+                }
+                let _s = send_ready.blocking_send(true);
+            }
+        });
+
+        Self { sender: send_write }
+    }
+
+    fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<WriteQuery>>) -> Option<Vec<WriteQuery>> {
+        receive_buffer.blocking_recv()
+    }
+
+    pub async fn send_async(&self, msg: WriteQuery) -> Result<(), Error> {
+        self.sender
+            .send(msg)
+            .await
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub fn send_blocking(&self, msg: WriteQuery) -> Result<(), Error> {
+        self.sender
+            .blocking_send(msg)
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub async fn write_async(
+        &self,
+        insert: Box<dyn Writable + Send>,
+    ) -> Result<Result<(), Error>, Error> {
+        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let _ = self.sender.send(WriteQuery { writeable: insert, reply }).await;
+        reciev.await.map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    pub fn write_blocking(
+        &self,
+        insert: Box<dyn Writable + Send>,
+    ) -> Result<Result<(), Error>, Error> {
+        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let _ = self.sender.blocking_send(WriteQuery { writeable: insert, reply });
+        reciev
+            .blocking_recv()
+            .map_err(|e| Error::Unknown(e.to_string()))
+    }
+
+    fn process_batch_write(
+        buffer: &Vec<WriteQuery>,
+        conn: &Connection,
+    ) -> Result<(), Error> {
+        conn.execute("BEGIN TRANSACTION", [])?;
+        for write in buffer {
+            Self::process_write(write, conn)?;
+        }
+        conn.execute("COMMIT", [])?;
+        Ok(())
+    }
+
+    fn process_write(query: &WriteQuery, conn: &Connection) -> Result<(), Error> {
+        query.writeable.write(conn)?;
+
+        Ok(())
+    }
+}
+
+//Perform sqlite optimize task on a frequency basis
+//
+//The receiver MUST be consumed, otherwise the optimise task will be run only once
+//
+//Optimize: Attempt to optimize the database
+//  Recompute statistics when needed
+//  Must be run on a regular basis to get good performances
+//  frequency: every hours?
+pub fn house_keeper(
+    frequency: Duration,
+    conn: Connection,
+) -> mpsc::Receiver<Result<(), rusqlite::Error>> {
+    let (send_status, receive_status) = mpsc::channel::<Result<(), rusqlite::Error>>(1);
+    thread::spawn(move || loop {
+        thread::sleep(frequency);
+        let result = optimize(&conn);
+        let s = send_status.blocking_send(result);
+        if s.is_err() {
+            break;
+        }
+    });
+    receive_status
+}
+
+
 
 //Attach an encrypted database to the connection
 //the maximum number of attached databases is 10
@@ -515,33 +494,29 @@ pub enum FunctionError {
     CompressedSizeError(String),
 }
 
-
 struct Hash;
 
 impl Aggregate<Hasher, Option<String>> for Hash {
-    fn init(&self, _: &mut Context<'_>) -> Result<Hasher> {
+    fn init(&self, _: &mut Context<'_>) -> rusqlite::Result<Hasher> {
         Ok(blake3::Hasher::new())
     }
 
-    fn step(&self, ctx: &mut Context<'_>, hasher: &mut Hasher) -> Result<()> {
+    fn step(&self, ctx: &mut Context<'_>, hasher: &mut Hasher) -> rusqlite::Result<()> {
         let val = ctx.get::<String>(0)?;
         hasher.update(val.as_bytes());
         Ok(())
     }
 
-    fn finalize(&self, _: &mut Context<'_>, hasher: Option<Hasher>) -> Result<Option<String>> {
+    fn finalize(&self, _: &mut Context<'_>, hasher: Option<Hasher>) -> rusqlite::Result<Option<String>> {
         match hasher {
-            Some(hash) => {
-                let byte_hash = hash.finalize();
-                Ok(Some(enc64.encode(&byte_hash.as_bytes()[0..16])))
-            }
+            Some(hash) => Ok(Some(database_id(hash.finalize()))),
             None => Ok(None),
         }
     }
 }
 
 //user defined function for blake3 hashing directly in sqlite queries
-fn add_hash_function(db: &Connection) -> Result<()> {
+fn add_hash_function(db: &Connection) -> rusqlite::Result<()> {
     db.create_aggregate_function(
         "hash",
         1,
@@ -552,7 +527,7 @@ fn add_hash_function(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn extract_json(val: serde_json::Value, buff: &mut String) -> Result<()> {
+fn extract_json(val: serde_json::Value, buff: &mut String) -> rusqlite::Result<()> {
     match val {
         serde_json::Value::String(v) => {
             buff.push_str(&v);
@@ -576,7 +551,7 @@ fn extract_json(val: serde_json::Value, buff: &mut String) -> Result<()> {
 }
 
 //extract JSON textual data
-fn add_json_data_function(db: &Connection) -> Result<()> {
+fn add_json_data_function(db: &Connection) -> rusqlite::Result<()> {
     db.create_scalar_function(
         "json_data",
         1,
@@ -604,13 +579,11 @@ fn add_json_data_function(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-
-
 //Compression functions using zstd
 // compress: compress TEXT or BLOG type
 // decompress: decompress BLOG into a BLOB
 // decompress_text: decompress BLOB into TEXT
-fn add_compression_function(db: &Connection) -> Result<()> {
+fn add_compression_function(db: &Connection) -> rusqlite::Result<()> {
     db.create_scalar_function(
         "compress",
         1,
@@ -658,13 +631,13 @@ fn add_compression_function(db: &Connection) -> Result<()> {
             let data = ctx.get_raw(0);
             let data_type = data.data_type();
 
-             match data_type {
+            match data_type {
                 rusqlite::types::Type::Blob => {
                     let data = data
                         .as_blob()
                         .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
 
-                    let size = zstd::zstd_safe::get_frame_content_size(&data).map_err(|e| {
+                    let size = zstd::zstd_safe::get_frame_content_size(data).map_err(|e| {
                         rusqlite::Error::UserFunctionError(
                             FunctionError::CompressedSizeError(e.to_string()).into(),
                         )
@@ -704,7 +677,7 @@ fn add_compression_function(db: &Connection) -> Result<()> {
                         .as_blob()
                         .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
 
-                    let size = zstd::zstd_safe::get_frame_content_size(&data).map_err(|e| {
+                    let size = zstd::zstd_safe::get_frame_content_size(data).map_err(|e| {
                         rusqlite::Error::UserFunctionError(
                             FunctionError::CompressedSizeError(e.to_string()).into(),
                         )
@@ -740,9 +713,10 @@ mod tests {
     use rusqlite::types::Null;
 
     use crate::cryptography::hash;
+    use crate::error::Error;
 
     use super::*;
-    use std::{error::Error, time::Instant};
+    use std::{fs, path::Path, time::Instant};
     #[derive(Debug)]
     struct Person {
         id: i32,
@@ -760,10 +734,30 @@ mod tests {
             }
         }
     }
+    impl Writable for Person {
+        fn write(&self, conn: &Connection) -> Result<(), Error> {
+            let mut stmt =
+                conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
+
+            stmt.execute((&self.name, &self.surname))?;
+            Ok(())
+        }
+    }
+
+    const DATA_PATH: &str = "test/data/database/";
+    fn init_database_path(file: &str) -> Result<PathBuf, Error> {
+        let mut path: PathBuf = DATA_PATH.into();
+        fs::create_dir_all(&path)?;
+        path.push(file);
+        if Path::exists(&path) {
+            fs::remove_file(&path)?;
+        }
+        Ok(path)
+    }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pragma() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/database/test_pragma.db".into();
+    async fn test_pragma() -> Result<(),  Error> {
+        let path: PathBuf = init_database_path("test_pragma.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
         let mut stmt = conn.prepare("PRAGMA mmap_size")?;
@@ -777,42 +771,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn async_queries() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/database/async_queries.db".into();
+    async fn async_queries() -> Result<(), Error> {
+        let path: PathBuf = init_database_path("async_queries.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
+        conn.execute(
+            "CREATE TABLE person (
+                id              INTEGER PRIMARY KEY,
+                name            TEXT NOT NULL,
+                surname         TEXT
+            ) STRICT",
+            [],
+        )?;
+
         let writer = BufferedDatabaseWriter::start(10, conn).await;
 
         writer
-            .write_async(
-                "CREATE TABLE IF NOT EXISTS person (
-            id              INTEGER PRIMARY KEY,
-            name            TEXT NOT NULL,
-            surname         TEXT
-            ) STRICT"
-                    .to_string(),
-                vec![],
-            )
+            .write_async(Box::new(Person {
+                id: 0,
+                name: "Steven".to_string(),
+                surname: "Bob".to_string(),
+            }))
             .await??;
-
-        writer
-            .write_async("DELETE FROM person".to_string(), vec![])
-            .await??;
-
-        let per = Person {
-            id: 0,
-            name: "Steven".to_string(),
-            surname: "Bob".to_string(),
-        };
-
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
-        let query = WriteQuery {
-            query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
-            params: vec![Value::Text(per.name), Value::Text(per.surname)],
-            reply: reply,
-        };
-        writer.send_async(query).await?;
-        reciev.await??;
 
         let conn = create_connection(&path, &secret, 8192, false)?;
         let reader = DatabaseReader::start(conn);
@@ -830,40 +810,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn blocking_queries() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/database/blocking_queries.db".into();
+    async fn blocking_queries() -> Result<(), Error> {
+        let path: PathBuf = init_database_path("blocking_queries.db")?;
         let secret = hash(b"bytes");
         let writer_conn = create_connection(&path, &secret, 1024, false)?;
-        let writer = BufferedDatabaseWriter::start(10, writer_conn).await;
-        let reader_conn = create_connection(&path, &secret, 8192, false)?;
-        let _ = thread::spawn(move || {
-            let _ = writer.write_blocking(
-                "CREATE TABLE IF NOT EXISTS person (
+        writer_conn.execute(
+            "CREATE TABLE person (
                 id              INTEGER PRIMARY KEY,
                 name            TEXT NOT NULL,
                 surname         TEXT
-                ) STRICT"
-                    .to_string(),
-                vec![],
-            );
+            ) STRICT",
+            [],
+        )?;
 
-            let _ = writer
-                .write_blocking("DELETE FROM person".to_string(), vec![])
-                .unwrap();
-            let per = Person {
+        let writer = BufferedDatabaseWriter::start(10, writer_conn).await;
+        let reader_conn = create_connection(&path, &secret, 8192, false)?;
+
+        let _ = thread::spawn(move || {
+            let _ = writer.write_blocking(Box::new(Person {
                 id: 0,
                 name: "Steven".to_string(),
                 surname: "Bob".to_string(),
-            };
-
-            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
-            let query = WriteQuery {
-                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
-                params: vec![Value::Text(per.name), Value::Text(per.surname)],
-                reply: reply,
-            };
-            let _ = writer.send_blocking(query);
-            let _ = reciev.blocking_recv();
+            }));
 
             let reader = DatabaseReader::start(reader_conn);
             let res = reader
@@ -883,42 +851,35 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn buffered_writes_size1() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/database/buffered_writes.db".into();
+    async fn batch_writes_buffersize_1() -> Result<(), Error> {
+        let path: PathBuf = init_database_path("batch_writes_buffersize_1.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
+
+        conn.execute(
+            "CREATE TABLE person (
+                id              INTEGER PRIMARY KEY,
+                name            TEXT NOT NULL,
+                surname         TEXT
+            ) STRICT",
+            [],
+        )?;
+
         let writer = BufferedDatabaseWriter::start(1, conn).await;
-
-        writer
-            .write_async(
-                "CREATE TABLE IF NOT EXISTS person (
-            id              INTEGER PRIMARY KEY,
-            name            TEXT NOT NULL,
-            surname         TEXT
-            ) STRICT"
-                    .to_string(),
-                vec![],
-            )
-            .await??;
-
-        writer
-            .write_async("DELETE FROM person".to_string(), vec![])
-            .await??;
 
         let loop_number = 10;
         let _start = Instant::now();
         let mut reply_list = vec![];
+
         for i in 0..loop_number {
-            let per = Person {
-                id: 0,
-                name: format!("Steven-{}", i),
-                surname: "Bob".to_string(),
-            };
             let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
 
             let query = WriteQuery {
-                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
-                params: vec![Value::Text(per.name), Value::Text(per.surname)],
+                writeable: Box::new(Person {
+                    id: 0,
+                    name: format!("Steven-{}", i),
+                    surname: "Bob".to_string(),
+                }),
                 reply: reply,
             };
             writer.send_async(query).await?;
@@ -944,43 +905,35 @@ mod tests {
         Ok(())
     }
 
+    //batch write is much faster than inserting row one by one
     #[tokio::test(flavor = "multi_thread")]
-    async fn buffered_writes_size10() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = "test/data/database/buffered_writes10.db".into();
+    async fn batch_writes_buffersize_10() -> Result<(), Error> {
+        let path: PathBuf = init_database_path("batch_writes_buffersize_10.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
+
+        conn.execute(
+            "CREATE TABLE person (
+                id              INTEGER PRIMARY KEY,
+                name            TEXT NOT NULL,
+                surname         TEXT
+            ) STRICT",
+            [],
+        )?;
+
         let writer = BufferedDatabaseWriter::start(10, conn).await;
-
-        writer
-            .write_async(
-                "CREATE TABLE IF NOT EXISTS person (
-            id              INTEGER PRIMARY KEY,
-            name            TEXT NOT NULL,
-            surname         TEXT
-            ) STRICT"
-                    .to_string(),
-                vec![],
-            )
-            .await??;
-
-        writer
-            .write_async("DELETE FROM person".to_string(), vec![])
-            .await??;
-
         let loop_number = 100;
         //   let start = Instant::now();
         let mut reply_list = vec![];
         for i in 0..loop_number {
-            let per = Person {
-                id: 0,
-                name: format!("Steven-{}", i),
-                surname: "Bob".to_string(),
-            };
             let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
 
             let query = WriteQuery {
-                query: "INSERT INTO person (name, surname) VALUES (?, ?)".to_string(),
-                params: vec![Value::Text(per.name), Value::Text(per.surname)],
+                writeable: Box::new(Person {
+                    id: 0,
+                    name: format!("Steven-{}", i),
+                    surname: "Bob".to_string(),
+                }),
                 reply: reply,
             };
             writer.send_async(query).await?;
@@ -1011,21 +964,19 @@ mod tests {
     }
 
     #[test]
-    fn hash_function() -> Result<(), Box<dyn Error>> {
+    fn hash_function() -> Result<(), Error> {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = "test/data/database/hash_function.db".into();
+        let path: PathBuf = init_database_path("hash_function.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS HASHTABLE (
+            "CREATE TABLE HASHTABLE (
                 name TEXT,
                 grp INTEGER,
                 rank INTEGER 
             ) ",
             [],
         )?;
-
-        conn.execute("DELETE FROM HASHTABLE", [])?;
 
         let mut stmt =
             conn.prepare("INSERT INTO HASHTABLE (name, grp, rank) VALUES (?1, ?2, ?3)")?;
@@ -1042,15 +993,13 @@ mod tests {
         hasher.update("test1".as_bytes());
         hasher.update("test2".as_bytes());
         hasher.update("test3".as_bytes());
-        let byte_hash = hasher.finalize();
-        expected.push(enc64.encode(&byte_hash.as_bytes()[0..16]));
+        expected.push(database_id(hasher.finalize()));
 
         hasher = blake3::Hasher::new();
         hasher.update("test2".as_bytes());
         hasher.update("test1".as_bytes());
         hasher.update("test3".as_bytes());
-        let byte_hash = hasher.finalize();
-        expected.push(enc64.encode(&byte_hash.as_bytes()[0..16]));
+        expected.push(database_id(hasher.finalize()));
 
         //hashing is order dependent, the subselect is for enforcing the order by
         let mut stmt = conn.prepare(
@@ -1069,20 +1018,18 @@ mod tests {
     }
 
     #[test]
-    fn compress_function() -> Result<(), Box<dyn Error>> {
+    fn compress_function() -> Result<(), Error> {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = "test/data/database/compress_function.db".into();
+        let path: PathBuf = init_database_path("compress_function.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS COMPRESS (
+            "CREATE TABLE COMPRESS (
                 string BLOB,
                 binary BLOB
             ) ",
             [],
         )?;
-
-        conn.execute("DELETE FROM COMPRESS", [])?;
 
         let value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
         let binary = " ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.".as_bytes();
@@ -1121,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_json_test() -> Result<(), Box<dyn Error>> {
+    fn extract_json_test() -> Result<(), Error> {
         let json = r#"
         {
             "name": "John Doe",
@@ -1145,19 +1092,17 @@ mod tests {
     }
 
     #[test]
-    fn json_data_function() -> Result<(), Box<dyn Error>> {
+    fn json_data_function() -> Result<(), Error> {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = "test/data/database/json_data_function.db".into();
+        let path: PathBuf = init_database_path("json_data_function.db")?;
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false)?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS JSON (
+            "CREATE TABLE JSON (
                 string BLOB
             ) ",
             [],
         )?;
-
-        conn.execute("DELETE FROM JSON", [])?;
 
         let json = r#"
         {

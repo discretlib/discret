@@ -12,8 +12,14 @@ pub enum Error {
     #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),
 
+    #[error(transparent)]
+    JSONError(#[from] serde_json::Error),
+
     #[error("{0}")]
     DatabaseWriteError(String),
+
+    #[error("{0}")]
+    InvalidNode(String),
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
@@ -21,6 +27,10 @@ pub enum Error {
     #[error(transparent)]
     NetworkError(#[from] crate::network::error::Error),
 
+    #[error(transparent)]
+    AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+
+    
     #[error("{0}")]
     Unknown(String),
 }

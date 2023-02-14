@@ -326,14 +326,11 @@ impl Drop for PeerCleaner {
 fn remove_peer(db: &ConnMap, key: &Token, value: &Arc<Peer>) {
     let mut map = db.lock().unwrap();
     let v = map.get_mut(key);
-    match v {
-        Some(stac) => {
-            stac.retain(|x| x.peer_info != value.peer_info);
-            if stac.is_empty() {
-                map.remove(key);
-            }
+    if let Some(stac) = v {
+        stac.retain(|x| x.peer_info != value.peer_info);
+        if stac.is_empty() {
+            map.remove(key);
         }
-        None => (),
     };
 }
 

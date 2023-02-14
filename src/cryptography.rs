@@ -1,7 +1,9 @@
 use argon2::{self, Config, ThreadMode, Variant};
+use blake3::Hash;
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -11,18 +13,26 @@ pub enum Error {
     InvalidKeyPair,
     #[error("Invalid Public Key")]
     InvalidPublicKey,
+    #[error(transparent)]
+    DecodeError(#[from] base64::DecodeError),
 }
 
 //magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
+//Derive a password using argon2id
+//  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+// - 32 mb of memory
+// - an iteration count of 2
+// - parallelism count of 2
+// - the login is used as a salt
 pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = hash(login.as_bytes());
 
     let config = Config::<'_> {
-        mem_cost: 8192,
-        time_cost: 3,
+        mem_cost: 32768,
+        time_cost: 2,
         variant: Variant::Argon2id,
         lanes: 2,
         thread_mode: ThreadMode::Parallel,
@@ -37,6 +47,19 @@ pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
 
 pub fn hash(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).as_bytes().to_owned()
+}
+
+//create a 128bits, base64 encoded id
+pub fn database_id(hash: Hash) -> String{
+    enc64.encode(&hash.as_bytes()[0..16])
+}
+
+pub fn base64_encode(data: Vec<u8>) -> String{
+    enc64.encode(data.as_slice())
+}
+
+pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error>{
+    enc64.decode(data).map_err(|e| Error::DecodeError(e))
 }
 
 pub fn create_random_key_pair() -> Keypair {
@@ -101,7 +124,7 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
 //Provides human readable smaller hash
 //
 //usefull to remember an item and search it later
-//do not use as a primary key!!
+//NOT UNIQUE do not use as a primary key!!
 #[allow(clippy::needless_range_loop)]
 pub fn humanized_hash(hash: &[u8; 32], length: usize) -> String {
     let consonnant = [
@@ -149,13 +172,9 @@ mod tests {
 
         assert_eq!(
             hex::encode(hashed),
-            "2c186859ce3e3e70684c9c9be14f9c64fc7634666dd60c990bbefb487441965b"
+            "f223508a2f4931ab3f9d62276233a10c40a5a9e60136b406d93e4a1fd634a0f3"
         );
-        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as s64};
-
-   
-        println!("VALUE {}", hex::encode(hashed));
-        println!("VALUE {}", s64.encode(hashed));
+ 
     }
 
     #[test]
@@ -172,8 +191,7 @@ mod tests {
         let keypair = create_ed25519_key_pair(&rd);
 
         let exp_kp = export_ed25519_keypair(&keypair);
-        println!("{}", hex::encode(&exp_kp));
-
+        
         assert_eq!(
             hex::encode(&exp_kp),
             "4641b4e164ac24b9778ba49328206653eb01db1a9110ad1508cfaa9e3a2af08954ba9f30f212de637f2931d1439b6f7db24aa238b0df3d63a9cbf4a169fed58e"

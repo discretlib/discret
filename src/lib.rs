@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cryptography;
-pub mod database;
+pub mod datalayer;
 pub mod error;
 pub mod message;
 pub mod network;
