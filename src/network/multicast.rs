@@ -23,7 +23,7 @@ pub struct Announce {
     tokens: Vec<Vec<u8>>,
 }
 
-#[allow(clippy::unnecessary_unwrap)]
+//#[allow(clippy::unnecessary_unwrap)]
 pub async fn start_multicast_discovery(
     multicast_adress: SocketAddr,
     announce_frequency: Duration,
@@ -49,8 +49,8 @@ pub async fn start_multicast_discovery(
         let mut buf: Vec<u8> = Vec::with_capacity(MULTICAST_MTU);
         let msg_option = internal_reciever.recv().await;
 
-        let mut msg = if msg_option.is_some() {
-            msg_option.unwrap()
+        let mut msg = if let Some(e) = msg_option {
+            e
         } else {
             return;
         };
@@ -77,11 +77,11 @@ pub async fn start_multicast_discovery(
 
             tokio::select! {
                 option = internal_reciever.recv() => {
-                    if option.is_none() {
-                        return;
+                    msg = if let Some(e) = option {
+                        e
                     } else {
-                        msg = option.unwrap();
-                    }
+                        return;
+                    };
                 }
                 _ = sleep(announce_frequency) => {
                 }

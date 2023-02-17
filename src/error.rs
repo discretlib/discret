@@ -30,7 +30,18 @@ pub enum Error {
     #[error(transparent)]
     AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
 
-    
+    #[error("{0}")]
+    TokioError(String),
+
+    #[error("{0}")]
+    DatabaseRowToLong(String),
+
+    #[error("database id must have at least {0} characters")]
+    DatabaseIdTooSmall(usize),
+
+    #[error("database schema cannot have more than {0} characters")]
+    DatabaseSchemaTooLarge(usize),
+
     #[error("{0}")]
     Unknown(String),
 }

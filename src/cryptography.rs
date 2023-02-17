@@ -1,9 +1,8 @@
 use argon2::{self, Config, ThreadMode, Variant};
-use blake3::Hash;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::*;
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -49,17 +48,12 @@ pub fn hash(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).as_bytes().to_owned()
 }
 
-//create a 128bits, base64 encoded id
-pub fn database_id(hash: Hash) -> String{
-    enc64.encode(&hash.as_bytes()[0..16])
+pub fn base64_encode(data: &[u8]) -> String {
+    enc64.encode(data)
 }
 
-pub fn base64_encode(data: Vec<u8>) -> String{
-    enc64.encode(data.as_slice())
-}
-
-pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error>{
-    enc64.decode(data).map_err(|e| Error::DecodeError(e))
+pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
+    enc64.decode(data).map_err(Error::from)
 }
 
 pub fn create_random_key_pair() -> Keypair {
@@ -161,6 +155,7 @@ pub fn humanized_hash(hash: &[u8; 32], length: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     #[test]
     fn control_derive_pass_phrase() {
@@ -168,20 +163,18 @@ mod tests {
         let pass_phrase = "testphrase".to_string();
 
         let hashed = derive_pass_phrase(login, pass_phrase);
-        assert_eq!(hex::encode(hashed).len(), 64);
 
         assert_eq!(
-            hex::encode(hashed),
-            "f223508a2f4931ab3f9d62276233a10c40a5a9e60136b406d93e4a1fd634a0f3"
+            base64_encode(&hashed),
+            "8iNQii9JMas_nWInYjOhDEClqeYBNrQG2T5KH9Y0oPM"
         );
- 
     }
 
     #[test]
     fn control_hash() {
         assert_eq!(
-            hex::encode(hash(b"bytes")),
-            "df19b1f105ff929191ce49d0bbfdc5b4edc2a71a40f502dc955359eb33649e24"
+            base64_encode(&hash(b"bytes")),
+            "3xmx8QX_kpGRzknQu_3FtO3CpxpA9QLclVNZ6zNkniQ"
         );
     }
 
@@ -191,10 +184,15 @@ mod tests {
         let keypair = create_ed25519_key_pair(&rd);
 
         let exp_kp = export_ed25519_keypair(&keypair);
-        
+
         assert_eq!(
-            hex::encode(&exp_kp),
-            "4641b4e164ac24b9778ba49328206653eb01db1a9110ad1508cfaa9e3a2af08954ba9f30f212de637f2931d1439b6f7db24aa238b0df3d63a9cbf4a169fed58e"
+            base64_encode(keypair.public.as_bytes()),
+            "VLqfMPIS3mN_KTHRQ5tvfbJKojiw3z1jqcv0oWn-1Y4"
+        );
+
+        assert_eq!(
+            base64_encode(keypair.secret.as_bytes()),
+            "RkG04WSsJLl3i6STKCBmU-sB2xqREK0VCM-qnjoq8Ik"
         );
 
         let msg = b"message to sign";
@@ -210,12 +208,10 @@ mod tests {
 
     #[test]
     fn control_humanized_hash() {
-        let bytes: [u8; 32] = [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30, 31,
-        ];
+        let bytes: [u8; 32] = hash(b"not random");
 
-        assert_eq!("BEDOGYJ-24", humanized_hash(&bytes, 7));
-        assert_eq!("BEDOGYJEL-30", humanized_hash(&bytes, 9));
+        assert_eq!("NYBOBU-340", humanized_hash(&bytes, 6));
+        assert_eq!("NYBOBUV-443", humanized_hash(&bytes, 7));
+        assert_eq!("NYBOBUVYZ-450", humanized_hash(&bytes, 9));
     }
 }

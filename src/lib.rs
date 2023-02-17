@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cryptography;
-pub mod datalayer;
+pub mod database;
 pub mod error;
 pub mod message;
 pub mod network;
@@ -51,7 +51,7 @@ pub struct QueryResult {
 }
 
 fn database_file_name_for(secret: &[u8; 32]) -> String {
-    hex::encode(cryptography::hash(secret))
+    base64_encode(&cryptography::hash(secret))
 }
 
 fn build_path(
