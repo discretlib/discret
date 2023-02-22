@@ -1,6 +1,10 @@
 [package]
 name = "discret"
 version = "0.1.0"
+license = "AGPL"
+authors = ["Adrien Salais <adrien.salais@gmail.com>"]
+keywords = ["p2p"]
+
 edition = "2021"
 
 [profile.release-lto]

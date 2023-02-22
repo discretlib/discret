@@ -21,7 +21,7 @@ pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
 //Derive a password using argon2id
 //  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-// - 32 mb of memory
+// - 20480 mb of memory
 // - an iteration count of 2
 // - parallelism count of 2
 // - the login is used as a salt
@@ -30,7 +30,7 @@ pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let salt = hash(login.as_bytes());
 
     let config = Config::<'_> {
-        mem_cost: 32768,
+        mem_cost: 20480,
         time_cost: 2,
         variant: Variant::Argon2id,
         lanes: 2,
@@ -115,44 +115,6 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
     (pub_key, secret_key)
 }
 
-//Provides human readable smaller hash
-//
-//usefull to remember an item and search it later
-//NOT UNIQUE do not use as a primary key!!
-#[allow(clippy::needless_range_loop)]
-pub fn humanized_hash(hash: &[u8; 32], length: usize) -> String {
-    let consonnant = [
-        "B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W",
-        "X", "Z",
-    ];
-    let vowel = ["A", "E", "I", "O", "U", "Y"];
-    let mut v: Vec<&str> = vec![];
-
-    let mut use_vowel = false;
-    let mut arr: &[&str];
-    for pos in 0..length {
-        if use_vowel {
-            arr = &vowel;
-            use_vowel = false;
-        } else {
-            arr = &consonnant;
-            use_vowel = true;
-        }
-        let id = hash[pos] as usize;
-        v.push(arr[id % arr.len()]);
-    }
-    let mut final_number = 0;
-    for i in 0..3 {
-        final_number += hash[length + i] as usize;
-    }
-
-    let fnum = final_number.to_string();
-
-    v.push("-");
-    v.push(fnum.as_str());
-    v.concat()
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -166,7 +128,7 @@ mod tests {
 
         assert_eq!(
             base64_encode(&hashed),
-            "8iNQii9JMas_nWInYjOhDEClqeYBNrQG2T5KH9Y0oPM"
+            "KER9-vDQvEeLBD5EAnPo52l8XEiuEO5vuaZDXOpQId0"
         );
     }
 
@@ -204,14 +166,5 @@ mod tests {
         let imp_pub = import_ed25519_public_key(exp_pub).unwrap();
 
         verify(&imp_pub, msg, &signature).unwrap();
-    }
-
-    #[test]
-    fn control_humanized_hash() {
-        let bytes: [u8; 32] = hash(b"not random");
-
-        assert_eq!("NYBOBU-340", humanized_hash(&bytes, 6));
-        assert_eq!("NYBOBUV-443", humanized_hash(&bytes, 7));
-        assert_eq!("NYBOBUVYZ-450", humanized_hash(&bytes, 9));
     }
 }

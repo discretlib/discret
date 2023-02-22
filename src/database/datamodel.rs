@@ -2,9 +2,11 @@ use std::time::SystemTime;
 
 use crate::cryptography::base64_encode;
 
-use super::{edge_table::Edge, node_table::Node};
+use super::{edge_table::Edge, node_table::Node, synch_log::DailySynchLog, Error};
 
 use rusqlite::{Connection, OptionalExtension};
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 //Maximum allowed size for a row
 pub const MAX_ROW_LENTGH: usize = 32768; //32kb
@@ -16,18 +18,23 @@ pub const DB_ID_SIZE: usize = 16;
 pub const DB_ID_MIN_SIZE: usize = 22;
 
 //arbritrary choosen max numbers of char in an id
-pub const DB_ID_MAX_SIZE: usize = 64;
+pub const DB_ID_MAX_SIZE: usize = 52;
 
-pub const MAX_SCHEMA_SIZE: usize = 16;
+//arbritrary choosen max numbers of char in a schema
+pub const MAX_SCHEMA_SIZE: usize = 22;
 
 pub struct RowFlag {}
 impl RowFlag {
     //data is only soft deleted to avoid synchronization conflicts
     pub const DELETED: i8 = 0b0000001;
     //if disabled, a new version will be inserted when updating, keeping the full history.
-    pub const UPDATE_ON_SAVE: i8 = 0b0000010;
+    pub const KEEP_HISTORY: i8 = 0b0000010;
     //index text and json field
     pub const INDEX_ON_SAVE: i8 = 0b0000100;
+
+    pub fn is(v: i8, f: &i8) -> bool {
+        v & f > 0
+    }
 }
 
 //create base64 encoded id,
@@ -46,12 +53,11 @@ pub fn database_timed_id(time: i64, hash: &[u8]) -> String {
 
 pub fn is_valid_id(id: &String) -> bool {
     let v = id.as_bytes().len();
-
-    (DB_ID_MIN_SIZE..=DB_ID_MAX_SIZE).contains(&v)
+    (DB_ID_MIN_SIZE..DB_ID_MAX_SIZE).contains(&v)
 }
 
 pub fn is_valid_schema(schema: &String) -> bool {
-    schema.len() <= MAX_SCHEMA_SIZE && !schema.is_empty()
+    schema.as_bytes().len() <= MAX_SCHEMA_SIZE && !schema.is_empty()
 }
 
 pub fn now() -> i64 {
@@ -74,21 +80,7 @@ CREATE TABLE synch_log (
 
 CREATE INDEX synch_log_idx  ON synch_log(source, schema, source_date );";
 
-const DAILY_SYNCH_LOG_TABLE: &str = "
-CREATE TABLE daily_synch_log (
-	source TEXT NOT NULL,
-	schema TEXT NOT NULL,
-	day INTEGER NOT NULL,
-	previous_day INTEGER,
-	daily_hash BLOB,
-	history_hash BLOB,
-	PRIMARY KEY (source, schema, day)
-)STRICT;
-
-CREATE INDEX daily_synch_log_idx  ON synch_log(source, schema, day );
-";
-
-pub fn is_initialized(conn: &Connection) -> Result<bool, rusqlite::Error> {
+pub fn is_initialized(conn: &Connection) -> Result<bool> {
     let initialised: Option<String> = conn
         .query_row(
             "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name = 'node_sys'",
@@ -99,15 +91,12 @@ pub fn is_initialized(conn: &Connection) -> Result<bool, rusqlite::Error> {
     Ok(initialised.is_some())
 }
 
-pub fn initialise_datamodel(conn: &Connection) -> Result<(), rusqlite::Error> {
+pub fn initialise_datamodel(conn: &Connection) -> Result<()> {
     if !is_initialized(conn)? {
         conn.execute("BEGIN TRANSACTION", [])?;
-        //   println!("creating datamodel");
         Node::create_table(conn)?;
         Edge::create_table(conn)?;
-        // conn.execute(NODE_FTS_TABLE, [])?;
-        //conn.execute(EDGE_TABLE, [])?;
-
+        DailySynchLog::create_table(conn)?;
         conn.execute("COMMIT", [])?;
     }
     Ok(())
@@ -117,7 +106,7 @@ pub fn initialise_datamodel(conn: &Connection) -> Result<(), rusqlite::Error> {
 mod tests {
     use super::*;
     use crate::cryptography::hash;
-
+    #[test]
     fn database_id_test() {
         let time = now();
         let has1 = hash(b"bytes");

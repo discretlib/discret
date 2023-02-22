@@ -1,14 +1,12 @@
 use super::{
     database_service::{FromRow, Writable},
     datamodel::{
-        database_timed_id, is_valid_id, is_valid_schema, now, RowFlag, DB_ID_MIN_SIZE,
-        MAX_ROW_LENTGH, MAX_SCHEMA_SIZE,
+        database_timed_id, is_valid_id, is_valid_schema, now, RowFlag, MAX_ROW_LENTGH,
+        MAX_SCHEMA_SIZE,
     },
+    Error,
 };
-use crate::{
-    cryptography::{base64_decode, base64_encode, sign, verify},
-    error::Error,
-};
+use crate::cryptography::{base64_decode, base64_encode, sign, verify};
 use ed25519_dalek::{Keypair, PublicKey, Signature};
 use rusqlite::{Connection, OptionalExtension, Row};
 
@@ -41,7 +39,9 @@ impl Node {
             [],
         )?;
 
-        //node view intended to be used for SELECT, decompress text and json on the fly
+        //node view is intended to be used for every SELECT,
+        // decompress text and json on the fly
+        // and filter deleted nodes
         conn.execute(
             " CREATE TEMP VIEW node AS SELECT    
                 id,
@@ -140,10 +140,10 @@ impl Node {
         self.json = None;
     }
 
-    pub fn verify(&mut self) -> Result<(), Error> {
+    pub fn verify(&self) -> Result<(), Error> {
         if let Some(v) = &self.id {
             if !is_valid_id(v) {
-                return Err(Error::DatabaseIdTooSmall(DB_ID_MIN_SIZE));
+                return Err(Error::InvalidDatabaseId());
             }
         }
         if !is_valid_schema(&self.schema) {
@@ -200,7 +200,7 @@ impl Node {
         match &self.id {
             Some(i) => {
                 if !is_valid_id(i) {
-                    return Err(Error::DatabaseIdTooSmall(DB_ID_MIN_SIZE));
+                    return Err(Error::InvalidDatabaseId());
                 }
             }
             None => {
@@ -274,10 +274,24 @@ impl Writable for Node {
                 conn.prepare_cached("SELECT node_all.* FROM node_all WHERE rowid=?")?;
             let old_node = chek_statement.query_row([&rowid], Node::from_row())?;
 
-            let mut delete_fts_stmt = conn.prepare_cached("INSERT INTO node_fts (node_fts, rowid, fts_text, fts_json) VALUES('delete', ?, ?,  json_data(?))")?;
-            delete_fts_stmt.execute((&rowid, &old_node.text, &old_node.json))?;
+            //delete previously indexed data
+            if RowFlag::is(RowFlag::INDEX_ON_SAVE, &old_node.flag) {
+                let mut delete_fts_stmt = conn.prepare_cached("INSERT INTO node_fts (node_fts, rowid, fts_text, fts_json) VALUES('delete', ?, ?,  json_data(?))")?;
+                delete_fts_stmt.execute((&rowid, &old_node.text, &old_node.json))?;
+            }
 
-            if self.flag & RowFlag::UPDATE_ON_SAVE == 0 {
+            if RowFlag::is(RowFlag::KEEP_HISTORY, &self.flag) {
+                rowid = insert_stmt.insert((
+                    &self.id,
+                    &self.schema,
+                    &self.date,
+                    &self.flag,
+                    &self.text,
+                    &self.json,
+                    &self.pub_key,
+                    &self.signature,
+                ))?;
+            } else {
                 let mut update_node_stmt = conn.prepare_cached(
                     "
             UPDATE node_sys SET 
@@ -304,23 +318,11 @@ impl Writable for Node {
                     &self.signature,
                     &rowid,
                 ))?;
-            } else {
-                rowid = insert_stmt.insert((
-                    &self.id,
-                    &self.schema,
-                    &self.date,
-                    &self.flag,
-                    &self.text,
-                    &self.json,
-                    &self.pub_key,
-                    &self.signature,
-                ))?;
             }
-
-            insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
+            if RowFlag::is(RowFlag::INDEX_ON_SAVE, &self.flag) {
+                insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
+            }
         } else {
-            //    println!("row does not exist");
-
             let rowid = insert_stmt.insert((
                 &self.id,
                 &self.schema,
@@ -332,7 +334,9 @@ impl Writable for Node {
                 &self.signature,
             ))?;
 
-            insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
+            if RowFlag::is(RowFlag::INDEX_ON_SAVE, &self.flag) {
+                insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
+            }
         }
 
         Ok(())
@@ -345,7 +349,7 @@ impl Default for Node {
             id: None,
             schema: "".to_string(),
             date: now(),
-            flag: RowFlag::INDEX_ON_SAVE | RowFlag::UPDATE_ON_SAVE,
+            flag: RowFlag::INDEX_ON_SAVE,
             text: None,
             json: None,
             pub_key: None,
@@ -357,9 +361,10 @@ impl Default for Node {
 #[cfg(test)]
 mod tests {
 
-    use crate::{cryptography::create_random_key_pair, database::datamodel::initialise_datamodel};
-
     use super::*;
+    use crate::{cryptography::create_random_key_pair, database::datamodel::initialise_datamodel};
+    use crate::{cryptography::hash, database::database_service::create_connection};
+
     use std::{
         error::Error,
         fs,
@@ -444,40 +449,13 @@ mod tests {
     }
 
     #[test]
-    fn node_save() -> Result<(), Box<dyn Error>> {
-        use crate::{cryptography::hash, database::database_service::create_connection};
-
-        let path: PathBuf = init_database_path("node_save.db")?;
-        let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        initialise_datamodel(&conn)?;
-
-        let keypair = create_random_key_pair();
-        let text = "Hello World";
-        let mut node = Node {
-            schema: "TEST".to_string(),
-            date: now(),
-            text: Some(text.to_string()),
-            ..Default::default()
-        };
-
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-
-        let mut stmt = conn.prepare("SELECT node.* FROM node")?;
-        let results = stmt.query_map([], Node::from_row())?;
-        for res in results {
-            let n = *res?;
-            assert_eq!(text, n.text.expect("").to_string());
-        }
+    fn node_limits() -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 
     #[test]
-    fn node_update() -> Result<(), Box<dyn Error>> {
-        use crate::{cryptography::hash, database::database_service::create_connection};
-
-        let path: PathBuf = init_database_path("node_update.db")?;
+    fn node_write_flags() -> Result<(), Box<dyn Error>> {
+        let path: PathBuf = init_database_path("node_flags.db")?;
         let secret = hash(b"secret");
         let conn = create_connection(&path, &secret, 1024, false)?;
         initialise_datamodel(&conn)?;
@@ -490,21 +468,87 @@ mod tests {
             text: Some(text.to_string()),
             ..Default::default()
         };
-
         node.sign(&keypair)?;
         node.write(&conn)?;
 
-        let mut stmt = conn.prepare("SELECT node.* FROM node")?;
-        let text = "Hello Rust";
+        let mut stmt = conn.prepare("SELECT count(1) FROM node")?;
+        let mut fts_stmt = conn.prepare("SELECT count(1) FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH 'Hello' ORDER BY rank;")?;
+
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
+        node.write(&conn)?;
+
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
+        // println!("flag: {:b}", node.flag);
+        node.set_deleted();
+        //  println!("flag: {:b}", node.flag);
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(0, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(0, results);
+
+        node.flag = node.flag & !RowFlag::DELETED;
+        //println!("flag: {:b}", node.flag);
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(0, results);
+
         node.text = Some(text.to_string());
-
         node.sign(&keypair)?;
         node.write(&conn)?;
-        let results = stmt.query_map([], Node::from_row())?;
-        for res in results {
-            let n = *res?;
-            assert_eq!(text, n.text.expect("").to_string());
-        }
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
+        node.flag = node.flag & !RowFlag::INDEX_ON_SAVE;
+        //println!("flag: {:b}", node.flag);
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(0, results);
+
+        node.flag = node.flag | RowFlag::INDEX_ON_SAVE;
+        //println!("flag: {:b}", node.flag);
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
+        node.flag = node.flag | RowFlag::KEEP_HISTORY;
+        //println!("flag: {:b}", node.flag);
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
+        node.date = node.date + 1;
+        node.sign(&keypair)?;
+        node.write(&conn)?;
+        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(2, results);
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(1, results);
+
         Ok(())
     }
 
@@ -531,7 +575,13 @@ mod tests {
 
         let mut stmt = conn.prepare("SELECT node.* FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH ? ORDER BY rank;")?;
         let results = stmt.query_map(["Lorem"], Node::from_row())?;
-        assert_eq!(1, results.count());
+        let mut res = vec![];
+        for node in results {
+            let node = node?;
+            node.verify()?;
+            res.push(node);
+        }
+        assert_eq!(1, res.len());
 
         let text = " ipsum dolor sit amet";
         node.text = Some(text.to_string());

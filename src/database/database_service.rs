@@ -1,5 +1,4 @@
 use crate::cryptography::base64_encode;
-use crate::error::Error;
 
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
 use rusqlite::{Connection, Row, ToSql};
@@ -10,19 +9,22 @@ use tokio::sync::{mpsc, oneshot};
 use blake3::Hasher;
 use zstd::bulk::{compress, decompress};
 
+use super::Error;
+
+pub type Result<T> = std::result::Result<T, Error>;
 type ReaderFn = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
-type MappingFn<T> = fn(&Row) -> rusqlite::Result<Box<T>, rusqlite::Error>;
+type MappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
 pub trait FromRow {
     fn from_row() -> MappingFn<Self>;
 }
 
 pub trait Writable {
-    fn write(&self, conn: &Connection) -> Result<(), Error>;
+    fn write(&self, conn: &Connection) -> std::result::Result<(), Error>;
 }
 
 pub struct WriteQuery {
     pub writeable: Vec<Box<dyn Writable + Send>>,
-    pub reply: oneshot::Sender<Result<(), Error>>,
+    pub reply: oneshot::Sender<std::result::Result<(), Error>>,
 }
 
 //Create a sqlcipher database connection
@@ -46,7 +48,7 @@ pub fn create_connection(
     secret: &[u8; 32],
     cache_size_in_kb: u32,
     enable_memory_security: bool,
-) -> Result<Connection, rusqlite::Error> {
+) -> Result<Connection> {
     //let conn = rusqlite::Connection::open(path)?;
     let mut flags = rusqlite::OpenFlags::empty();
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE);
@@ -161,8 +163,8 @@ impl DatabaseReader {
         query: String,
         params: Vec<Box<dyn ToSql + Sync + Send>>,
         mapping: MappingFn<T>,
-    ) -> Result<Vec<T>, Error> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+    ) -> Result<Vec<T>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
 
         let _ = &self
             .sender
@@ -183,8 +185,8 @@ impl DatabaseReader {
         query: String,
         params: Vec<Box<dyn ToSql + Sync + Send>>,
         mapping: MappingFn<T>,
-    ) -> Result<Vec<T>, Error> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>, Error>>();
+    ) -> Result<Vec<T>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
 
         let _ = &self.sender.blocking_send(Box::new(move |conn| {
             let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
@@ -201,7 +203,7 @@ impl DatabaseReader {
         params: &Vec<Box<dyn ToSql + Sync + Send>>,
         mapping: &MappingFn<T>,
         conn: &Connection,
-    ) -> Result<Vec<T>, rusqlite::Error> {
+    ) -> Result<Vec<T>> {
         let mut stmt = conn.prepare_cached(query)?;
 
         let params = rusqlite::params_from_iter(params);
@@ -338,24 +340,21 @@ impl BufferedDatabaseWriter {
         receive_buffer.blocking_recv()
     }
 
-    pub async fn send_async(&self, msg: WriteQuery) -> Result<(), Error> {
+    pub async fn send_async(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .send(msg)
             .await
             .map_err(|e| Error::Unknown(e.to_string()))
     }
 
-    pub fn send_blocking(&self, msg: WriteQuery) -> Result<(), Error> {
+    pub fn send_blocking(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .blocking_send(msg)
             .map_err(|e| Error::Unknown(e.to_string()))
     }
 
-    pub async fn write_async(
-        &self,
-        insert: Box<dyn Writable + Send>,
-    ) -> Result<Result<(), Error>, Error> {
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+    pub async fn write_async(&self, insert: Box<dyn Writable + Send>) -> Result<Result<()>> {
+        let (reply, reciev) = oneshot::channel::<Result<()>>();
         let _ = self
             .sender
             .send(WriteQuery {
@@ -366,11 +365,8 @@ impl BufferedDatabaseWriter {
         reciev.await.map_err(|e| Error::Unknown(e.to_string()))
     }
 
-    pub fn write_blocking(
-        &self,
-        insert: Box<dyn Writable + Send>,
-    ) -> Result<Result<(), Error>, Error> {
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+    pub fn write_blocking(&self, insert: Box<dyn Writable + Send>) -> Result<Result<()>> {
+        let (reply, reciev) = oneshot::channel::<Result<()>>();
         let _ = self.sender.blocking_send(WriteQuery {
             writeable: vec![insert],
             reply,
@@ -380,7 +376,7 @@ impl BufferedDatabaseWriter {
             .map_err(|e| Error::Unknown(e.to_string()))
     }
 
-    fn process_batch_write(buffer: &Vec<WriteQuery>, conn: &Connection) -> Result<(), Error> {
+    fn process_batch_write(buffer: &Vec<WriteQuery>, conn: &Connection) -> Result<()> {
         conn.execute("BEGIN TRANSACTION", [])?;
         for write in buffer {
             Self::process_write(write, conn)?;
@@ -389,7 +385,7 @@ impl BufferedDatabaseWriter {
         Ok(())
     }
 
-    fn process_write(query: &WriteQuery, conn: &Connection) -> Result<(), Error> {
+    fn process_write(query: &WriteQuery, conn: &Connection) -> Result<()> {
         for q in &query.writeable {
             q.write(conn)?;
         }
@@ -397,11 +393,7 @@ impl BufferedDatabaseWriter {
     }
 }
 
-pub fn set_pragma(
-    pragma: &str,
-    value: &str,
-    conn: &rusqlite::Connection,
-) -> Result<(), rusqlite::Error> {
+pub fn set_pragma(pragma: &str, value: &str, conn: &rusqlite::Connection) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA {}={}", pragma, value))?;
     let _rows = stmt.query([])?;
     Ok(())
@@ -661,36 +653,15 @@ pub fn add_compression_function(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-//Attach an encrypted database to the connection
-//the maximum number of attached databases is 10
-//  path: database file path. Panic if the path is not valid utf-8
-//  name: the name that will be used in query. will fail if it contains spaces
-//  secret: the encryption key
-pub fn attach(
-    path: PathBuf,
-    name: String,
-    secret: &[u8; 32],
-    conn: &rusqlite::Connection,
-) -> Result<(), rusqlite::Error> {
-    let secr = hex::encode(secret);
-    let path_string: String = path.to_str().unwrap().to_string();
-    let query = format!(
-        "ATTACH DATABASE '{}' AS {} KEY \"x'{}'\"",
-        path_string, name, secr
-    );
-    conn.execute(&query, [])?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 
     use rusqlite::types::Null;
 
-    use crate::cryptography::hash;
-    use crate::error::Error;
-
     use super::*;
+    use crate::cryptography::hash;
+    use crate::database::Error;
+    use std::result::Result;
     use std::{fs, path::Path, time::Instant};
     #[derive(Debug)]
     struct Person {
@@ -710,7 +681,7 @@ mod tests {
         }
     }
     impl Writable for Person {
-        fn write(&self, conn: &Connection) -> Result<(), Error> {
+        fn write(&self, conn: &Connection) -> std::result::Result<(), Error> {
             let mut stmt =
                 conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 
@@ -847,7 +818,7 @@ mod tests {
         let mut reply_list = vec![];
 
         for i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<(), Error>>();
 
             let query = WriteQuery {
                 writeable: vec![Box::new(Person {
@@ -902,7 +873,7 @@ mod tests {
         let mut reply_list = vec![];
 
         for i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<(), Error>>();
 
             let query = WriteQuery {
                 writeable: vec![Box::new(Person {
@@ -968,7 +939,7 @@ mod tests {
             }));
         }
 
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let (reply, reciev) = oneshot::channel::<Result<(), Error>>();
         let query = WriteQuery {
             writeable: buffer,
             reply: reply,
@@ -1018,7 +989,7 @@ mod tests {
             }));
         }
 
-        let (reply, reciev) = oneshot::channel::<Result<(), crate::error::Error>>();
+        let (reply, reciev) = oneshot::channel::<Result<(), Error>>();
         let query = WriteQuery {
             writeable: buffer,
             reply: reply,
