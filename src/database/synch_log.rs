@@ -83,7 +83,7 @@ mod tests {
         cryptography::{base64_encode, hash},
         database::{
             database_service::{create_connection, FromRow, Writable},
-            datamodel::{initialise_datamodel, now},
+            datamodel::{now, prepare_connection},
         },
     };
 
@@ -105,11 +105,11 @@ mod tests {
         Ok(path)
     }
     #[test]
-    fn daily_log_insert() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = init_database_path("daily_log_insert.db")?;
+    fn daily_log_insert() {
+        let path: PathBuf = init_database_path("daily_log_insert.db").unwrap();
         let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        initialise_datamodel(&conn)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        prepare_connection(&conn).unwrap();
         let source = base64_encode(&hash(b"source"));
         let daily_hash = hash(b"hash").to_vec();
 
@@ -121,11 +121,12 @@ mod tests {
             ..Default::default()
         };
 
-        log.write(&conn)?;
-        log.write(&conn)?;
-        let mut stmt = conn.prepare("SELECT daily_synch_log.* FROM daily_synch_log")?;
-        let results = stmt.query_map([], DailySynchLog::from_row())?;
+        log.write(&conn).unwrap();
+        log.write(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT daily_synch_log.* FROM daily_synch_log")
+            .unwrap();
+        let results = stmt.query_map([], DailySynchLog::from_row()).unwrap();
         assert_eq!(1, results.count());
-        Ok(())
     }
 }

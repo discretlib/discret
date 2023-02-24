@@ -4,6 +4,7 @@ pub mod cryptography;
 pub mod database;
 pub mod message;
 pub mod network;
+pub mod security_policy;
 
 use std::{fs, path::PathBuf};
 

@@ -1,21 +1,27 @@
 use super::{
     database_service::{FromRow, Writable},
-    datamodel::{
-        database_timed_id, is_valid_id, is_valid_schema, now, RowFlag, MAX_ROW_LENTGH,
-        MAX_SCHEMA_SIZE,
-    },
+    datamodel::{is_valid_id, new_id, now, RowFlag, MAX_ROW_LENTGH},
     Error,
 };
-use crate::cryptography::{base64_decode, base64_encode, sign, verify};
-use ed25519_dalek::{Keypair, PublicKey, Signature};
+use crate::cryptography::{
+    base64_decode, base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey,
+};
 use rusqlite::{Connection, OptionalExtension, Row};
 
+//arbritrary choosen max numbers of char in a schema
+pub const MAX_SCHEMA_SIZE: usize = 22;
+pub fn is_valid_schema(schema: &String) -> bool {
+    schema.as_bytes().len() <= MAX_SCHEMA_SIZE && !schema.is_empty()
+}
+
 pub struct Node {
-    pub id: Option<String>,
+    pub id: String,
     pub schema: String,
-    pub date: i64,
+    pub cdate: i64,
+    pub mdate: i64,
     pub text: Option<String>,
     pub json: Option<String>,
+    pub binary: Option<Vec<u8>>,
     pub pub_key: Option<String>,
     pub signature: Option<Vec<u8>>,
     pub flag: i8,
@@ -28,17 +34,29 @@ impl Node {
             "CREATE TABLE node_sys (
             id TEXT NOT NULL,
             schema TEXT  NOT NULL,
-            date INTEGER  NOT NULL,
+            cdate INTEGER  NOT NULL,
+            mdate INTEGER  NOT NULL,
             flag INTEGER DEFAULT 0,
             bin_text BLOB,
             bin_json BLOB,
+            binary BLOB,
             pub_key TEXT NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(id, date)
+            PRIMARY KEY(id, mdate)
         ) STRICT",
             [],
         )?;
 
+        conn.execute(
+            "CREATE VIRTUAL TABLE node_fts USING fts5(fts_text, fts_json, content='' , prefix='2,3' , detail=none)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn create_temporary_view(conn: &Connection) -> Result<(), rusqlite::Error> {
+        //this view filter deleted edge
         //node view is intended to be used for every SELECT,
         // decompress text and json on the fly
         // and filter deleted nodes
@@ -46,10 +64,12 @@ impl Node {
             " CREATE TEMP VIEW node AS SELECT    
                 id,
                 schema,
-                date,
+                cdate,
+                mdate,
                 flag,
                 decompress_text(bin_text) as text,
                 decompress_text(bin_json) as json ,
+                binary,
                 pub_key,
                 signature,
                 rowid
@@ -63,31 +83,29 @@ impl Node {
             " CREATE TEMP VIEW node_all AS SELECT    
                 id,
                 schema,
-                date,
+                cdate,
+                mdate,
                 flag,
                 decompress_text(bin_text) as text,
                 decompress_text(bin_json) as json ,
+                binary,
                 pub_key,
                 signature,
                 rowid
             FROM node_sys",
             [],
         )?;
-
-        conn.execute(
-            "CREATE VIRTUAL TABLE node_fts USING fts5(fts_text, fts_json, content='' , prefix='2,3' , detail=none)",
-            [],
-        )?;
-
         Ok(())
     }
+
     fn len(&self) -> usize {
         let mut len = 0;
-        if let Some(v) = &self.id {
-            len += v.as_bytes().len();
-        }
+
+        len += self.id.as_bytes().len();
+
         len += self.schema.as_bytes().len();
         len += 8; //date
+        len += 8; //cdate
         len += 1; //flag
 
         if let Some(v) = &self.text {
@@ -96,6 +114,9 @@ impl Node {
 
         if let Some(v) = &self.json {
             len += v.as_bytes().len();
+        }
+        if let Some(v) = &self.binary {
+            len += v.len();
         }
 
         if let Some(v) = &self.pub_key {
@@ -109,12 +130,11 @@ impl Node {
 
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
-        if let Some(v) = &self.id {
-            hasher.update(v.as_bytes());
-        }
 
+        hasher.update(self.id.as_bytes());
         hasher.update(self.schema.as_bytes());
-        hasher.update(&self.date.to_le_bytes());
+        hasher.update(&self.cdate.to_le_bytes());
+        hasher.update(&self.mdate.to_le_bytes());
         hasher.update(&self.flag.to_le_bytes());
 
         if let Some(v) = &self.text {
@@ -123,6 +143,10 @@ impl Node {
 
         if let Some(v) = &self.json {
             hasher.update(v.as_bytes());
+        }
+
+        if let Some(v) = &self.binary {
+            hasher.update(v);
         }
 
         if let Some(v) = &self.pub_key {
@@ -135,26 +159,25 @@ impl Node {
     // by design, only soft deletes are supported
     // hard deletes are too complex to sign and verify
     pub fn set_deleted(&mut self) {
-        self.flag = self.flag | RowFlag::DELETED;
+        self.flag |= RowFlag::DELETED;
         self.text = None;
         self.json = None;
     }
 
     pub fn verify(&self) -> Result<(), Error> {
-        if let Some(v) = &self.id {
-            if !is_valid_id(v) {
-                return Err(Error::InvalidDatabaseId());
-            }
+        if !is_valid_id(&self.id) {
+            return Err(Error::InvalidDatabaseId());
         }
+
         if !is_valid_schema(&self.schema) {
-            return Err(Error::DatabaseSchemaTooLarge(MAX_SCHEMA_SIZE));
+            return Err(Error::InvalidNodeSchema(MAX_SCHEMA_SIZE));
         }
 
         let size = self.len();
         if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too long {} bytes instead of {}",
-                &self.id.clone().unwrap(),
+                &self.id.clone(),
                 size,
                 MAX_ROW_LENTGH
             )));
@@ -172,14 +195,10 @@ impl Node {
         match &self.pub_key {
             Some(puk) => match &self.signature {
                 Some(sig) => {
-                    let signature = Signature::from_bytes(sig.as_slice())
-                        .map_err(|_| Error::InvalidNode("Invalid Signature".to_string()))?;
-
                     let key = base64_decode(puk.as_bytes())?;
 
-                    let pk = PublicKey::from_bytes(key.as_slice())
-                        .map_err(|_| Error::InvalidNode("Invalid Public Key".to_string()))?;
-                    verify(&pk, hash.as_bytes(), &signature)?;
+                    let pub_key = Ed2519PublicKey::import(&key)?;
+                    pub_key.verify(hash.as_bytes(), sig)?;
                 }
                 None => return Err(Error::InvalidNode("Signature is empty".to_string())),
             },
@@ -189,24 +208,16 @@ impl Node {
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Keypair) -> Result<(), Error> {
-        let pubkey = base64_encode(keypair.public.as_bytes().as_slice());
+    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<(), Error> {
+        let pubkey = base64_encode(&keypair.export_public());
         self.pub_key = Some(pubkey);
 
         if !is_valid_schema(&self.schema) {
-            return Err(Error::DatabaseSchemaTooLarge(MAX_SCHEMA_SIZE));
+            return Err(Error::InvalidNodeSchema(MAX_SCHEMA_SIZE));
         }
 
-        match &self.id {
-            Some(i) => {
-                if !is_valid_id(i) {
-                    return Err(Error::InvalidDatabaseId());
-                }
-            }
-            None => {
-                let hash = self.hash();
-                self.id = Some(database_timed_id(self.date, hash.as_bytes()));
-            }
+        if !is_valid_id(&self.id) {
+            return Err(Error::InvalidDatabaseId());
         }
 
         //ensure that the Json field is well formed
@@ -219,13 +230,13 @@ impl Node {
         }
 
         let hash = self.hash();
-        let signature = sign(keypair, hash.as_bytes());
-        self.signature = Some(signature.to_bytes().into());
+        let signature = keypair.sign(hash.as_bytes());
+        self.signature = Some(signature);
         let size = self.len();
         if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too long {} bytes instead of {}",
-                &self.id.clone().unwrap(),
+                &self.id.clone(),
                 size,
                 MAX_ROW_LENTGH
             )));
@@ -240,13 +251,14 @@ impl FromRow for Node {
             Ok(Box::new(Node {
                 id: row.get(0)?,
                 schema: row.get(1)?,
-                date: row.get(2)?,
-                flag: row.get(3)?,
-                text: row.get(4)?,
-                json: row.get(5)?,
-                pub_key: row.get(6)?,
-                signature: row.get(7)?,
-                ..Default::default()
+                cdate: row.get(2)?,
+                mdate: row.get(3)?,
+                flag: row.get(4)?,
+                text: row.get(5)?,
+                json: row.get(6)?,
+                binary: row.get(7)?,
+                pub_key: row.get(8)?,
+                signature: row.get(9)?,
             }))
         }
     }
@@ -255,15 +267,15 @@ impl Writable for Node {
     //Updates needs to delete old data from the full text search index hence the retrieval of old data before updating
     fn write(&self, conn: &Connection) -> Result<(), Error> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO node_sys (id, schema, date, flag, bin_text, bin_json,pub_key, signature) 
-                                VALUES (?, ?, ?, ?, compress(?), compress(?), ?, ?)")?;
+            "INSERT OR REPLACE INTO node_sys (id, schema, cdate, mdate, flag, bin_text, bin_json, binary, pub_key, signature) 
+                                VALUES (?, ?, ?, ?, ?, compress(?), compress(?),?, ?, ?)")?;
 
         let mut insert_fts_stmt = conn.prepare_cached(
             "INSERT INTO node_fts (rowid, fts_text, fts_json) VALUES (?, ?,  json_data(?))",
         )?;
 
         let mut chek_stmt = conn
-            .prepare_cached("SELECT node_all.rowid FROM node_all WHERE id=? ORDER BY date DESC")?;
+            .prepare_cached("SELECT node_all.rowid FROM node_all WHERE id=? ORDER BY mdate DESC")?;
 
         let existing_row: Option<i64> = chek_stmt
             .query_row([&self.id], |row| row.get(0))
@@ -284,10 +296,12 @@ impl Writable for Node {
                 rowid = insert_stmt.insert((
                     &self.id,
                     &self.schema,
-                    &self.date,
+                    &self.cdate,
+                    &self.mdate,
                     &self.flag,
                     &self.text,
                     &self.json,
+                    &self.binary,
                     &self.pub_key,
                     &self.signature,
                 ))?;
@@ -297,10 +311,12 @@ impl Writable for Node {
             UPDATE node_sys SET 
                 id = ?,
                 schema = ?,
-                date = ?,
+                cdate = ?,
+                mdate = ?,
                 flag = ?,
                 bin_text = compress(?),
                 bin_json = compress(?),
+                binary = ?,
                 pub_key = ?,
                 signature = ?
             WHERE
@@ -310,10 +326,12 @@ impl Writable for Node {
                 update_node_stmt.execute((
                     &self.id,
                     &self.schema,
-                    &self.date,
+                    &self.cdate,
+                    &self.mdate,
                     &self.flag,
                     &self.text,
                     &self.json,
+                    &self.binary,
                     &self.pub_key,
                     &self.signature,
                     &rowid,
@@ -326,10 +344,12 @@ impl Writable for Node {
             let rowid = insert_stmt.insert((
                 &self.id,
                 &self.schema,
-                &self.date,
+                &self.cdate,
+                &self.mdate,
                 &self.flag,
                 &self.text,
                 &self.json,
+                &self.binary,
                 &self.pub_key,
                 &self.signature,
             ))?;
@@ -345,13 +365,16 @@ impl Writable for Node {
 
 impl Default for Node {
     fn default() -> Self {
+        let date = now();
         Self {
-            id: None,
+            id: new_id(now()),
             schema: "".to_string(),
-            date: now(),
+            cdate: date,
+            mdate: date,
             flag: RowFlag::INDEX_ON_SAVE,
             text: None,
             json: None,
+            binary: None,
             pub_key: None,
             signature: None,
         }
@@ -362,7 +385,7 @@ impl Default for Node {
 mod tests {
 
     use super::*;
-    use crate::{cryptography::create_random_key_pair, database::datamodel::initialise_datamodel};
+    use crate::database::datamodel::prepare_connection;
     use crate::{cryptography::hash, database::database_service::create_connection};
 
     use std::{
@@ -383,60 +406,70 @@ mod tests {
     }
 
     #[test]
-    fn node_signature() -> Result<(), Box<dyn Error>> {
-        let keypair = create_random_key_pair();
+    fn node_signature() {
+        let keypair = Ed2519KeyPair::new();
         let mut node = Node {
             schema: "TEST".to_string(),
             ..Default::default()
         };
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
-        let id = node.id.clone().expect("");
+        let id = node.id.clone();
 
         node.text = Some("hello world".to_string());
         node.verify().expect_err("");
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
-        let newid = node.id.clone().expect("");
+        let newid = node.id.clone();
         assert_eq!(id, newid);
 
-        node.id = Some("key too short".to_string());
+        node.id = "key too short".to_string();
         node.verify().expect_err("");
         node.sign(&keypair).expect_err("");
 
-        node.id = None;
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.id = new_id(now());
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
         node.schema = "re".to_string();
         node.verify().expect_err("");
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
-        node.date = node.date + 1;
+        node.cdate = node.cdate + 1;
         node.verify().expect_err("");
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
+
+        node.mdate = node.mdate + 1;
+        node.verify().expect_err("");
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
         node.flag = 1;
         node.verify().expect_err("");
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
         node.json = Some("f".to_string());
         node.verify().expect_err("");
         node.sign(&keypair).expect_err("");
 
         node.json = Some("{}".to_string());
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
+
+        node.binary = Some(vec![1, 2, 3]);
+        node.verify().expect_err("");
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
         node.pub_key = Some("badkey".to_string());
         node.verify().expect_err("");
-        node.sign(&keypair)?;
-        node.verify()?;
+        node.sign(&keypair).unwrap();
+        node.verify().unwrap();
 
         let sq = &['a'; MAX_ROW_LENTGH];
         let big_string = String::from_iter(sq);
@@ -444,167 +477,156 @@ mod tests {
         node.verify().expect_err("msg");
 
         node.sign(&keypair).expect_err("msg");
-
-        Ok(())
     }
 
     #[test]
-    fn node_limits() -> Result<(), Box<dyn Error>> {
-        Ok(())
-    }
-
-    #[test]
-    fn node_write_flags() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = init_database_path("node_flags.db")?;
+    fn node_write_flags() {
+        let path: PathBuf = init_database_path("node_flags.db").unwrap();
         let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        initialise_datamodel(&conn)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        prepare_connection(&conn).unwrap();
 
-        let keypair = create_random_key_pair();
+        let keypair = Ed2519KeyPair::new();
         let text = "Hello World";
         let mut node = Node {
             schema: "TEST".to_string(),
-            date: now(),
+            cdate: now(),
             text: Some(text.to_string()),
             ..Default::default()
         };
-        node.sign(&keypair)?;
-        node.write(&conn)?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
 
-        let mut stmt = conn.prepare("SELECT count(1) FROM node")?;
-        let mut fts_stmt = conn.prepare("SELECT count(1) FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH 'Hello' ORDER BY rank;")?;
+        let mut stmt = conn.prepare("SELECT count(1) FROM node").unwrap();
+        let mut fts_stmt = conn.prepare("SELECT count(1) FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH 'Hello' ORDER BY rank;").unwrap();
 
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
 
-        node.write(&conn)?;
+        node.write(&conn).unwrap();
 
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
 
         // println!("flag: {:b}", node.flag);
         node.set_deleted();
         //  println!("flag: {:b}", node.flag);
-        node.sign(&keypair)?;
-        node.write(&conn)?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
 
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(0, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(0, results);
 
         node.flag = node.flag & !RowFlag::DELETED;
         //println!("flag: {:b}", node.flag);
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(0, results);
 
         node.text = Some(text.to_string());
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
 
         node.flag = node.flag & !RowFlag::INDEX_ON_SAVE;
         //println!("flag: {:b}", node.flag);
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(0, results);
 
         node.flag = node.flag | RowFlag::INDEX_ON_SAVE;
         //println!("flag: {:b}", node.flag);
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
 
         node.flag = node.flag | RowFlag::KEEP_HISTORY;
         //println!("flag: {:b}", node.flag);
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
 
-        node.date = node.date + 1;
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results: i64 = stmt.query_row([], |row| row.get(0))?;
+        node.mdate = node.mdate + 1;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(2, results);
-        let results: i64 = fts_stmt.query_row([], |row| row.get(0))?;
+        let results: i64 = fts_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(1, results);
-
-        Ok(())
     }
 
     #[test]
-    fn node_fts() -> Result<(), Box<dyn Error>> {
+    fn node_fts() {
         use crate::{cryptography::hash, database::database_service::create_connection};
 
-        let path: PathBuf = init_database_path("node_fts.db")?;
+        let path: PathBuf = init_database_path("node_fts.db").unwrap();
         let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        initialise_datamodel(&conn)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        prepare_connection(&conn).unwrap();
 
-        let keypair = create_random_key_pair();
+        let keypair = Ed2519KeyPair::new();
         let text = "Lorem ipsum dolor sit amet";
         let mut node = Node {
             schema: "TEST".to_string(),
-            date: now(),
+            cdate: now(),
             text: Some(text.to_string()),
             ..Default::default()
         };
 
-        node.sign(&keypair)?;
-        node.write(&conn)?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
 
-        let mut stmt = conn.prepare("SELECT node.* FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH ? ORDER BY rank;")?;
-        let results = stmt.query_map(["Lorem"], Node::from_row())?;
+        let mut stmt = conn.prepare("SELECT node.* FROM node_fts JOIN node ON node_fts.rowid=node.rowid WHERE node_fts MATCH ? ORDER BY rank;").unwrap();
+        let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
         let mut res = vec![];
         for node in results {
-            let node = node?;
-            node.verify()?;
+            let node = node.unwrap();
+            node.verify().unwrap();
             res.push(node);
         }
         assert_eq!(1, res.len());
 
         let text = " ipsum dolor sit amet";
         node.text = Some(text.to_string());
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results = stmt.query_map(["Lorem"], Node::from_row())?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
         assert_eq!(0, results.count());
 
         let json = r#"{
             "name": "Lorem ipsum"
         }"#;
         node.json = Some(json.to_string());
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results = stmt.query_map(["Lorem"], Node::from_row())?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
         assert_eq!(1, results.count());
 
         node.set_deleted();
-        node.sign(&keypair)?;
-        node.write(&conn)?;
-        let results = stmt.query_map(["Lorem"], Node::from_row())?;
+        node.sign(&keypair).unwrap();
+        node.write(&conn).unwrap();
+        let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
         assert_eq!(0, results.count());
-
-        Ok(())
     }
 }

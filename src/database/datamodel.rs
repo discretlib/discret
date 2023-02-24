@@ -4,6 +4,7 @@ use crate::cryptography::base64_encode;
 
 use super::{edge_table::Edge, node_table::Node, synch_log::DailySynchLog, Error};
 
+use rand::{rngs::OsRng, RngCore};
 use rusqlite::{Connection, OptionalExtension};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -19,9 +20,6 @@ pub const DB_ID_MIN_SIZE: usize = 22;
 
 //arbritrary choosen max numbers of char in an id
 pub const DB_ID_MAX_SIZE: usize = 52;
-
-//arbritrary choosen max numbers of char in a schema
-pub const MAX_SCHEMA_SIZE: usize = 22;
 
 pub struct RowFlag {}
 impl RowFlag {
@@ -39,14 +37,15 @@ impl RowFlag {
 
 //create base64 encoded id,
 //with time on first to improve index locality
-pub fn database_timed_id(time: i64, hash: &[u8]) -> String {
-    let time = &time.to_be_bytes()[4..];
-    let has = &hash[0..DB_ID_SIZE - time.len()];
+pub fn new_id(time: i64) -> String {
+    const TIME_BYTES: usize = 4;
+    let time = &time.to_be_bytes()[TIME_BYTES..];
 
     let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
     let (one, two) = whole.split_at_mut(time.len());
+
     one.copy_from_slice(time);
-    two.copy_from_slice(has);
+    OsRng.fill_bytes(two);
 
     base64_encode(&whole)
 }
@@ -54,10 +53,6 @@ pub fn database_timed_id(time: i64, hash: &[u8]) -> String {
 pub fn is_valid_id(id: &String) -> bool {
     let v = id.as_bytes().len();
     (DB_ID_MIN_SIZE..DB_ID_MAX_SIZE).contains(&v)
-}
-
-pub fn is_valid_schema(schema: &String) -> bool {
-    schema.as_bytes().len() <= MAX_SCHEMA_SIZE && !schema.is_empty()
 }
 
 pub fn now() -> i64 {
@@ -91,7 +86,8 @@ pub fn is_initialized(conn: &Connection) -> Result<bool> {
     Ok(initialised.is_some())
 }
 
-pub fn initialise_datamodel(conn: &Connection) -> Result<()> {
+//initialise database and create temporary views
+pub fn prepare_connection(conn: &Connection) -> Result<()> {
     if !is_initialized(conn)? {
         conn.execute("BEGIN TRANSACTION", [])?;
         Node::create_table(conn)?;
@@ -99,21 +95,21 @@ pub fn initialise_datamodel(conn: &Connection) -> Result<()> {
         DailySynchLog::create_table(conn)?;
         conn.execute("COMMIT", [])?;
     }
+    Node::create_temporary_view(conn)?;
+    Edge::create_temporary_view(conn)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cryptography::hash;
     #[test]
     fn database_id_test() {
         let time = now();
-        let has1 = hash(b"bytes");
-        let id1 = database_timed_id(time, &has1);
 
-        let has2 = hash(b"bytes2");
-        let id2 = database_timed_id(time, &has2);
+        let id1 = new_id(time);
+
+        let id2 = new_id(time);
 
         assert_eq!(id1[0..3], id2[0..3]);
         assert_ne!(id1, id2);

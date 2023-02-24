@@ -3,8 +3,9 @@ use super::{
     datamodel::{is_valid_id, now, RowFlag, MAX_ROW_LENTGH},
     Error,
 };
-use crate::cryptography::{base64_decode, base64_encode, sign, verify};
-use ed25519_dalek::{Keypair, PublicKey, Signature};
+use crate::cryptography::{
+    base64_decode, base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey,
+};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 pub struct Edge {
@@ -39,6 +40,10 @@ impl Edge {
             [],
         )?;
 
+        Ok(())
+    }
+
+    pub fn create_temporary_view(conn: &Connection) -> Result<(), rusqlite::Error> {
         //this view filter deleted edge
         conn.execute(
             " 
@@ -92,7 +97,7 @@ impl Edge {
     // by design, only soft deletes are supported
     // edges are kept to ensure that authorisation policy can be checked, even if an authorisation as been removed
     pub fn set_deleted(&mut self) {
-        self.flag = self.flag | RowFlag::DELETED;
+        self.flag |= RowFlag::DELETED;
         self.json = None;
     }
 
@@ -125,14 +130,10 @@ impl Edge {
         match &self.pub_key {
             Some(puk) => match &self.signature {
                 Some(sig) => {
-                    let signature = Signature::from_bytes(sig.as_slice())
-                        .map_err(|_| Error::InvalidNode("Invalid Signature".to_string()))?;
-
                     let key = base64_decode(puk.as_bytes())?;
 
-                    let pk = PublicKey::from_bytes(key.as_slice())
-                        .map_err(|_| Error::InvalidNode("Invalid Public Key".to_string()))?;
-                    verify(&pk, hash.as_bytes(), &signature)?;
+                    let pub_key = Ed2519PublicKey::import(&key)?;
+                    pub_key.verify(hash.as_bytes(), sig)?;
                 }
                 None => return Err(Error::InvalidNode("Signature is empty".to_string())),
             },
@@ -142,7 +143,7 @@ impl Edge {
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Keypair) -> Result<(), Error> {
+    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<(), Error> {
         if !is_valid_id(&self.source) {
             return Err(Error::InvalidDatabaseId());
         }
@@ -159,12 +160,13 @@ impl Edge {
             }
         }
 
-        let pubkey = base64_encode(keypair.public.as_bytes().as_slice());
+        let pubkey = base64_encode(&keypair.export_public());
         self.pub_key = Some(pubkey);
+
         let hash = self.hash();
 
-        let signature = sign(keypair, hash.as_bytes());
-        self.signature = Some(signature.to_bytes().into());
+        let signature = keypair.sign(hash.as_bytes());
+        self.signature = Some(signature);
 
         let size = self.len();
         if size > MAX_ROW_LENTGH {
@@ -279,10 +281,10 @@ impl Default for Edge {
 mod tests {
 
     use crate::{
-        cryptography::{create_random_key_pair, hash},
+        cryptography::{hash, Ed2519KeyPair, KeyPair},
         database::{
             database_service::create_connection,
-            datamodel::{database_timed_id, initialise_datamodel, DB_ID_MAX_SIZE},
+            datamodel::{new_id, prepare_connection, DB_ID_MAX_SIZE},
         },
     };
 
@@ -306,68 +308,67 @@ mod tests {
     }
 
     #[test]
-    fn edge_signature() -> Result<(), Box<dyn Error>> {
-        let keypair = create_random_key_pair();
-        let source = database_timed_id(10, &hash(b"source"));
-        let target = database_timed_id(10, &hash(b"target"));
+    fn edge_signature() {
+        let keypair = Ed2519KeyPair::new();
+        let source = new_id(10);
+        let target = new_id(10);
         let mut e = Edge {
             source: source.clone(),
             target,
             ..Default::default()
         };
 
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
-        let bads = database_timed_id(10, &hash(b"sqsdqs"));
+        let bads = new_id(10);
         e.source = bads.clone();
         e.verify().expect_err("msg");
         e.source = source;
-        e.verify()?;
+        e.verify().unwrap();
 
         e.target = bads;
         e.verify().expect_err("msg");
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
         e.date = e.date + 1;
         e.verify().expect_err("msg");
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
         e.flag = 5;
         e.verify().expect_err("msg");
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
         let signature = e.signature.clone();
 
         e.json = Some("{}".to_string());
         e.verify().expect_err("msg");
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
-        let badk = create_random_key_pair();
-        e.pub_key = Some(base64_encode(badk.public.as_bytes().as_slice()));
+        let badk = Ed2519KeyPair::new();
+        e.pub_key = Some(base64_encode(&badk.export_public()[..]));
         e.verify().expect_err("msg");
-        e.sign(&keypair)?;
+        e.sign(&keypair).unwrap();
 
         e.signature = signature;
         e.verify().expect_err("msg");
-        Ok(())
     }
 
     #[test]
-    fn edge_limit_test() -> Result<(), Box<dyn Error>> {
-        let keypair = create_random_key_pair();
-        let source = database_timed_id(10, &hash(b"source"));
+    fn edge_limit_test() {
+        let keypair = Ed2519KeyPair::new();
+        let source = new_id(10);
 
         let mut e = Edge {
             source: source.clone(),
             target: source.clone(),
             ..Default::default()
         };
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
         e.source = "".to_string();
         e.verify().expect_err("msg");
@@ -379,16 +380,16 @@ mod tests {
         e.sign(&keypair).expect_err("msg");
 
         e.target = source.clone();
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
         e.json = Some("{ezaeaz]".to_string());
         e.verify().expect_err("msg");
         e.sign(&keypair).expect_err("msg");
 
         e.json = Some("{}".to_string());
-        e.sign(&keypair)?;
-        e.verify()?;
+        e.sign(&keypair).unwrap();
+        e.verify().unwrap();
 
         let arr = [0 as u8; DB_ID_MAX_SIZE];
 
@@ -401,68 +402,64 @@ mod tests {
         e.json = Some(format!("[\"{}\" ]", base64_encode(&arr)));
         e.verify().expect_err("msg");
         e.sign(&keypair).expect_err("msg");
-
-        Ok(())
     }
 
     #[test]
-    fn edge_save() -> Result<(), Box<dyn Error>> {
-        let path: PathBuf = init_database_path("edge_save.db")?;
+    fn edge_save() {
+        let path: PathBuf = init_database_path("edge_save.db").unwrap();
         let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        initialise_datamodel(&conn)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        prepare_connection(&conn).unwrap();
 
-        let keypair = create_random_key_pair();
-        let source = database_timed_id(10, &hash(b"source"));
-        let target = database_timed_id(10, &hash(b"target"));
+        let keypair = Ed2519KeyPair::new();
+        let source = new_id(10);
+        let target = new_id(10);
         let mut e = Edge {
             source: source.clone(),
             target,
             ..Default::default()
         };
-        e.sign(&keypair)?;
-        e.write(&conn)?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
 
-        let mut stmt = conn.prepare("SELECT edge.* FROM edge")?;
-        let results = stmt.query_map([], Edge::from_row())?;
+        let mut stmt = conn.prepare("SELECT edge.* FROM edge").unwrap();
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         let mut res = vec![];
         for ed in results {
-            let edge = ed?;
-            edge.verify()?;
+            let edge = ed.unwrap();
+            edge.verify().unwrap();
             res.push(edge);
         }
         assert_eq!(1, res.len());
 
-        e.sign(&keypair)?;
-        e.write(&conn)?;
-        let results = stmt.query_map([], Edge::from_row())?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         assert_eq!(1, results.count());
         e.set_deleted();
-        e.sign(&keypair)?;
-        e.write(&conn)?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
 
-        let results = stmt.query_map([], Edge::from_row())?;
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         assert_eq!(0, results.count());
 
         e.flag = e.flag & !RowFlag::DELETED;
-        e.sign(&keypair)?;
-        e.write(&conn)?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
 
-        let results = stmt.query_map([], Edge::from_row())?;
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         assert_eq!(1, results.count());
 
         e.flag = RowFlag::KEEP_HISTORY;
-        e.sign(&keypair)?;
-        e.write(&conn)?;
-        let results = stmt.query_map([], Edge::from_row())?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         assert_eq!(1, results.count());
 
         e.date = e.date + 1;
-        e.sign(&keypair)?;
-        e.write(&conn)?;
-        let results = stmt.query_map([], Edge::from_row())?;
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
+        let results = stmt.query_map([], Edge::from_row()).unwrap();
         assert_eq!(2, results.count());
-
-        Ok(())
     }
 }

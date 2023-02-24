@@ -1,17 +1,21 @@
 use argon2::{self, Config, ThreadMode, Variant};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
-use ed25519_dalek::*;
+
+use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Invalid signature")]
-    InvalidSignature,
-    #[error("Invalid KeyPair")]
-    InvalidKeyPair,
-    #[error("Invalid Public Key")]
-    InvalidPublicKey,
+    #[error("{0}")]
+    InvalidKeyType(u8),
+
+    #[error("{0}")]
+    InvalidSignature(String),
+
+    #[error(transparent)]
+    SignatureError(#[from] SignatureError),
+
     #[error(transparent)]
     DecodeError(#[from] base64::DecodeError),
 }
@@ -19,12 +23,12 @@ pub enum Error {
 //magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
-//Derive a password using argon2id
-//  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-// - 20480 mb of memory
-// - an iteration count of 2
-// - parallelism count of 2
-// - the login is used as a salt
+///Derive a password using argon2id
+///  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+/// - 20480 mb of memory
+/// - an iteration count of 2
+/// - parallelism count of 2
+/// - the login is used as a salt
 pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = hash(login.as_bytes());
@@ -56,48 +60,98 @@ pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
     enc64.decode(data).map_err(Error::from)
 }
 
-pub fn create_random_key_pair() -> Keypair {
-    let mut csprng = OsRng {};
-    let mut random: [u8; 32] = [0; 32];
-
-    csprng.fill_bytes(&mut random);
-
-    create_ed25519_key_pair(&random)
+pub trait KeyPair {
+    fn new() -> Self;
+    fn create_from(random: &[u8; 32]) -> Self;
+    fn import(keypair: &[u8]) -> Result<Box<Self>, Error>;
+    fn export(&self) -> Vec<u8>;
+    fn export_public(&self) -> Vec<u8>;
+    fn sign(&self, message: &[u8]) -> Vec<u8>;
 }
 
-pub fn create_ed25519_key_pair(random: &[u8; 32]) -> Keypair {
-    let sk: SecretKey = SecretKey::from_bytes(random).unwrap();
-    let pk: PublicKey = (&sk).into();
-    Keypair {
-        public: pk,
-        secret: sk,
+const KEY_TYPE_ED_2519: u8 = 1;
+
+pub struct Ed2519KeyPair {
+    keypair: ed25519_dalek::Keypair,
+}
+impl KeyPair for Ed2519KeyPair {
+    fn new() -> Self {
+        let mut random: [u8; 32] = [0; 32];
+
+        OsRng.fill_bytes(&mut random);
+
+        Ed2519KeyPair::create_from(&random)
+    }
+
+    fn create_from(random: &[u8; 32]) -> Self {
+        let sk: ed25519_dalek::SecretKey = ed25519_dalek::SecretKey::from_bytes(random).unwrap();
+        let pk: ed25519_dalek::PublicKey = (&sk).into();
+        Ed2519KeyPair {
+            keypair: ed25519_dalek::Keypair {
+                public: pk,
+                secret: sk,
+            },
+        }
+    }
+
+    fn import(keypair: &[u8]) -> Result<Box<Self>, Error> {
+        if keypair[0] != KEY_TYPE_ED_2519 {
+            return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
+        }
+        let keypair = ed25519_dalek::Keypair::from_bytes(&keypair[1..])?;
+        Ok(Box::new(Ed2519KeyPair { keypair }))
+    }
+
+    fn export(&self) -> Vec<u8> {
+        let mut export = vec![KEY_TYPE_ED_2519];
+        let keyp = self.keypair.to_bytes();
+        export.append(&mut keyp.to_vec());
+        export
+    }
+
+    fn export_public(&self) -> Vec<u8> {
+        let mut export = vec![KEY_TYPE_ED_2519];
+        let keyp = self.keypair.public.to_bytes();
+        export.append(&mut keyp.to_vec());
+        export
+    }
+
+    fn sign(&self, message: &[u8]) -> Vec<u8> {
+        self.keypair.sign(message).to_bytes().into()
     }
 }
 
-pub fn import_ed25519_keypair(keypair: [u8; 64]) -> Result<Keypair, Error> {
-    Keypair::from_bytes(&keypair).map_err(|_| Error::InvalidKeyPair)
+pub trait PublicKey {
+    fn import(public_key: &[u8]) -> Result<Box<Self>, Error>;
+    fn export(&self) -> Vec<u8>;
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error>;
 }
 
-pub fn export_ed25519_keypair(keypair: &Keypair) -> [u8; 64] {
-    keypair.to_bytes()
+pub struct Ed2519PublicKey {
+    public_key: ed25519_dalek::PublicKey,
 }
+impl PublicKey for Ed2519PublicKey {
+    fn import(public_key: &[u8]) -> Result<Box<Self>, Error> {
+        if public_key[0] != KEY_TYPE_ED_2519 {
+            return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
+        }
+        let public_key = ed25519_dalek::PublicKey::from_bytes(&public_key[1..])?;
+        Ok(Box::new(Self { public_key }))
+    }
 
-pub fn import_ed25519_public_key(public_key: [u8; 32]) -> Result<PublicKey, Error> {
-    PublicKey::from_bytes(&public_key).map_err(|_| Error::InvalidPublicKey)
-}
+    fn export(&self) -> Vec<u8> {
+        let mut export = vec![KEY_TYPE_ED_2519];
+        let keyp = self.public_key.to_bytes();
+        export.append(&mut keyp.to_vec());
+        export
+    }
 
-pub fn export_ed25519_public_key(public_key: &PublicKey) -> [u8; 32] {
-    public_key.to_bytes()
-}
-
-pub fn sign(keypair: &Keypair, message: &[u8]) -> Signature {
-    keypair.sign(message)
-}
-
-pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> Result<(), Error> {
-    public_key
-        .verify(message, signature)
-        .map_err(|_| Error::InvalidSignature)
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error> {
+        let sig = ed25519_dalek::Signature::from_bytes(signature)
+            .map_err(|e| Error::InvalidSignature(e.to_string()))?;
+        self.public_key.verify(data, &sig)?;
+        Ok(())
+    }
 }
 
 pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
@@ -143,28 +197,28 @@ mod tests {
     #[test]
     fn control_ed25519() {
         let rd = hash(b"not random");
-        let keypair = create_ed25519_key_pair(&rd);
+        let keypair = Ed2519KeyPair::create_from(&rd);
 
-        let exp_kp = export_ed25519_keypair(&keypair);
+        let exp_kp = keypair.export();
 
         assert_eq!(
-            base64_encode(keypair.public.as_bytes()),
+            base64_encode(keypair.keypair.public.as_bytes()),
             "VLqfMPIS3mN_KTHRQ5tvfbJKojiw3z1jqcv0oWn-1Y4"
         );
 
         assert_eq!(
-            base64_encode(keypair.secret.as_bytes()),
+            base64_encode(keypair.keypair.secret.as_bytes()),
             "RkG04WSsJLl3i6STKCBmU-sB2xqREK0VCM-qnjoq8Ik"
         );
 
         let msg = b"message to sign";
-        let signature = sign(&keypair, msg);
+        let signature = keypair.sign(&msg.to_vec());
 
-        let keypair = import_ed25519_keypair(exp_kp).unwrap();
+        let keypair = Ed2519KeyPair::import(&exp_kp).unwrap();
 
-        let exp_pub = export_ed25519_public_key(&keypair.public);
-        let imp_pub = import_ed25519_public_key(exp_pub).unwrap();
+        let exp_pub = keypair.export_public();
+        let imp_pub = Ed2519PublicKey::import(&exp_pub).unwrap();
 
-        verify(&imp_pub, msg, &signature).unwrap();
+        imp_pub.verify(msg, &signature).unwrap();
     }
 }

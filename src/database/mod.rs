@@ -2,7 +2,6 @@ pub mod database_service;
 pub mod datamodel;
 pub mod edge_table;
 pub mod node_table;
-pub mod security_policy;
 pub mod synch_log;
 
 use thiserror::Error;
@@ -29,8 +28,12 @@ pub enum Error {
 
     #[error("{0}")]
     DatabaseRowToLong(String),
+
     #[error(transparent)]
     AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+
+    #[error("{0}")]
+    TokioSendError(String),
 
     #[error(
         "database id length must be between  {} and {} bytes",
@@ -39,9 +42,6 @@ pub enum Error {
     )]
     InvalidDatabaseId(),
 
-    #[error("database schema cannot have more than {0} characters")]
-    DatabaseSchemaTooLarge(usize),
-
-    #[error("{0}")]
-    Unknown(String),
+    #[error("database schema cannot be empty or have more than {0} characters")]
+    InvalidNodeSchema(usize),
 }

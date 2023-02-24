@@ -12,8 +12,8 @@ use zstd::bulk::{compress, decompress};
 use super::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
-type ReaderFn = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
-type MappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
+pub type ReaderFn = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
+pub type MappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
 pub trait FromRow {
     fn from_row() -> MappingFn<Self>;
 }
@@ -62,6 +62,9 @@ pub fn create_connection(
     //Perfect for rust concurency model
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX);
     let conn = rusqlite::Connection::open_with_flags(path, flags)?;
+
+    //set cache capacity to 128 (from default 16)
+    conn.set_prepared_statement_cache_capacity(128);
 
     //Encrypt the database.
     //
@@ -175,9 +178,7 @@ impl DatabaseReader {
             }))
             .await;
 
-        receive_response
-            .await
-            .map_err(|e| Error::Unknown(e.to_string()))?
+        receive_response.await.map_err(Error::from)?
     }
 
     pub fn query_blocking<T: FromRow + Send + Sized + 'static>(
@@ -193,9 +194,7 @@ impl DatabaseReader {
             let _ = send_response.send(result);
         }));
 
-        receive_response
-            .blocking_recv()
-            .map_err(|e| Error::Unknown(e.to_string()))?
+        receive_response.blocking_recv().map_err(Error::from)?
     }
 
     fn select<T: Send + Sized + 'static>(
@@ -344,13 +343,13 @@ impl BufferedDatabaseWriter {
         self.sender
             .send(msg)
             .await
-            .map_err(|e| Error::Unknown(e.to_string()))
+            .map_err(|e| Error::TokioSendError(e.to_string()))
     }
 
     pub fn send_blocking(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .blocking_send(msg)
-            .map_err(|e| Error::Unknown(e.to_string()))
+            .map_err(|e| Error::TokioSendError(e.to_string()))
     }
 
     pub async fn write_async(&self, insert: Box<dyn Writable + Send>) -> Result<Result<()>> {
@@ -362,7 +361,7 @@ impl BufferedDatabaseWriter {
                 reply,
             })
             .await;
-        reciev.await.map_err(|e| Error::Unknown(e.to_string()))
+        reciev.await.map_err(Error::from)
     }
 
     pub fn write_blocking(&self, insert: Box<dyn Writable + Send>) -> Result<Result<()>> {
@@ -371,9 +370,7 @@ impl BufferedDatabaseWriter {
             writeable: vec![insert],
             reply,
         });
-        reciev
-            .blocking_recv()
-            .map_err(|e| Error::Unknown(e.to_string()))
+        reciev.blocking_recv().map_err(Error::from)
     }
 
     fn process_batch_write(buffer: &Vec<WriteQuery>, conn: &Connection) -> Result<()> {
@@ -702,25 +699,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pragma() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("test_pragma.db")?;
+    async fn test_pragma() {
+        let path: PathBuf = init_database_path("test_pragma.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
-        let mut stmt = conn.prepare("PRAGMA mmap_size")?;
-        let mut rows = stmt.query([])?;
-        let qs = rows.next()?.expect("oupssie");
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let mut stmt = conn.prepare("PRAGMA mmap_size").unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let qs = rows.next().unwrap().expect("oupssie");
 
-        let val: u32 = qs.get(0)?;
+        let val: u32 = qs.get(0).unwrap();
 
         println!("PRAGMA {} = {} ", "mmap_size", val);
-        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn async_queries() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("async_queries.db")?;
+    async fn async_queries() {
+        let path: PathBuf = init_database_path("async_queries.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
         conn.execute(
             "CREATE TABLE person (
                 id              INTEGER PRIMARY KEY,
@@ -728,7 +724,8 @@ mod tests {
                 surname         TEXT
             ) STRICT",
             [],
-        )?;
+        )
+        .unwrap();
 
         let writer = BufferedDatabaseWriter::start(10, conn).await;
 
@@ -738,9 +735,11 @@ mod tests {
                 name: "Steven".to_string(),
                 surname: "Bob".to_string(),
             }))
-            .await??;
+            .await
+            .unwrap()
+            .unwrap();
 
-        let conn = create_connection(&path, &secret, 8192, false)?;
+        let conn = create_connection(&path, &secret, 8192, false).unwrap();
         let reader = DatabaseReader::start(conn);
         let res = reader
             .query_async(
@@ -748,29 +747,30 @@ mod tests {
                 vec![],
                 Person::from_row(),
             )
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].id, 1);
-
-        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn blocking_queries() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("blocking_queries.db")?;
+    async fn blocking_queries() {
+        let path: PathBuf = init_database_path("blocking_queries.db").unwrap();
         let secret = hash(b"bytes");
-        let writer_conn = create_connection(&path, &secret, 1024, false)?;
-        writer_conn.execute(
-            "CREATE TABLE person (
+        let writer_conn = create_connection(&path, &secret, 1024, false).unwrap();
+        writer_conn
+            .execute(
+                "CREATE TABLE person (
                 id              INTEGER PRIMARY KEY,
                 name            TEXT NOT NULL,
                 surname         TEXT
             ) STRICT",
-            [],
-        )?;
+                [],
+            )
+            .unwrap();
 
         let writer = BufferedDatabaseWriter::start(10, writer_conn).await;
-        let reader_conn = create_connection(&path, &secret, 8192, false)?;
+        let reader_conn = create_connection(&path, &secret, 8192, false).unwrap();
 
         let _ = thread::spawn(move || {
             let _ = writer.write_blocking(Box::new(Person {
@@ -792,15 +792,13 @@ mod tests {
             //     print!("");
         })
         .join();
-
-        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn batch_writes_buffersize_1() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("batch_writes_buffersize_1.db")?;
+    async fn batch_writes_buffersize_1() {
+        let path: PathBuf = init_database_path("batch_writes_buffersize_1.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
 
         conn.execute(
             "CREATE TABLE person (
@@ -809,7 +807,8 @@ mod tests {
                 surname         TEXT
             ) STRICT",
             [],
-        )?;
+        )
+        .unwrap();
 
         let writer = BufferedDatabaseWriter::start(1, conn).await;
 
@@ -828,15 +827,15 @@ mod tests {
                 })],
                 reply: reply,
             };
-            writer.send_async(query).await?;
+            writer.send_async(query).await.unwrap();
             reply_list.push(reciev);
         }
-        reply_list.pop().unwrap().await??;
+        reply_list.pop().unwrap().await.unwrap().unwrap();
         //    println!("Time buffered {}", start.elapsed().as_millis());
 
         // let start = Instant::now();
 
-        let conn = create_connection(&path, &secret, 8192, false)?;
+        let conn = create_connection(&path, &secret, 8192, false).unwrap();
         let reader = DatabaseReader::start(conn);
         let res = reader
             .query_async(
@@ -844,19 +843,18 @@ mod tests {
                 vec![],
                 Person::from_row(),
             )
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(res.len(), loop_number);
         assert_eq!(res[0].id, 1);
-
-        Ok(())
     }
 
     //batch write is much faster than inserting row one by one
     #[tokio::test(flavor = "multi_thread")]
-    async fn batch_writes_buffersize_10() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("batch_writes_buffersize_10.db")?;
+    async fn batch_writes_buffersize_10() {
+        let path: PathBuf = init_database_path("batch_writes_buffersize_10.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
 
         conn.execute(
             "CREATE TABLE person (
@@ -865,7 +863,8 @@ mod tests {
                 surname         TEXT
             ) STRICT",
             [],
-        )?;
+        )
+        .unwrap();
 
         let writer = BufferedDatabaseWriter::start(10, conn).await;
         let loop_number = 100;
@@ -883,10 +882,10 @@ mod tests {
                 })],
                 reply: reply,
             };
-            writer.send_async(query).await?;
+            writer.send_async(query).await.unwrap();
             reply_list.push(reciev);
         }
-        reply_list.pop().unwrap().await??;
+        reply_list.pop().unwrap().await.unwrap().unwrap();
 
         // println!(
         //     "Time {} rows in {} ms",
@@ -896,7 +895,7 @@ mod tests {
 
         // let start = Instant::now();
 
-        let conn = create_connection(&path, &secret, 8192, false)?;
+        let conn = create_connection(&path, &secret, 8192, false).unwrap();
         let reader = DatabaseReader::start(conn);
         let res = reader
             .query_async(
@@ -904,19 +903,18 @@ mod tests {
                 vec![],
                 Person::from_row(),
             )
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(res.len(), loop_number);
         assert_eq!(res[0].id, 1);
-
-        Ok(())
     }
 
     //batch write is much faster than inserting row one by one
     #[tokio::test(flavor = "multi_thread")]
-    async fn select_parameter_test() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("select_parameter_test.db")?;
+    async fn select_parameter_test() {
+        let path: PathBuf = init_database_path("select_parameter_test.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
 
         conn.execute(
             "CREATE TABLE person (
@@ -925,7 +923,8 @@ mod tests {
                 surname         TEXT
             ) STRICT",
             [],
-        )?;
+        )
+        .unwrap();
 
         let writer = BufferedDatabaseWriter::start(10, conn).await;
         let loop_number: usize = 100;
@@ -944,10 +943,10 @@ mod tests {
             writeable: buffer,
             reply: reply,
         };
-        writer.send_async(query).await?;
-        reciev.await??;
+        writer.send_async(query).await.unwrap();
+        reciev.await.unwrap().unwrap();
 
-        let conn = create_connection(&path, &secret, 8192, false)?;
+        let conn = create_connection(&path, &secret, 8192, false).unwrap();
         let reader = DatabaseReader::start(conn);
         let res = reader
             .query_async(
@@ -955,18 +954,17 @@ mod tests {
                 vec![Box::new(1)],
                 Person::from_row(),
             )
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(res.len(), 1);
-
-        Ok(())
     }
 
     //batch write is much faster than inserting row one by one
     #[tokio::test(flavor = "multi_thread")]
-    async fn read_only_test() -> Result<(), Error> {
-        let path: PathBuf = init_database_path("read_only_test.db")?;
+    async fn read_only_test() {
+        let path: PathBuf = init_database_path("read_only_test.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
 
         conn.execute(
             "CREATE TABLE person (
@@ -975,7 +973,8 @@ mod tests {
             surname         TEXT
         ) STRICT",
             [],
-        )?;
+        )
+        .unwrap();
 
         let writer = BufferedDatabaseWriter::start(10, conn).await;
         let loop_number: usize = 1;
@@ -994,10 +993,10 @@ mod tests {
             writeable: buffer,
             reply: reply,
         };
-        writer.send_async(query).await?;
-        reciev.await??;
+        writer.send_async(query).await.unwrap();
+        reciev.await.unwrap().unwrap();
 
-        let conn = create_connection(&path, &secret, 8192, false)?;
+        let conn = create_connection(&path, &secret, 8192, false).unwrap();
         let reader = DatabaseReader::start(conn);
         let _res = reader
             .query_async(
@@ -1012,17 +1011,16 @@ mod tests {
             .query_async("pragma optimize; ".to_string(), vec![], |_e| {
                 Ok(Box::new(true))
             })
-            .await?;
-
-        Ok(())
+            .await
+            .unwrap();
     }
 
     #[test]
-    fn hash_function() -> Result<(), Error> {
+    fn hash_function() {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = init_database_path("hash_function.db")?;
+        let path: PathBuf = init_database_path("hash_function.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
         conn.execute(
             "CREATE TABLE HASHTABLE (
                 name TEXT,
@@ -1030,16 +1028,18 @@ mod tests {
                 rank INTEGER 
             ) ",
             [],
-        )?;
+        )
+        .unwrap();
 
-        let mut stmt =
-            conn.prepare("INSERT INTO HASHTABLE (name, grp, rank) VALUES (?1, ?2, ?3)")?;
-        stmt.execute(("test1", 1, 1))?;
-        stmt.execute(("test2", 1, 2))?;
-        stmt.execute(("test3", 1, 3))?;
-        stmt.execute(("test1", 2, 2))?;
-        stmt.execute(("test2", 2, 1))?;
-        stmt.execute(("test3", 2, 3))?;
+        let mut stmt = conn
+            .prepare("INSERT INTO HASHTABLE (name, grp, rank) VALUES (?1, ?2, ?3)")
+            .unwrap();
+        stmt.execute(("test1", 1, 1)).unwrap();
+        stmt.execute(("test2", 1, 2)).unwrap();
+        stmt.execute(("test3", 1, 3)).unwrap();
+        stmt.execute(("test1", 2, 2)).unwrap();
+        stmt.execute(("test2", 2, 1)).unwrap();
+        stmt.execute(("test3", 2, 3)).unwrap();
 
         let mut expected: Vec<String> = vec![];
 
@@ -1056,73 +1056,92 @@ mod tests {
         expected.push(base64_encode(hasher.finalize().as_bytes()));
 
         //hashing is order dependent, the subselect is for enforcing the order by
-        let mut stmt = conn.prepare(
-            "
+        let mut stmt = conn
+            .prepare(
+                "
         SELECT hash(name) 
         FROM (SELECT name, grp FROM HASHTABLE   ORDER BY rank)
         GROUP BY grp
          ",
-        )?;
+            )
+            .unwrap();
 
-        let results: Vec<String> = stmt.query([])?.map(|row| Ok(row.get(0)?)).collect()?;
+        let results: Vec<String> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
 
         assert_eq!(expected, results);
-
-        Ok(())
     }
 
     #[test]
-    fn compress_function() -> Result<(), Error> {
+    fn compress_function() {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = init_database_path("compress_function.db")?;
+        let path: PathBuf = init_database_path("compress_function.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
         conn.execute(
             "CREATE TABLE COMPRESS (
                 string BLOB,
                 binary BLOB
             ) ",
             [],
-        )?;
+        )
+        .unwrap();
 
         let value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
         let binary = " ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.".as_bytes();
 
         let mut stmt = conn
-            .prepare("INSERT INTO COMPRESS (string, binary) VALUES (compress(?1), compress(?2))")?;
-        stmt.execute((value, binary))?;
-        stmt.execute((value, Null))?;
-        stmt.execute((Null, binary))?;
+            .prepare("INSERT INTO COMPRESS (string, binary) VALUES (compress(?1), compress(?2))")
+            .unwrap();
+        stmt.execute((value, binary)).unwrap();
+        stmt.execute((value, Null)).unwrap();
+        stmt.execute((Null, binary)).unwrap();
 
-        let mut stmt = conn.prepare(
-            "
+        let mut stmt = conn
+            .prepare(
+                "
         SELECT decompress_text(string)
         FROM COMPRESS
          ",
-        )?;
+            )
+            .unwrap();
 
-        let results: Vec<Option<String>> = stmt.query([])?.map(|row| Ok(row.get(0)?)).collect()?;
+        let results: Vec<Option<String>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
         let expected: Vec<Option<String>> =
             vec![Some(value.to_string()), Some(value.to_string()), None];
         assert_eq!(results, expected);
 
-        let mut stmt = conn.prepare(
-            "
+        let mut stmt = conn
+            .prepare(
+                "
         SELECT decompress(binary)
         FROM COMPRESS
          ",
-        )?;
+            )
+            .unwrap();
 
-        let results: Vec<Option<Vec<u8>>> = stmt.query([])?.map(|row| Ok(row.get(0)?)).collect()?;
+        let results: Vec<Option<Vec<u8>>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
         let expected: Vec<Option<Vec<u8>>> =
             vec![Some(binary.to_vec()), None, Some(binary.to_vec())];
         assert_eq!(results, expected);
-
-        Ok(())
     }
 
     #[test]
-    fn extract_json_test() -> Result<(), Error> {
+    fn extract_json_test() {
         let json = r#"
         {
             "name": "John Doe",
@@ -1132,31 +1151,30 @@ mod tests {
                 "+44 2345678"
             ]
         }"#;
-        let v: serde_json::Value = serde_json::from_str(json)?;
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
         let mut buff = String::new();
-        extract_json(v, &mut buff)?;
+        extract_json(v, &mut buff).unwrap();
 
         let mut expected = String::new();
         expected.push_str("John Doe\n");
         expected.push_str("+44 1234567\n");
         expected.push_str("+44 2345678\n");
         assert_eq!(buff, expected);
-
-        Ok(())
     }
 
     #[test]
-    fn json_data_function() -> Result<(), Error> {
+    fn json_data_function() {
         use fallible_iterator::FallibleIterator;
-        let path: PathBuf = init_database_path("json_data_function.db")?;
+        let path: PathBuf = init_database_path("json_data_function.db").unwrap();
         let secret = hash(b"bytes");
-        let conn = create_connection(&path, &secret, 1024, false)?;
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
         conn.execute(
             "CREATE TABLE JSON (
                 string BLOB
             ) ",
             [],
-        )?;
+        )
+        .unwrap();
 
         let json = r#"
         {
@@ -1168,19 +1186,28 @@ mod tests {
             ]
         }"#;
 
-        let mut stmt = conn.prepare("INSERT INTO JSON (string) VALUES (compress(?1))")?;
+        let mut stmt = conn
+            .prepare("INSERT INTO JSON (string) VALUES (compress(?1))")
+            .unwrap();
 
-        stmt.execute([json])?;
-        stmt.execute([Null])?;
+        stmt.execute([json]).unwrap();
+        stmt.execute([Null]).unwrap();
 
-        let mut stmt = conn.prepare(
-            "
+        let mut stmt = conn
+            .prepare(
+                "
         SELECT json_data(decompress_text(string))
         FROM JSON
          ",
-        )?;
+            )
+            .unwrap();
 
-        let results: Vec<Option<String>> = stmt.query([])?.map(|row| Ok(row.get(0)?)).collect()?;
+        let results: Vec<Option<String>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
 
         let mut extract = String::new();
         extract.push_str("John Doe\n");
@@ -1190,7 +1217,5 @@ mod tests {
         let expected: Vec<Option<String>> = vec![Some(extract), None];
 
         assert_eq!(results, expected);
-
-        Ok(())
     }
 }
