@@ -22,7 +22,7 @@ pub struct Node {
     pub text: Option<String>,
     pub json: Option<String>,
     pub binary: Option<Vec<u8>>,
-    pub pub_key: Option<String>,
+    pub pub_key: String,
     pub signature: Option<Vec<u8>>,
     pub flag: i8,
 }
@@ -119,9 +119,8 @@ impl Node {
             len += v.len();
         }
 
-        if let Some(v) = &self.pub_key {
-            len += v.as_bytes().len();
-        }
+        len += &self.pub_key.as_bytes().len();
+
         if let Some(v) = &self.signature {
             len += v.len();
         }
@@ -149,9 +148,7 @@ impl Node {
             hasher.update(v);
         }
 
-        if let Some(v) = &self.pub_key {
-            hasher.update(v.as_bytes());
-        }
+        hasher.update(self.pub_key.as_bytes());
 
         hasher.finalize()
     }
@@ -192,17 +189,14 @@ impl Node {
         }
         let hash = self.hash();
 
-        match &self.pub_key {
-            Some(puk) => match &self.signature {
-                Some(sig) => {
-                    let key = base64_decode(puk.as_bytes())?;
+        match &self.signature {
+            Some(sig) => {
+                let key = base64_decode(self.pub_key.as_bytes())?;
 
-                    let pub_key = Ed2519PublicKey::import(&key)?;
-                    pub_key.verify(hash.as_bytes(), sig)?;
-                }
-                None => return Err(Error::InvalidNode("Signature is empty".to_string())),
-            },
-            None => return Err(Error::InvalidNode("Public Key is empty".to_string())),
+                let pub_key = Ed2519PublicKey::import(&key)?;
+                pub_key.verify(hash.as_bytes(), sig)?;
+            }
+            None => return Err(Error::InvalidNode("Signature is empty".to_string())),
         }
 
         Ok(())
@@ -210,7 +204,7 @@ impl Node {
 
     pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<(), Error> {
         let pubkey = base64_encode(&keypair.export_public());
-        self.pub_key = Some(pubkey);
+        self.pub_key = pubkey;
 
         if !is_valid_schema(&self.schema) {
             return Err(Error::InvalidNodeSchema(MAX_SCHEMA_SIZE));
@@ -375,7 +369,7 @@ impl Default for Node {
             text: None,
             json: None,
             binary: None,
-            pub_key: None,
+            pub_key: "".to_string(),
             signature: None,
         }
     }
@@ -466,7 +460,7 @@ mod tests {
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node.pub_key = Some("badkey".to_string());
+        node.pub_key = "badkey".to_string();
         node.verify().expect_err("");
         node.sign(&keypair).unwrap();
         node.verify().unwrap();

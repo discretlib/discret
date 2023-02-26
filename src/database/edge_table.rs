@@ -14,7 +14,7 @@ pub struct Edge {
     pub date: i64,
     pub flag: i8,
     pub json: Option<String>,
-    pub pub_key: Option<String>,
+    pub pub_key: String,
     pub signature: Option<Vec<u8>>,
 }
 impl Edge {
@@ -68,9 +68,8 @@ impl Edge {
             len += v.as_bytes().len();
         }
 
-        if let Some(v) = &self.pub_key {
-            len += v.as_bytes().len();
-        }
+        len += &self.pub_key.as_bytes().len();
+
         if let Some(v) = &self.signature {
             len += v.len();
         }
@@ -87,10 +86,7 @@ impl Edge {
             hasher.update(v.as_bytes());
         }
 
-        if let Some(v) = &self.pub_key {
-            hasher.update(v.as_bytes());
-        }
-
+        hasher.update(self.pub_key.as_bytes());
         hasher.finalize()
     }
 
@@ -127,17 +123,14 @@ impl Edge {
         }
         let hash = self.hash();
 
-        match &self.pub_key {
-            Some(puk) => match &self.signature {
-                Some(sig) => {
-                    let key = base64_decode(puk.as_bytes())?;
+        match &self.signature {
+            Some(sig) => {
+                let key = base64_decode(self.pub_key.as_bytes())?;
 
-                    let pub_key = Ed2519PublicKey::import(&key)?;
-                    pub_key.verify(hash.as_bytes(), sig)?;
-                }
-                None => return Err(Error::InvalidNode("Signature is empty".to_string())),
-            },
-            None => return Err(Error::InvalidNode("Public Key is empty".to_string())),
+                let pub_key = Ed2519PublicKey::import(&key)?;
+                pub_key.verify(hash.as_bytes(), sig)?;
+            }
+            None => return Err(Error::InvalidNode("Signature is empty".to_string())),
         }
 
         Ok(())
@@ -161,7 +154,7 @@ impl Edge {
         }
 
         let pubkey = base64_encode(&keypair.export_public());
-        self.pub_key = Some(pubkey);
+        self.pub_key = pubkey;
 
         let hash = self.hash();
 
@@ -271,7 +264,7 @@ impl Default for Edge {
             date: now(),
             flag: 0,
             json: None,
-            pub_key: None,
+            pub_key: "".to_string(),
             signature: None,
         }
     }
@@ -349,7 +342,7 @@ mod tests {
         e.verify().unwrap();
 
         let badk = Ed2519KeyPair::new();
-        e.pub_key = Some(base64_encode(&badk.export_public()[..]));
+        e.pub_key = base64_encode(&badk.export_public()[..]);
         e.verify().expect_err("msg");
         e.sign(&keypair).unwrap();
 
