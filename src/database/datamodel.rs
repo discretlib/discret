@@ -1,25 +1,27 @@
 use std::time::SystemTime;
 
-use crate::cryptography::base64_encode;
+use crate::cryptography::{base64_decode, base64_encode};
 
-use super::{edge_table::Edge, node_table::Node, synch_log::DailySynchLog, Error};
+use super::{edge_table::Edge, node_table::Node, synch_log::DailySynchLog, Result};
 
+use blake3::Hasher;
 use rand::{rngs::OsRng, RngCore};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{
+    functions::{Aggregate, Context, FunctionFlags},
+    Connection, OptionalExtension,
+};
+use zstd::{bulk::compress, bulk::decompress};
 
-pub type Result<T> = std::result::Result<T, Error>;
+//pub type Result<T> = std::result::Result<T, Error>;
 
 //Maximum allowed size for a row
 pub const MAX_ROW_LENTGH: usize = 32768; //32kb
 
-//Size in byte of a generated database id
-pub const DB_ID_SIZE: usize = 16;
-
 //min numbers of char in an id //policy
-pub const DB_ID_MIN_SIZE: usize = 22;
+pub const DB_ID_MIN_SIZE: usize = 16;
 
-//arbritrary choosen max numbers of char in an id
-pub const DB_ID_MAX_SIZE: usize = 52;
+//allows for storing a public key in the id
+pub const DB_ID_MAX_SIZE: usize = 33;
 
 pub struct RowFlag {}
 impl RowFlag {
@@ -34,11 +36,18 @@ impl RowFlag {
         v & f > 0
     }
 }
+// impl FromRow for i32 {
+//     fn from_row() -> super::database_service::MappingFn<Self> {
+//         |row| Ok(Box::new(row.get(0)?))
+//     }
+// }
+//Size in byte of a generated database id
+pub const DB_ID_SIZE: usize = 16;
 
-//create base64 encoded id,
-//with time on first to improve index locality
-pub fn new_id(time: i64) -> String {
+//id with time on first to improve index locality
+pub fn new_id(time: i64) -> Vec<u8> {
     const TIME_BYTES: usize = 4;
+
     let time = &time.to_be_bytes()[TIME_BYTES..];
 
     let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
@@ -47,12 +56,13 @@ pub fn new_id(time: i64) -> String {
     one.copy_from_slice(time);
     OsRng.fill_bytes(two);
 
-    base64_encode(&whole)
+    whole.to_vec()
 }
 
-pub fn is_valid_id(id: &String) -> bool {
-    let v = id.as_bytes().len();
-    (DB_ID_MIN_SIZE..DB_ID_MAX_SIZE).contains(&v)
+pub fn is_valid_id(id: &Vec<u8>) -> bool {
+    let v = id.len();
+
+    (DB_ID_MIN_SIZE..=DB_ID_MAX_SIZE).contains(&v)
 }
 
 pub fn now() -> i64 {
@@ -63,17 +73,6 @@ pub fn now() -> i64 {
         .try_into()
         .unwrap()
 }
-
-const SYNCH_LOG_TABLE: &str = "
-CREATE TABLE synch_log (
-	source TEXT NOT NULL,
-	target TEXT NOT NULL,
-	schema TEXT NOT NULL,
-	source_date INTEGER NOT NULL, 
-	cdate INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX synch_log_idx  ON synch_log(source, schema, source_date );";
 
 pub fn is_initialized(conn: &Connection) -> Result<bool> {
     let initialised: Option<String> = conn
@@ -88,6 +87,11 @@ pub fn is_initialized(conn: &Connection) -> Result<bool> {
 
 //initialise database and create temporary views
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
+    add_hash_function(conn)?;
+    add_compression_function(conn)?;
+    add_json_data_function(conn)?;
+    add_base64_function(conn)?;
+
     if !is_initialized(conn)? {
         conn.execute("BEGIN TRANSACTION", [])?;
         Node::create_table(conn)?;
@@ -100,9 +104,323 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+//errors for the user defined function added to sqlite
+#[derive(thiserror::Error, Debug)]
+pub enum FunctionError {
+    #[error("Invalid data type only TEXT and BLOB can be compressed")]
+    InvalidCompressType,
+    #[error("Invalid data type only BLOB can be decompressed")]
+    InvalidDeCompressType,
+    #[error("Invalid data type only TEXT can be used for json_data")]
+    InvalidJSONType,
+    #[error("{0}")]
+    CompressedSizeError(String),
+}
+
+struct Hash;
+
+impl Aggregate<Hasher, Option<String>> for Hash {
+    fn init(&self, _: &mut Context<'_>) -> rusqlite::Result<Hasher> {
+        Ok(blake3::Hasher::new())
+    }
+
+    fn step(&self, ctx: &mut Context<'_>, hasher: &mut Hasher) -> rusqlite::Result<()> {
+        let val = ctx.get::<String>(0)?;
+        hasher.update(val.as_bytes());
+        Ok(())
+    }
+
+    fn finalize(
+        &self,
+        _: &mut Context<'_>,
+        hasher: Option<Hasher>,
+    ) -> rusqlite::Result<Option<String>> {
+        match hasher {
+            Some(hash) => Ok(Some(base64_encode(hash.finalize().as_bytes()))),
+            None => Ok(None),
+        }
+    }
+}
+
+//user defined function for blake3 hashing directly in sqlite queries
+pub fn add_hash_function(db: &Connection) -> rusqlite::Result<()> {
+    db.create_aggregate_function(
+        "hash",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        Hash,
+    )?;
+
+    Ok(())
+}
+
+fn extract_json(val: serde_json::Value, buff: &mut String) -> rusqlite::Result<()> {
+    match val {
+        serde_json::Value::String(v) => {
+            buff.push_str(&v);
+            buff.push('\n');
+            Ok(())
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                extract_json(v, buff)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => {
+            for v in map {
+                extract_json(v.1, buff)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+//extract JSON textual data
+pub fn add_json_data_function(db: &Connection) -> rusqlite::Result<()> {
+    db.create_scalar_function(
+        "json_data",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+
+            let data = ctx.get_raw(0).as_str_or_null()?;
+
+            let mut extracted = String::new();
+            let result = match data {
+                Some(json) => {
+                    let v: serde_json::Value = serde_json::from_str(json)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                    extract_json(v, &mut extracted)?;
+                    Some(extracted)
+                }
+                None => None,
+            };
+
+            Ok(result)
+        },
+    )?;
+
+    Ok(())
+}
+
+//extract JSON textual data
+pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
+    db.create_scalar_function(
+        "base64_encode",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+
+            let blob = ctx.get_raw(0).as_blob_or_null()?;
+
+            let result = match blob {
+                Some(data) => Some(base64_encode(data)),
+                None => None,
+            };
+
+            Ok(result)
+        },
+    )?;
+
+    db.create_scalar_function(
+        "base64_decode",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+
+            let str = ctx.get_raw(0).as_str_or_null()?;
+
+            let result = match str {
+                Some(data) => {
+                    let val = base64_decode(data.as_bytes());
+                    match val {
+                        Ok(e) => Some(e),
+                        Err(_) => None,
+                    }
+                }
+                None => None,
+            };
+
+            Ok(result)
+        },
+    )?;
+
+    Ok(())
+}
+
+//Compression functions using zstd
+// compress: compress TEXT or BLOG type
+// decompress: decompress BLOG into a BLOB
+// decompress_text: decompress BLOB into TEXT
+pub fn add_compression_function(db: &Connection) -> rusqlite::Result<()> {
+    const COMPRESSED: u8 = 1;
+    db.create_scalar_function(
+        "compress",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+            const COMPRESSION_LEVEL: i32 = 3;
+
+            let data = ctx.get_raw(0);
+            let data_type = data.data_type();
+
+            match data_type {
+                rusqlite::types::Type::Text => {
+                    let text = data
+                        .as_str()
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                    let compressed = compress(text.as_bytes(), COMPRESSION_LEVEL)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+
+                    let mut result;
+                    if text.as_bytes().len() <= compressed.len() {
+                        result = vec![0];
+                        result.extend(text.as_bytes());
+                    } else {
+                        result = vec![COMPRESSED];
+                        result.extend(compressed);
+                    }
+
+                    Ok(Some(result))
+                }
+                rusqlite::types::Type::Blob => {
+                    let data = data
+                        .as_blob()
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                    let compressed = compress(data, COMPRESSION_LEVEL)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+
+                    let mut result;
+                    if data.len() <= compressed.len() {
+                        result = vec![0];
+                        result.extend(data);
+                    } else {
+                        result = vec![COMPRESSED];
+                        result.extend(compressed);
+                    }
+
+                    Ok(Some(result))
+                }
+                rusqlite::types::Type::Null => Ok(None),
+                _ => Err(rusqlite::Error::UserFunctionError(
+                    FunctionError::InvalidCompressType.into(),
+                )),
+            }
+        },
+    )?;
+
+    db.create_scalar_function(
+        "decompress",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+
+            let data = ctx.get_raw(0);
+            let data_type = data.data_type();
+
+            match data_type {
+                rusqlite::types::Type::Blob => {
+                    let dat = data
+                        .as_blob()
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+
+                    if dat[0] != COMPRESSED {
+                        Ok(Some(dat[1..].to_vec()))
+                    } else {
+                        let data = &dat[1..];
+                        let size = zstd::zstd_safe::get_frame_content_size(data).map_err(|e| {
+                            rusqlite::Error::UserFunctionError(
+                                FunctionError::CompressedSizeError(e.to_string()).into(),
+                            )
+                        })?;
+                        match size {
+                            Some(siz) => {
+                                let decomp = decompress(data, siz as usize)
+                                    .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                                Ok(Some(decomp))
+                            }
+                            None => Err(rusqlite::Error::UserFunctionError(
+                                FunctionError::CompressedSizeError("Empty size".to_string()).into(),
+                            )),
+                        }
+                    }
+                }
+                rusqlite::types::Type::Null => Ok(None),
+                _ => Err(rusqlite::Error::UserFunctionError(
+                    FunctionError::InvalidDeCompressType.into(),
+                )),
+            }
+        },
+    )?;
+
+    db.create_scalar_function(
+        "decompress_text",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
+
+            let data = ctx.get_raw(0);
+            let data_type = data.data_type();
+
+            match data_type {
+                rusqlite::types::Type::Blob => {
+                    let dat = data
+                        .as_blob()
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+
+                    if dat[0] != COMPRESSED {
+                        let data = &dat[1..];
+                        let text = std::str::from_utf8(data)
+                            .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?
+                            .to_string();
+                        Ok(Some(text))
+                    } else {
+                        let data = &dat[1..];
+                        let size = zstd::zstd_safe::get_frame_content_size(data).map_err(|e| {
+                            rusqlite::Error::UserFunctionError(
+                                FunctionError::CompressedSizeError(e.to_string()).into(),
+                            )
+                        })?;
+                        match size {
+                            Some(siz) => {
+                                let data = &dat[1..];
+                                let decomp = decompress(data, siz as usize)
+                                    .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                                let text = std::str::from_utf8(&decomp)
+                                    .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?
+                                    .to_string();
+                                Ok(Some(text))
+                            }
+                            None => Err(rusqlite::Error::UserFunctionError(
+                                FunctionError::CompressedSizeError("Empty size".to_string()).into(),
+                            )),
+                        }
+                    }
+                }
+                rusqlite::types::Type::Null => Ok(None),
+                _ => Err(rusqlite::Error::UserFunctionError(
+                    FunctionError::InvalidDeCompressType.into(),
+                )),
+            }
+        },
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fallible_iterator::FallibleIterator;
+    use rusqlite::types::Null;
     #[test]
     fn database_id_test() {
         let time = now();
@@ -113,8 +431,234 @@ mod tests {
 
         assert_eq!(id1[0..3], id2[0..3]);
         assert_ne!(id1, id2);
+        assert_eq!(id1.len(), DB_ID_SIZE);
+    }
 
-        println!("{}", id1.as_bytes().len());
-        println!("{}", id2.as_bytes().len());
+    #[test]
+    fn compress_test() {
+        let text = "hello from a larger string larger than that very large very large very large very large";
+        let compressed = compress(text.as_bytes(), 3).unwrap();
+        println!("size {} - {}", text.as_bytes().len(), compressed.len());
+
+        let mut content;
+        if text.as_bytes().len() <= compressed.len() {
+            content = vec![0];
+            content.extend(text.as_bytes());
+        } else {
+            content = vec![1];
+            content.extend(compressed);
+        }
+
+        let bytes = &content[..];
+        let result;
+        if bytes[0] == 0 {
+            result = bytes[1..].to_vec();
+        } else {
+            let compressed = &bytes[1..];
+            let size = zstd::zstd_safe::get_frame_content_size(&compressed)
+                .unwrap()
+                .unwrap();
+            result = decompress(&compressed, size as usize).unwrap();
+        }
+
+        assert_eq!(text.as_bytes(), result);
+    }
+
+    #[test]
+    fn hash_function() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE HASHTABLE (
+                name TEXT,
+                grp INTEGER,
+                rank INTEGER 
+            ) ",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("INSERT INTO HASHTABLE (name, grp, rank) VALUES (?1, ?2, ?3)")
+            .unwrap();
+        stmt.execute(("test1", 1, 1)).unwrap();
+        stmt.execute(("test2", 1, 2)).unwrap();
+        stmt.execute(("test3", 1, 3)).unwrap();
+        stmt.execute(("test1", 2, 2)).unwrap();
+        stmt.execute(("test2", 2, 1)).unwrap();
+        stmt.execute(("test3", 2, 3)).unwrap();
+
+        let mut expected: Vec<String> = vec![];
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update("test1".as_bytes());
+        hasher.update("test2".as_bytes());
+        hasher.update("test3".as_bytes());
+        expected.push(base64_encode(hasher.finalize().as_bytes()));
+
+        hasher = blake3::Hasher::new();
+        hasher.update("test2".as_bytes());
+        hasher.update("test1".as_bytes());
+        hasher.update("test3".as_bytes());
+        expected.push(base64_encode(hasher.finalize().as_bytes()));
+
+        //hashing is order dependent, the subselect is for enforcing the order by
+        let mut stmt = conn
+            .prepare(
+                "
+        SELECT hash(name) 
+        FROM (SELECT name, grp FROM HASHTABLE   ORDER BY rank)
+        GROUP BY grp
+         ",
+            )
+            .unwrap();
+
+        let results: Vec<String> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
+
+        assert_eq!(expected, results);
+    }
+
+    #[test]
+    fn compress_function() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE COMPRESS (
+                string BLOB,
+                binary BLOB
+            ) ",
+            [],
+        )
+        .unwrap();
+
+        let value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+        let binary = " ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.".as_bytes();
+
+        let mut stmt = conn
+            .prepare("INSERT INTO COMPRESS (string, binary) VALUES (compress(?1), compress(?2))")
+            .unwrap();
+        stmt.execute((value, binary)).unwrap();
+        stmt.execute((value, Null)).unwrap();
+        stmt.execute((Null, binary)).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "
+        SELECT decompress_text(string)
+        FROM COMPRESS
+         ",
+            )
+            .unwrap();
+
+        let results: Vec<Option<String>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
+        let expected: Vec<Option<String>> =
+            vec![Some(value.to_string()), Some(value.to_string()), None];
+        assert_eq!(results, expected);
+
+        let mut stmt = conn
+            .prepare(
+                "
+        SELECT decompress(binary)
+        FROM COMPRESS
+         ",
+            )
+            .unwrap();
+
+        let results: Vec<Option<Vec<u8>>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
+        let expected: Vec<Option<Vec<u8>>> =
+            vec![Some(binary.to_vec()), None, Some(binary.to_vec())];
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn extract_json_test() {
+        let json = r#"
+        {
+            "name": "John Doe",
+            "age": 43,
+            "phones": [
+                "+44 1234567",
+                "+44 2345678"
+            ]
+        }"#;
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        let mut buff = String::new();
+        extract_json(v, &mut buff).unwrap();
+
+        let mut expected = String::new();
+        expected.push_str("John Doe\n");
+        expected.push_str("+44 1234567\n");
+        expected.push_str("+44 2345678\n");
+        assert_eq!(buff, expected);
+    }
+
+    #[test]
+    fn json_data_function() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE JSON (
+                string BLOB
+            ) ",
+            [],
+        )
+        .unwrap();
+
+        let json = r#"
+        {
+            "name": "John Doe",
+            "age": 43,
+            "phones": [
+                "+44 1234567",
+                "+44 2345678"
+            ]
+        }"#;
+
+        let mut stmt = conn
+            .prepare("INSERT INTO JSON (string) VALUES (compress(?1))")
+            .unwrap();
+
+        stmt.execute([json]).unwrap();
+        stmt.execute([Null]).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "
+        SELECT json_data(decompress_text(string))
+        FROM JSON
+         ",
+            )
+            .unwrap();
+
+        let results: Vec<Option<String>> = stmt
+            .query([])
+            .unwrap()
+            .map(|row| Ok(row.get(0)?))
+            .collect()
+            .unwrap();
+
+        let mut extract = String::new();
+        extract.push_str("John Doe\n");
+        extract.push_str("+44 1234567\n");
+        extract.push_str("+44 2345678\n");
+
+        let expected: Vec<Option<String>> = vec![Some(extract), None];
+
+        assert_eq!(results, expected);
     }
 }

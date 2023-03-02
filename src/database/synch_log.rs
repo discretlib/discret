@@ -1,30 +1,58 @@
+use std::collections::HashSet;
+
 use rusqlite::{Connection, Row};
 
-use super::Error;
+use super::Result;
 
 use super::database_service::{FromRow, Writable};
 
+use super::security_policy::POLICY_GROUP_SCHEMA;
+
+// upon insert node
+//      invalidate day from policy group
+// upon insert edge
+//      invalidate source from policy group
+// upon update node
+//      invalidate every policy group it references
+// upon update edge
+//      invalidate source policy group
 pub struct DailySynchLog {
-    pub source: String,
+    pub policy_group: Vec<u8>,
     pub schema: String,
     pub date: i64,
-    pub previous_day: Option<i64>,
-    pub daily_hash: Vec<u8>,
+    pub row_num: i32,
+    pub size: i64,
+    pub daily_hash: Option<Vec<u8>>,
     pub history_hash: Option<Vec<u8>>,
 }
 impl DailySynchLog {
-    pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    pub fn create_table(conn: &Connection) -> Result<()> {
         conn.execute(
             " 
-            CREATE TABLE daily_synch_log (
-                source TEXT NOT NULL,
+            CREATE TABLE daily_node_log (
+                policy_group BLOB NOT NULL,
                 schema TEXT NOT NULL,
                 date INTEGER NOT NULL,
-                previous_day INTEGER,
+                row_num INTEGER,
+                size INTEGER,
                 daily_hash BLOB,
                 history_hash BLOB,
-                PRIMARY KEY (source, schema, date)
-            )STRICT;
+                PRIMARY KEY (policy_group, schema, date)
+            ) WITHOUT ROWID, STRICT;
+            ",
+            [],
+        )?;
+        conn.execute(
+            " 
+            CREATE TABLE daily_edge_log (
+                policy_group BLOB NOT NULL,
+                schema TEXT NOT NULL,
+                date INTEGER NOT NULL,
+                row_num INTEGER,
+                daily_hash BLOB,
+                history_hash BLOB,
+                PRIMARY KEY (policy_group, schema, date)
+            )WITHOUT ROWID, STRICT;
             ",
             [],
         )?;
@@ -32,31 +60,33 @@ impl DailySynchLog {
     }
 }
 impl FromRow for DailySynchLog {
-    fn from_row() -> fn(&Row) -> Result<Box<Self>, rusqlite::Error> {
+    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
             Ok(Box::new(DailySynchLog {
-                source: row.get(0)?,
+                policy_group: row.get(0)?,
                 schema: row.get(1)?,
                 date: row.get(2)?,
-                previous_day: row.get(3)?,
-                daily_hash: row.get(4)?,
-                history_hash: row.get(5)?,
+                row_num: row.get(3)?,
+                size: row.get(4)?,
+                daily_hash: row.get(5)?,
+                history_hash: row.get(6)?,
             }))
         }
     }
 }
 impl Writable for DailySynchLog {
-    fn write(&self, conn: &Connection) -> Result<(), Error> {
+    fn write(&self, conn: &Connection) -> Result<()> {
         //unixepoch(Date(?, 'unixepoch'))
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO daily_synch_log (source, schema, date, previous_day, daily_hash, history_hash) 
-                            VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO daily_node_log (policy_group, schema, date, row_num, size, daily_hash, history_hash) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)",
         )?;
         insert_stmt.execute((
-            &self.source,
+            &self.policy_group,
             &self.schema,
             &self.date,
-            &self.previous_day,
+            &self.row_num,
+            &self.size,
             &self.daily_hash,
             &self.history_hash,
         ))?;
@@ -66,55 +96,125 @@ impl Writable for DailySynchLog {
 impl Default for DailySynchLog {
     fn default() -> Self {
         Self {
-            source: "".to_string(),
+            policy_group: vec![],
             schema: "".to_string(),
             date: 0,
-            previous_day: None,
-            daily_hash: vec![],
+            row_num: 0,
+            size: 0,
+            daily_hash: None,
             history_hash: None,
         }
     }
 }
 
+// const INVALIDATE_POLICY_QUERY: &str = "
+// INSERT INTO daily_node_log(policy_group, schema, date, row_num, size, daily_hash, history_hash)
+// SELECT pol_grp.id as policy_group , node.schema as schema, unixepoch(Date(node.mdate/1000, 'unixepoch')) as date, 0 as row_num, 0 as size,NULL as daily_hash,NULL as history_hash
+// from node
+// JOIN edge ON
+//     edge.target = node.id
+// JOIN node pol_grp ON
+//     pol_grp.id = edge.source
+//     AND pol_grp.schema = ?
+// WHERE
+//     node.id = ?
+//     AND node.mdate = ?
+// ON CONFLICT (policy_group, schema, date)
+// DO UPDATE SET
+//     row_num = 0,
+//     size = 0,
+//     daily_hash = NULL,
+//     history_hash = NULL";
+
+const INVALIDATE_NODE_QUERY: &str = "
+INSERT INTO daily_node_log(policy_group, schema, date, row_num, size, daily_hash, history_hash) 
+SELECT pol_grp.id as policy_group , node.schema as schema, unixepoch(Date(node.mdate/1000, 'unixepoch')) as date, 0 as row_num, 0 as size,NULL as daily_hash,NULL as history_hash
+from node 
+JOIN edge ON
+    edge.source = node.id
+JOIN node pol_grp ON
+    pol_grp.id = edge.target
+    AND pol_grp.schema = ? 
+WHERE 
+    node.id = ?
+    AND node.mdate = ?
+ON CONFLICT (policy_group, schema, date)
+DO UPDATE SET 
+    row_num = 0,
+    size = 0,
+    daily_hash = NULL,
+    history_hash = NULL";
+
+pub fn invalidate_node_log(node_id: &Vec<u8>, date: i64, conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare_cached(INVALIDATE_NODE_QUERY)?;
+    stmt.execute((POLICY_GROUP_SCHEMA, node_id, date))?;
+    Ok(())
+}
+
+pub struct InvalidateNodeDay {
+    days: HashSet<(Vec<u8>, String, i64)>,
+}
+impl Writable for InvalidateNodeDay {
+    fn write(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO daily_node_log 
+                    (policy_group, schema, date, row_num, size, daily_hash, history_hash)
+                VALUES 
+                    (?, ?,  unixepoch(Date(?/1000, 'unixepoch')), 0 , 0, NULL, NULL)
+                ON CONFLICT (policy_group, schema, date)
+                DO UPDATE SET
+                    row_num = 0,
+                    size = 0,
+                    daily_hash = NULL,
+                    history_hash = NULL",
+        )?;
+        for (pol_grp, schema, date) in &self.days {
+            stmt.execute((pol_grp, schema, date))?;
+        }
+        Ok(())
+    }
+}
+impl InvalidateNodeDay {
+    pub fn new() -> Self {
+        Self {
+            days: HashSet::new(),
+        }
+    }
+    pub fn add(&mut self, pol_grp: Vec<u8>, schema: String, date: i64) {
+        self.days.insert((pol_grp, schema, date));
+    }
+}
+
+// pub fn refresh_node_log(policy_group: &Vec<u8>, conn: &Connection) {}
+
+// pub fn get_max_node_log(policy_group: &Vec<u8>, schema: &String, conn: &Connection) {}
+
+// pub fn get_log_history(policy_group: &Vec<u8>, schema: &String, conn: &Connection) {}
+
 #[cfg(test)]
 mod tests {
 
+    use rusqlite::Connection;
+
     use crate::{
-        cryptography::{base64_encode, hash},
+        cryptography::hash,
         database::{
-            database_service::{create_connection, FromRow, Writable},
+            database_service::{FromRow, Writable},
             datamodel::{now, prepare_connection},
         },
     };
 
-    use std::{
-        error::Error,
-        fs,
-        path::{Path, PathBuf},
-    };
-
     use super::DailySynchLog;
-    const DATA_PATH: &str = "test/data/datamodel/";
-    fn init_database_path(file: &str) -> Result<PathBuf, Box<dyn Error>> {
-        let mut path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path)?;
-        path.push(file);
-        if Path::exists(&path) {
-            fs::remove_file(&path)?;
-        }
-        Ok(path)
-    }
+
     #[test]
     fn daily_log_insert() {
-        let path: PathBuf = init_database_path("daily_log_insert.db").unwrap();
-        let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
-        let source = base64_encode(&hash(b"source"));
-        let daily_hash = hash(b"hash").to_vec();
+        let policy_group = hash(b"source").to_vec();
+        let daily_hash = Some(hash(b"hash").to_vec());
 
         let log = DailySynchLog {
-            source,
+            policy_group,
             schema: "TEST".to_string(),
             date: now(),
             daily_hash,
@@ -124,7 +224,7 @@ mod tests {
         log.write(&conn).unwrap();
         log.write(&conn).unwrap();
         let mut stmt = conn
-            .prepare("SELECT daily_synch_log.* FROM daily_synch_log")
+            .prepare("SELECT daily_node_log.* FROM daily_node_log")
             .unwrap();
         let results = stmt.query_map([], DailySynchLog::from_row()).unwrap();
         assert_eq!(1, results.count());

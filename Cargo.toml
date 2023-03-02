@@ -39,7 +39,7 @@ rand = "0.8.5"
 ## Network
 quinn = { version = "0.9.3", default-features = false, features = ["tls-rustls", "ring", "runtime-tokio"] }
 futures = "0.3.26"
-socket2 = "0.4.7"
+socket2 = "0.5.1"
 
 #Error and tracing
 thiserror = "1.0.38"
@@ -52,6 +52,7 @@ tracing-subscriber = "0.3.16"
 tokio = { version = "1.25.0", features = ["full"] }
 lazy_static = "1.4.0"
 fallible-iterator = "0.2"
+chrono = "0.4.23"
 
 
 

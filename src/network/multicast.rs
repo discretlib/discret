@@ -170,7 +170,7 @@ fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
 /// On unixes we bind to the multicast address, which causes multicast packets to be filtered
 #[cfg(unix)]
 fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
-    socket.set_reuse_port(true)?;
+    socket.set_reuse_address(true)?;
     socket.bind(&socket2::SockAddr::from(*addr))
 }
 

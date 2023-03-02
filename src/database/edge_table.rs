@@ -1,49 +1,48 @@
 use super::{
     database_service::{FromRow, Writable},
     datamodel::{is_valid_id, now, RowFlag, MAX_ROW_LENTGH},
-    Error,
+    Error, Result,
 };
-use crate::cryptography::{
-    base64_decode, base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey,
-};
+use crate::cryptography::{base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 pub struct Edge {
-    pub source: String,
-    pub target: String,
+    pub source: Vec<u8>,
+    pub target: Vec<u8>,
     pub date: i64,
     pub flag: i8,
     pub json: Option<String>,
-    pub pub_key: String,
-    pub signature: Option<Vec<u8>>,
+    pub pub_key: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub size: i32,
 }
 impl Edge {
-    pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    pub fn create_table(conn: &Connection) -> Result<()> {
         conn.execute(
             " 
             CREATE TABLE edge_all (
-                source TEXT NOT NULL,
-                target TEXT NOT NULL,
+                source BLOB NOT NULL,
+                target BLOB NOT NULL,
                 date INTEGER NOT NULL, 
                 flag INTEGER DEFAULT 0,
                 json TEXT,
-                pub_key TEXT,
-                signature BLOB,
+                pub_key BLOB NOT NULL,
+                signature BLOB NOT NULL,
+                size INTEGER DEFAULT 0,
                 PRIMARY KEY (source,target,date)
-            ) STRICT;
+            ) WITHOUT ROWID, STRICT;
             ",
             [],
         )?;
+
         conn.execute(
-            " 
-            CREATE INDEX edge_target_source_idx ON edge_all(target, source, date)",
+            " CREATE UNIQUE INDEX edge_target_source_date_idx ON edge_all(target, source, date)",
             [],
         )?;
-
         Ok(())
     }
 
-    pub fn create_temporary_view(conn: &Connection) -> Result<(), rusqlite::Error> {
+    pub fn create_temporary_view(conn: &Connection) -> Result<()> {
         //this view filter deleted edge
         conn.execute(
             " 
@@ -56,10 +55,10 @@ impl Edge {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    fn len(&self) -> i32 {
         let mut len = 0;
-        len += &self.source.as_bytes().len();
-        len += &self.target.as_bytes().len();
+        len += &self.source.len();
+        len += &self.target.len();
 
         len += 8; //date
         len += 1; //flag
@@ -68,25 +67,26 @@ impl Edge {
             len += v.as_bytes().len();
         }
 
-        len += &self.pub_key.as_bytes().len();
+        len += &self.pub_key.len();
 
-        if let Some(v) = &self.signature {
-            len += v.len();
-        }
-        len
+        len += &self.signature.len();
+        len += 4; //size
+
+        len.try_into().unwrap()
     }
 
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(self.source.as_bytes());
-        hasher.update(self.target.as_bytes());
+        hasher.update(&self.source);
+        hasher.update(&self.target);
         hasher.update(&self.date.to_le_bytes());
         hasher.update(&self.flag.to_le_bytes());
         if let Some(v) = &self.json {
             hasher.update(v.as_bytes());
         }
 
-        hasher.update(self.pub_key.as_bytes());
+        hasher.update(&self.pub_key);
+        hasher.update(&self.size.to_le_bytes());
         hasher.finalize()
     }
 
@@ -97,84 +97,83 @@ impl Edge {
         self.json = None;
     }
 
-    pub fn verify(&self) -> Result<(), Error> {
+    pub fn verify(&self) -> Result<()> {
         let size = self.len();
-        if size > MAX_ROW_LENTGH {
+        if size > MAX_ROW_LENTGH.try_into().unwrap() {
             return Err(Error::DatabaseRowToLong(format!(
                 "Edge {}-{} is too long {} bytes instead of {}",
-                &self.source, &self.target, size, MAX_ROW_LENTGH
+                base64_encode(&self.source),
+                base64_encode(&self.target),
+                size,
+                MAX_ROW_LENTGH
             )));
         }
 
         if !is_valid_id(&self.source) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         if !is_valid_id(&self.target) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         //ensure that the Json field is well formed
         if let Some(v) = &self.json {
-            let v: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(v);
+            let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(v);
             if v.is_err() {
-                return Err(Error::from(v.expect_err("msg")));
+                return Err(Error::from(v.expect_err("this is a valid error")));
             }
         }
         let hash = self.hash();
 
-        match &self.signature {
-            Some(sig) => {
-                let key = base64_decode(self.pub_key.as_bytes())?;
-
-                let pub_key = Ed2519PublicKey::import(&key)?;
-                pub_key.verify(hash.as_bytes(), sig)?;
-            }
-            None => return Err(Error::InvalidNode("Signature is empty".to_string())),
-        }
+        let pub_key = Ed2519PublicKey::import(&self.pub_key)?;
+        pub_key.verify(hash.as_bytes(), &self.signature)?;
 
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<(), Error> {
+    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<()> {
         if !is_valid_id(&self.source) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         if !is_valid_id(&self.target) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         //ensure that the Json field is well formed
         if let Some(v) = &self.json {
-            let v: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(v);
+            let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(v);
             if v.is_err() {
-                return Err(Error::from(v.expect_err("already checked")));
+                return Err(Error::from(v.expect_err("this is a valid error")));
             }
         }
 
-        let pubkey = base64_encode(&keypair.export_public());
-        self.pub_key = pubkey;
+        self.pub_key = keypair.export_public();
 
+        self.size = self.len();
+        if self.size > MAX_ROW_LENTGH.try_into().unwrap() {
+            return Err(Error::DatabaseRowToLong(format!(
+                "Edge {}-{} is too long {} bytes instead of {}",
+                base64_encode(&self.source),
+                base64_encode(&self.target),
+                self.size,
+                MAX_ROW_LENTGH
+            )));
+        }
         let hash = self.hash();
 
         let signature = keypair.sign(hash.as_bytes());
-        self.signature = Some(signature);
-
-        let size = self.len();
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Edge {}-{} is too long {} bytes instead of {}",
-                &self.source, &self.target, size, MAX_ROW_LENTGH
-            )));
-        }
+        self.signature = signature;
 
         Ok(())
     }
 }
 
 impl FromRow for Edge {
-    fn from_row() -> fn(&Row) -> Result<Box<Self>, rusqlite::Error> {
+    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
             Ok(Box::new(Edge {
                 source: row.get(0)?,
@@ -184,25 +183,26 @@ impl FromRow for Edge {
                 json: row.get(4)?,
                 pub_key: row.get(5)?,
                 signature: row.get(6)?,
+                size: row.get(7)?,
             }))
         }
     }
 }
 
 impl Writable for Edge {
-    fn write(&self, conn: &Connection) -> Result<(), Error> {
+    fn write(&self, conn: &Connection) -> Result<()> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO edge_all (source, target, date, flag, json, pub_key, signature) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO edge_all (source, target, date, flag, json, pub_key, signature, size) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
 
         let mut chek_stmt =
-            conn.prepare_cached("SELECT edge_all.rowid FROM edge_all WHERE source=? AND target=?")?;
+            conn.prepare_cached("SELECT 1 FROM edge_all WHERE source=? AND target=?")?;
         let existing_row: Option<i64> = chek_stmt
             .query_row([&self.source, &self.target], |row| row.get(0))
             .optional()?;
 
-        if let Some(rowid) = existing_row {
+        if existing_row.is_some() {
             if RowFlag::is(RowFlag::KEEP_HISTORY, &self.flag) {
                 insert_stmt.execute((
                     &self.source,
@@ -212,6 +212,7 @@ impl Writable for Edge {
                     &self.json,
                     &self.pub_key,
                     &self.signature,
+                    &self.size,
                 ))?;
             } else {
                 let mut update_node_stmt = conn.prepare_cached(
@@ -223,9 +224,11 @@ impl Writable for Edge {
                 flag = ?,
                 json = ?,
                 pub_key = ?,
-                signature = ?
-            WHERE
-                rowid = ? ",
+                signature = ?,
+                size = ?
+            WHERE 
+                source=? 
+                AND target=?",
                 )?;
 
                 update_node_stmt.execute((
@@ -236,7 +239,9 @@ impl Writable for Edge {
                     &self.json,
                     &self.pub_key,
                     &self.signature,
-                    &rowid,
+                    &self.size,
+                    &self.source,
+                    &self.target,
                 ))?;
             }
         } else {
@@ -250,6 +255,7 @@ impl Writable for Edge {
                 &self.json,
                 &self.pub_key,
                 &self.signature,
+                &self.size,
             ))?;
         }
         Ok(())
@@ -259,13 +265,14 @@ impl Writable for Edge {
 impl Default for Edge {
     fn default() -> Self {
         Self {
-            source: "".to_string(),
-            target: "".to_string(),
+            source: vec![],
+            target: vec![],
             date: now(),
             flag: 0,
             json: None,
-            pub_key: "".to_string(),
-            signature: None,
+            pub_key: vec![],
+            signature: vec![],
+            size: 0,
         }
     }
 }
@@ -274,31 +281,15 @@ impl Default for Edge {
 mod tests {
 
     use crate::{
-        cryptography::{hash, Ed2519KeyPair, KeyPair},
+        cryptography::{Ed2519KeyPair, KeyPair},
         database::{
-            database_service::create_connection,
             datamodel::{new_id, prepare_connection, DB_ID_MAX_SIZE},
+            node_table::Node,
+            security_policy::{PolicyNode, PolicyRight, PEER_SCHEMA, POLICY_GROUP_SCHEMA},
         },
     };
 
     use super::*;
-
-    use std::{
-        error::Error,
-        fs,
-        path::{Path, PathBuf},
-    };
-
-    const DATA_PATH: &str = "test/data/datamodel/";
-    fn init_database_path(file: &str) -> Result<PathBuf, Box<dyn Error>> {
-        let mut path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path)?;
-        path.push(file);
-        if Path::exists(&path) {
-            fs::remove_file(&path)?;
-        }
-        Ok(path)
-    }
 
     #[test]
     fn edge_signature() {
@@ -342,7 +333,7 @@ mod tests {
         e.verify().unwrap();
 
         let badk = Ed2519KeyPair::new();
-        e.pub_key = base64_encode(&badk.export_public()[..]);
+        e.pub_key = badk.export_public();
         e.verify().expect_err("msg");
         e.sign(&keypair).unwrap();
 
@@ -363,12 +354,12 @@ mod tests {
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        e.source = "".to_string();
+        e.source = vec![];
         e.verify().expect_err("msg");
         e.sign(&keypair).expect_err("msg");
 
         e.source = source.clone();
-        e.target = "".to_string();
+        e.target = vec![];
         e.verify().expect_err("msg");
         e.sign(&keypair).expect_err("msg");
 
@@ -384,9 +375,9 @@ mod tests {
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        let arr = [0 as u8; DB_ID_MAX_SIZE];
+        let arr = [0 as u8; DB_ID_MAX_SIZE + 1];
 
-        e.target = base64_encode(&arr);
+        e.target = arr.to_vec();
         e.verify().expect_err("msg");
         e.sign(&keypair).expect_err("msg");
 
@@ -399,24 +390,130 @@ mod tests {
 
     #[test]
     fn edge_save() {
-        let path: PathBuf = init_database_path("edge_save.db").unwrap();
-        let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let keypair = Ed2519KeyPair::new();
-        let source = new_id(10);
-        let target = new_id(10);
+
+        let mut policy_group = Node {
+            schema: POLICY_GROUP_SCHEMA.to_string(),
+            flag: RowFlag::KEEP_HISTORY,
+            text: Some("Some Policy Group".to_string()),
+            ..Default::default()
+        };
+        policy_group.sign(&keypair).unwrap();
+        policy_group.write(&conn).unwrap();
+
+        let mut peer = Node {
+            id: keypair.export_public(),
+            schema: PEER_SCHEMA.to_string(),
+            cdate: policy_group.mdate,
+            mdate: policy_group.mdate,
+            ..Default::default()
+        };
+        peer.sign(&keypair).unwrap();
+        peer.write(&conn).unwrap();
+
+        let mut policy_group_peer = Edge {
+            source: policy_group.id.clone(),
+            target: peer.id.clone(),
+            date: policy_group.mdate,
+            flag: RowFlag::KEEP_HISTORY,
+            ..Default::default()
+        };
+        policy_group_peer.sign(&keypair).unwrap();
+        policy_group_peer.write(&conn).unwrap();
+
+        let mut policy = PolicyNode {
+            ..Default::default()
+        };
+        policy.node.mdate = policy_group.mdate;
+        policy.node.cdate = policy_group.mdate;
+        let chat_schema = "chat";
+        let message_schema = "msg";
+        policy
+            .policy
+            .set_right(chat_schema, PolicyRight::READ | PolicyRight::CREATE);
+        policy
+            .policy
+            .set_right(message_schema, PolicyRight::READ | PolicyRight::CREATE);
+
+        policy.policy.add_edge_policy(message_schema, chat_schema);
+        policy.sign(&keypair).unwrap();
+        policy.node.write(&conn).unwrap();
+
+        let mut policy_policygr_edge = Edge {
+            source: policy_group.id.clone(),
+            target: policy.node.id.clone(),
+            date: policy_group.mdate,
+            flag: RowFlag::KEEP_HISTORY,
+            ..Default::default()
+        };
+        policy_policygr_edge.sign(&keypair).unwrap();
+        policy_policygr_edge.write(&conn).unwrap();
+
+        let mut policy_peer = Edge {
+            source: policy.node.id.clone(),
+            target: peer.id.clone(),
+            date: policy_group.mdate,
+            flag: RowFlag::KEEP_HISTORY,
+            ..Default::default()
+        };
+        policy_peer.sign(&keypair).unwrap();
+        policy_peer.write(&conn).unwrap();
+
+        let mut chat_group = Node {
+            schema: chat_schema.to_string(),
+            cdate: policy_group.mdate,
+            mdate: policy_group.mdate,
+            ..Default::default()
+        };
+        chat_group.sign(&keypair).unwrap();
+        chat_group.write(&conn).unwrap();
+
+        let mut message = Node {
+            schema: message_schema.to_string(),
+            cdate: policy_group.mdate,
+            mdate: policy_group.mdate,
+            text: Some("Hello world".to_string()),
+            ..Default::default()
+        };
+        message.sign(&keypair).unwrap();
+        message.write(&conn).unwrap();
+
         let mut e = Edge {
-            source: source.clone(),
-            target,
+            source: message.id.clone(),
+            target: policy_group.id.clone(),
             ..Default::default()
         };
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
 
-        let mut stmt = conn.prepare("SELECT edge.* FROM edge").unwrap();
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let mut e = Edge {
+            source: chat_group.id.clone(),
+            target: policy_group.id.clone(),
+            ..Default::default()
+        };
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
+
+        let mut e = Edge {
+            source: message.id.clone(),
+            target: chat_group.id.clone(),
+            ..Default::default()
+        };
+        e.sign(&keypair).unwrap();
+        e.write(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT edge.* FROM edge WHERE edge.source=? AND edge.target=?")
+            .unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         let mut res = vec![];
         for ed in results {
             let edge = ed.unwrap();
@@ -427,32 +524,57 @@ mod tests {
 
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         assert_eq!(1, results.count());
         e.set_deleted();
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
 
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         assert_eq!(0, results.count());
 
         e.flag = e.flag & !RowFlag::DELETED;
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
 
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         assert_eq!(1, results.count());
 
         e.flag = RowFlag::KEEP_HISTORY;
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         assert_eq!(1, results.count());
 
         e.date = e.date + 1;
         e.sign(&keypair).unwrap();
         e.write(&conn).unwrap();
-        let results = stmt.query_map([], Edge::from_row()).unwrap();
+        let results = stmt
+            .query_map(
+                [message.id.clone(), chat_group.id.clone()],
+                Edge::from_row(),
+            )
+            .unwrap();
         assert_eq!(2, results.count());
     }
 }

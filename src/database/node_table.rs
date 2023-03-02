@@ -1,12 +1,12 @@
 use super::{
     database_service::{FromRow, Writable},
     datamodel::{is_valid_id, new_id, now, RowFlag, MAX_ROW_LENTGH},
-    Error,
+    synch_log::invalidate_node_log,
+    Error, Result,
 };
-use crate::cryptography::{
-    base64_decode, base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey,
-};
+use crate::cryptography::{base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey};
 use rusqlite::{Connection, OptionalExtension, Row};
+use serde::{Deserialize, Serialize};
 
 //arbritrary choosen max numbers of char in a schema
 pub const MAX_SCHEMA_SIZE: usize = 22;
@@ -14,25 +14,27 @@ pub fn is_valid_schema(schema: &String) -> bool {
     schema.as_bytes().len() <= MAX_SCHEMA_SIZE && !schema.is_empty()
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
-    pub id: String,
+    pub id: Vec<u8>,
     pub schema: String,
     pub cdate: i64,
     pub mdate: i64,
+    pub flag: i8,
     pub text: Option<String>,
     pub json: Option<String>,
     pub binary: Option<Vec<u8>>,
-    pub pub_key: String,
-    pub signature: Option<Vec<u8>>,
-    pub flag: i8,
+    pub pub_key: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub size: i32,
 }
 
 impl Node {
-    pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    pub fn create_table(conn: &Connection) -> Result<()> {
         //system table stores compressed text and json
         conn.execute(
             "CREATE TABLE node_sys (
-            id TEXT NOT NULL,
+            id BLOB NOT NULL,
             schema TEXT  NOT NULL,
             cdate INTEGER  NOT NULL,
             mdate INTEGER  NOT NULL,
@@ -40,10 +42,15 @@ impl Node {
             bin_text BLOB,
             bin_json BLOB,
             binary BLOB,
-            pub_key TEXT NOT NULL,
+            pub_key BLOB NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(id, mdate)
+            size INTEGER DEFAULT 0
         ) STRICT",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE UNIQUE INDEX node_id_mdate_idx ON node_sys (id, mdate)",
             [],
         )?;
 
@@ -55,7 +62,7 @@ impl Node {
         Ok(())
     }
 
-    pub fn create_temporary_view(conn: &Connection) -> Result<(), rusqlite::Error> {
+    pub fn create_temporary_view(conn: &Connection) -> Result<()> {
         //this view filter deleted edge
         //node view is intended to be used for every SELECT,
         // decompress text and json on the fly
@@ -72,6 +79,7 @@ impl Node {
                 binary,
                 pub_key,
                 signature,
+                size,
                 rowid
             FROM node_sys 
             WHERE flag & 1 = 0",
@@ -91,6 +99,7 @@ impl Node {
                 binary,
                 pub_key,
                 signature,
+                size,
                 rowid
             FROM node_sys",
             [],
@@ -98,10 +107,10 @@ impl Node {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    fn len(&self) -> i32 {
         let mut len = 0;
 
-        len += self.id.as_bytes().len();
+        len += self.id.len();
 
         len += self.schema.as_bytes().len();
         len += 8; //date
@@ -119,18 +128,17 @@ impl Node {
             len += v.len();
         }
 
-        len += &self.pub_key.as_bytes().len();
+        len += &self.pub_key.len();
 
-        if let Some(v) = &self.signature {
-            len += v.len();
-        }
-        len
+        len += &self.signature.len();
+        len += 4; //size
+        len.try_into().unwrap()
     }
 
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
 
-        hasher.update(self.id.as_bytes());
+        hasher.update(&self.id);
         hasher.update(self.schema.as_bytes());
         hasher.update(&self.cdate.to_le_bytes());
         hasher.update(&self.mdate.to_le_bytes());
@@ -148,8 +156,8 @@ impl Node {
             hasher.update(v);
         }
 
-        hasher.update(self.pub_key.as_bytes());
-
+        hasher.update(&self.pub_key);
+        hasher.update(&self.size.to_le_bytes());
         hasher.finalize()
     }
 
@@ -161,9 +169,9 @@ impl Node {
         self.json = None;
     }
 
-    pub fn verify(&self) -> Result<(), Error> {
+    pub fn verify(&self) -> Result<()> {
         if !is_valid_id(&self.id) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         if !is_valid_schema(&self.schema) {
@@ -171,10 +179,10 @@ impl Node {
         }
 
         let size = self.len();
-        if size > MAX_ROW_LENTGH {
+        if size > MAX_ROW_LENTGH.try_into().unwrap() {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too long {} bytes instead of {}",
-                &self.id.clone(),
+                base64_encode(&self.id),
                 size,
                 MAX_ROW_LENTGH
             )));
@@ -182,65 +190,61 @@ impl Node {
 
         //ensure that the Json field is well formed
         if let Some(v) = &self.json {
-            let v: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(v);
+            let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(v);
             if v.is_err() {
-                return Err(Error::from(v.expect_err("msg")));
+                return Err(Error::from(v.expect_err("this is an error")));
             }
         }
         let hash = self.hash();
 
-        match &self.signature {
-            Some(sig) => {
-                let key = base64_decode(self.pub_key.as_bytes())?;
-
-                let pub_key = Ed2519PublicKey::import(&key)?;
-                pub_key.verify(hash.as_bytes(), sig)?;
-            }
-            None => return Err(Error::InvalidNode("Signature is empty".to_string())),
-        }
+        let pub_key = Ed2519PublicKey::import(&self.pub_key)?;
+        pub_key.verify(hash.as_bytes(), &self.signature)?;
 
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<(), Error> {
-        let pubkey = base64_encode(&keypair.export_public());
-        self.pub_key = pubkey;
+    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<()> {
+        self.pub_key = keypair.export_public();
 
         if !is_valid_schema(&self.schema) {
             return Err(Error::InvalidNodeSchema(MAX_SCHEMA_SIZE));
         }
 
         if !is_valid_id(&self.id) {
-            return Err(Error::InvalidDatabaseId());
+            return Err(Error::InvalidId());
         }
 
         //ensure that the Json field is well formed
         if let Some(v) = &self.json {
-            let v: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(v);
+            let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(v);
             if v.is_err() {
                 // println!("Error id:{}",self.text.clone().unwrap() );
-                return Err(Error::from(v.expect_err("already checked")));
+                return Err(Error::from(v.expect_err("this is an error")));
             }
+        }
+
+        self.size = self.len();
+        if self.size > MAX_ROW_LENTGH.try_into().unwrap() {
+            return Err(Error::DatabaseRowToLong(format!(
+                "Node {} is too long {} bytes instead of {}",
+                base64_encode(&self.id.clone()),
+                self.size,
+                MAX_ROW_LENTGH
+            )));
         }
 
         let hash = self.hash();
         let signature = keypair.sign(hash.as_bytes());
-        self.signature = Some(signature);
-        let size = self.len();
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Node {} is too long {} bytes instead of {}",
-                &self.id.clone(),
-                size,
-                MAX_ROW_LENTGH
-            )));
-        }
+        self.signature = signature;
+
         Ok(())
     }
 }
 
 impl FromRow for Node {
-    fn from_row() -> fn(&Row) -> Result<Box<Self>, rusqlite::Error> {
+    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
             Ok(Box::new(Node {
                 id: row.get(0)?,
@@ -253,23 +257,25 @@ impl FromRow for Node {
                 binary: row.get(7)?,
                 pub_key: row.get(8)?,
                 signature: row.get(9)?,
+                size: row.get(10)?,
             }))
         }
     }
 }
 impl Writable for Node {
     //Updates needs to delete old data from the full text search index hence the retrieval of old data before updating
-    fn write(&self, conn: &Connection) -> Result<(), Error> {
+    fn write(&self, conn: &Connection) -> Result<()> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO node_sys (id, schema, cdate, mdate, flag, bin_text, bin_json, binary, pub_key, signature) 
-                                VALUES (?, ?, ?, ?, ?, compress(?), compress(?),?, ?, ?)")?;
+            "INSERT OR REPLACE INTO node_sys (id, schema, cdate, mdate, flag, bin_text, bin_json, binary, pub_key, signature, size) 
+                                VALUES (?, ?, ?, ?, ?, compress(?), compress(?),?, ?, ?, ?)")?;
 
         let mut insert_fts_stmt = conn.prepare_cached(
             "INSERT INTO node_fts (rowid, fts_text, fts_json) VALUES (?, ?,  json_data(?))",
         )?;
 
-        let mut chek_stmt = conn
-            .prepare_cached("SELECT node_all.rowid FROM node_all WHERE id=? ORDER BY mdate DESC")?;
+        let mut chek_stmt = conn.prepare_cached(
+            "SELECT node_all.rowid FROM node_all WHERE id=? ORDER BY mdate DESC LIMIT 1",
+        )?;
 
         let existing_row: Option<i64> = chek_stmt
             .query_row([&self.id], |row| row.get(0))
@@ -298,6 +304,7 @@ impl Writable for Node {
                     &self.binary,
                     &self.pub_key,
                     &self.signature,
+                    &self.size,
                 ))?;
             } else {
                 let mut update_node_stmt = conn.prepare_cached(
@@ -312,7 +319,8 @@ impl Writable for Node {
                 bin_json = compress(?),
                 binary = ?,
                 pub_key = ?,
-                signature = ?
+                signature = ?,
+                size = ?
             WHERE
                 rowid = ? ",
                 )?;
@@ -328,8 +336,10 @@ impl Writable for Node {
                     &self.binary,
                     &self.pub_key,
                     &self.signature,
+                    &self.size,
                     &rowid,
                 ))?;
+                invalidate_node_log(&old_node.id, old_node.mdate, conn)?;
             }
             if RowFlag::is(RowFlag::INDEX_ON_SAVE, &self.flag) {
                 insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
@@ -346,6 +356,7 @@ impl Writable for Node {
                 &self.binary,
                 &self.pub_key,
                 &self.signature,
+                &self.size,
             ))?;
 
             if RowFlag::is(RowFlag::INDEX_ON_SAVE, &self.flag) {
@@ -369,8 +380,9 @@ impl Default for Node {
             text: None,
             json: None,
             binary: None,
-            pub_key: "".to_string(),
-            signature: None,
+            pub_key: vec![],
+            signature: vec![],
+            size: 0,
         }
     }
 }
@@ -380,24 +392,6 @@ mod tests {
 
     use super::*;
     use crate::database::datamodel::prepare_connection;
-    use crate::{cryptography::hash, database::database_service::create_connection};
-
-    use std::{
-        error::Error,
-        fs,
-        path::{Path, PathBuf},
-    };
-
-    const DATA_PATH: &str = "test/data/datamodel/";
-    fn init_database_path(file: &str) -> Result<PathBuf, Box<dyn Error>> {
-        let mut path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path)?;
-        path.push(file);
-        if Path::exists(&path) {
-            fs::remove_file(&path)?;
-        }
-        Ok(path)
-    }
 
     #[test]
     fn node_signature() {
@@ -419,7 +413,7 @@ mod tests {
         let newid = node.id.clone();
         assert_eq!(id, newid);
 
-        node.id = "key too short".to_string();
+        node.id = b"key too short".to_vec();
         node.verify().expect_err("");
         node.sign(&keypair).expect_err("");
 
@@ -460,7 +454,7 @@ mod tests {
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node.pub_key = "badkey".to_string();
+        node.pub_key = b"badkey".to_vec();
         node.verify().expect_err("");
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
@@ -475,9 +469,7 @@ mod tests {
 
     #[test]
     fn node_write_flags() {
-        let path: PathBuf = init_database_path("node_flags.db").unwrap();
-        let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let keypair = Ed2519KeyPair::new();
@@ -572,11 +564,7 @@ mod tests {
 
     #[test]
     fn node_fts() {
-        use crate::{cryptography::hash, database::database_service::create_connection};
-
-        let path: PathBuf = init_database_path("node_fts.db").unwrap();
-        let secret = hash(b"secret");
-        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let keypair = Ed2519KeyPair::new();

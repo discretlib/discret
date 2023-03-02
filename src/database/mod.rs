@@ -2,20 +2,23 @@ pub mod database_service;
 pub mod datamodel;
 pub mod edge_table;
 pub mod node_table;
+pub mod security_policy;
 pub mod synch_log;
-
 use thiserror::Error;
-
+pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("{0}")]
     CryptoError(#[from] crate::cryptography::Error),
 
-    #[error(transparent)]
+    #[error("{0}")]
     DatabaseError(#[from] rusqlite::Error),
 
-    #[error(transparent)]
+    #[error("{0}")]
     JSONError(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    PolicyError(String),
 
     #[error("{0}")]
     DatabaseWriteError(String),
@@ -23,7 +26,7 @@ pub enum Error {
     #[error("{0}")]
     InvalidNode(String),
 
-    #[error(transparent)]
+    #[error("{0}")]
     IoError(#[from] std::io::Error),
 
     #[error("{0}")]
@@ -36,11 +39,11 @@ pub enum Error {
     TokioSendError(String),
 
     #[error(
-        "database id length must be between  {} and {} bytes",
+        "id length must be between {} and {} bytes",
         crate::database::datamodel::DB_ID_MIN_SIZE,
         crate::database::datamodel::DB_ID_MAX_SIZE
     )]
-    InvalidDatabaseId(),
+    InvalidId(),
 
     #[error("database schema cannot be empty or have more than {0} characters")]
     InvalidNodeSchema(usize),

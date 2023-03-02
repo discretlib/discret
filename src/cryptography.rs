@@ -105,14 +105,14 @@ impl KeyPair for Ed2519KeyPair {
     fn export(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
         let keyp = self.keypair.to_bytes();
-        export.append(&mut keyp.to_vec());
+        export.extend(keyp);
         export
     }
 
     fn export_public(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
         let keyp = self.keypair.public.to_bytes();
-        export.append(&mut keyp.to_vec());
+        export.extend(keyp);
         export
     }
 
@@ -142,7 +142,7 @@ impl PublicKey for Ed2519PublicKey {
     fn export(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
         let keyp = self.public_key.to_bytes();
-        export.append(&mut keyp.to_vec());
+        export.extend(keyp);
         export
     }
 
