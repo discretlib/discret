@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::oneshot;
 
-use crate::cryptography::{base64_encode, Ed2519KeyPair};
+use crate::cryptography::{base64_encode, Ed2519SigningKey};
 use crate::database::{
     database_service::FromRow,
     datamodel::{now, RowFlag},
@@ -64,7 +64,7 @@ impl SecurityPolicyService {
                     match &msg {
                         PolicyMsg::ValidateNode { policy_group, node } => {
                             let validation =
-                                security_policy.validate_node(&policy_group, &node, &conn);
+                                security_policy.validate_node(policy_group, node, &conn);
 
                             if let Err(e) = validation {
                                 reply.push(Err(e));
@@ -74,7 +74,7 @@ impl SecurityPolicyService {
                         }
                         PolicyMsg::ValidateEdge { policy_group, edge } => {
                             let validation =
-                                security_policy.validate_edge(&policy_group, &edge, &conn);
+                                security_policy.validate_edge(policy_group, edge, &conn);
                             if let Err(e) = validation {
                                 reply.push(Err(e));
                             } else {
@@ -87,16 +87,16 @@ impl SecurityPolicyService {
                             source_node,
                         } => {
                             let validation =
-                                security_policy.validate_node(&policy_group, &source_node, &conn);
+                                security_policy.validate_node(policy_group, source_node, &conn);
                             if let Err(e) = validation {
                                 reply.push(Err(e));
                             } else {
                                 let mut validation = None;
                                 for edg in edge {
                                     let val = security_policy.validate_edge_node(
-                                        &policy_group,
-                                        &edg,
-                                        &source_node,
+                                        policy_group,
+                                        edg,
+                                        source_node,
                                         &conn,
                                     );
                                     if let Err(e) = val {
@@ -112,7 +112,7 @@ impl SecurityPolicyService {
                             }
                         }
                         PolicyMsg::RefreshCache { policy_group } => {
-                            let validation = security_policy.refresh_cache(&policy_group, &conn);
+                            let validation = security_policy.refresh_cache(policy_group, &conn);
                             if let Err(e) = validation {
                                 reply.push(Err(e));
                             } else {
@@ -229,7 +229,7 @@ pub struct PolicyNode {
 impl PolicyNode {
     pub fn sign(
         &mut self,
-        keypair: &Ed2519KeyPair,
+        keypair: &Ed2519SigningKey,
     ) -> std::result::Result<(), crate::database::Error> {
         self.node.json = Some(serde_json::to_string(&self.policy)?);
         self.node.sign(keypair)?;
@@ -357,9 +357,9 @@ impl PolicyCache {
                     }
                     //    println!("  policy: {:?}", some_policy);
                     let mut some_peer = None;
-                    for edge in edges {
-                        if edge.date <= edge.date {
-                            some_peer = Some(edge);
+                    for edg in edges {
+                        if edg.date <= edge.date {
+                            some_peer = Some(edg);
                         } else {
                             break;
                         }
@@ -561,7 +561,7 @@ impl SecurityPolicy {
             self.cache_peer_policy(policy_group, conn)?;
         }
         if let Some(policy_cache) = self.policy_group_cache.get(policy_group) {
-            return Ok(policy_cache);
+            Ok(policy_cache)
         } else {
             Err(crate::database::Error::PolicyError(format!(
                 "unknown policy group: {} ",
@@ -654,7 +654,7 @@ impl SecurityPolicy {
                 return Ok(());
             }
             let policy_cache = self.get_cache(policy_group, conn)?;
-            if policy_cache.can_insert_node(&node, &node.pub_key) {
+            if policy_cache.can_insert_node(node, &node.pub_key) {
                 return Ok(());
             } else {
                 return Err(Error::PolicyError(format!(
@@ -800,7 +800,7 @@ impl SecurityPolicy {
             }
 
             let policy_cache = self.get_cache(policy_group, conn)?;
-            if policy_cache.can_insert_edge(&source_node, &target_node, &edge, &edge.pub_key) {
+            if policy_cache.can_insert_edge(source_node, &target_node, edge, &edge.pub_key) {
                 return Ok(());
             } else {
                 return Err(Error::PolicyError(format!(
@@ -827,7 +827,7 @@ mod tests {
     use rusqlite::Connection;
 
     use crate::{
-        cryptography::{Ed2519KeyPair, KeyPair},
+        cryptography::{Ed2519SigningKey, SigningKey},
         database::security_policy::{
             PolicyNode, PolicyRight, SecurityPolicy, PEER_SCHEMA, POLICY_GROUP_SCHEMA,
             POLICY_SCHEMA,
@@ -856,7 +856,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mut security_policy = SecurityPolicy::new();
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut peer = Node {
             id: keypair.export_public(),
@@ -910,7 +910,7 @@ mod tests {
             .validate_node(&pol_group_id, &policy_group, &conn)
             .unwrap();
 
-        let bad_keypair = Ed2519KeyPair::new();
+        let bad_keypair = Ed2519SigningKey::new();
         policy_group.sign(&bad_keypair).unwrap();
         security_policy
             .validate_node(&pol_group_id, &policy_group, &conn)
@@ -937,7 +937,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mut security_policy = SecurityPolicy::new();
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut policy_group = Node {
             schema: POLICY_GROUP_SCHEMA.to_string(),
@@ -1008,7 +1008,7 @@ mod tests {
             .validate_node(&pol_group_id, &policy, &conn)
             .unwrap();
 
-        let bad_keypair = Ed2519KeyPair::new();
+        let bad_keypair = Ed2519SigningKey::new();
         policy.sign(&bad_keypair).unwrap();
         security_policy
             .validate_node(&pol_group_id, &policy, &conn)
@@ -1071,7 +1071,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mut security_policy = SecurityPolicy::new();
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut policy_group = Node {
             schema: POLICY_GROUP_SCHEMA.to_string(),
@@ -1154,7 +1154,7 @@ mod tests {
         some_schema_edge.sign(&keypair).unwrap();
         some_schema_edge.write(&conn).unwrap();
 
-        let new_peer_key = Ed2519KeyPair::new();
+        let new_peer_key = Ed2519SigningKey::new();
         let mut new_peer = Node {
             id: new_peer_key.export_public(),
             schema: PEER_SCHEMA.to_string(),
@@ -1243,7 +1243,7 @@ mod tests {
 
         let mut security_policy = SecurityPolicy::new();
 
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut policy_group = Node {
             schema: POLICY_GROUP_SCHEMA.to_string(),
@@ -1332,7 +1332,7 @@ mod tests {
             .validate_edge(&pol_group_id, &bad_edge, &conn)
             .expect_err("invalid target");
 
-        let bad_keypair = Ed2519KeyPair::new();
+        let bad_keypair = Ed2519SigningKey::new();
         peer_edge.sign(&bad_keypair).unwrap();
 
         security_policy
@@ -1343,7 +1343,7 @@ mod tests {
             .validate_edge(&pol_group_id, &peer_edge, &conn)
             .unwrap();
 
-        let new_keypair = Ed2519KeyPair::new();
+        let new_keypair = Ed2519SigningKey::new();
         let mut new_peer = Node {
             id: new_keypair.export_public(),
             schema: PEER_SCHEMA.to_string(),
@@ -1433,7 +1433,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mut security_policy = SecurityPolicy::new();
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut policy_group = Node {
             schema: POLICY_GROUP_SCHEMA.to_string(),
@@ -1576,7 +1576,7 @@ mod tests {
             .validate_edge(&pol_group_id, &message_to_chat, &conn)
             .unwrap();
 
-        let newkeypair = Ed2519KeyPair::new();
+        let newkeypair = Ed2519SigningKey::new();
         let mut newpeer = Node {
             id: newkeypair.export_public(),
             schema: PEER_SCHEMA.to_string(),

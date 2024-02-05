@@ -4,12 +4,8 @@ use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{edge_table::Edge, node_table::Node, synch_log::DailySynchLog, Result};
 
-use blake3::Hasher;
 use rand::{rngs::OsRng, RngCore};
-use rusqlite::{
-    functions::{Aggregate, Context, FunctionFlags},
-    Connection, OptionalExtension,
-};
+use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension};
 use zstd::{bulk::compress, bulk::decompress};
 
 //pub type Result<T> = std::result::Result<T, Error>;
@@ -87,7 +83,6 @@ pub fn is_initialized(conn: &Connection) -> Result<bool> {
 
 //initialise database and create temporary views
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
-    add_hash_function(conn)?;
     add_compression_function(conn)?;
     add_json_data_function(conn)?;
     add_base64_function(conn)?;
@@ -115,43 +110,6 @@ pub enum FunctionError {
     InvalidJSONType,
     #[error("{0}")]
     CompressedSizeError(String),
-}
-
-struct Hash;
-
-impl Aggregate<Hasher, Option<String>> for Hash {
-    fn init(&self, _: &mut Context<'_>) -> rusqlite::Result<Hasher> {
-        Ok(blake3::Hasher::new())
-    }
-
-    fn step(&self, ctx: &mut Context<'_>, hasher: &mut Hasher) -> rusqlite::Result<()> {
-        let val = ctx.get::<String>(0)?;
-        hasher.update(val.as_bytes());
-        Ok(())
-    }
-
-    fn finalize(
-        &self,
-        _: &mut Context<'_>,
-        hasher: Option<Hasher>,
-    ) -> rusqlite::Result<Option<String>> {
-        match hasher {
-            Some(hash) => Ok(Some(base64_encode(hash.finalize().as_bytes()))),
-            None => Ok(None),
-        }
-    }
-}
-
-//user defined function for blake3 hashing directly in sqlite queries
-pub fn add_hash_function(db: &Connection) -> rusqlite::Result<()> {
-    db.create_aggregate_function(
-        "hash",
-        1,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        Hash,
-    )?;
-
-    Ok(())
 }
 
 fn extract_json(val: serde_json::Value, buff: &mut String) -> rusqlite::Result<()> {
@@ -462,65 +420,6 @@ mod tests {
         }
 
         assert_eq!(text.as_bytes(), result);
-    }
-
-    #[test]
-    fn hash_function() {
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-        conn.execute(
-            "CREATE TABLE HASHTABLE (
-                name TEXT,
-                grp INTEGER,
-                rank INTEGER 
-            ) ",
-            [],
-        )
-        .unwrap();
-
-        let mut stmt = conn
-            .prepare("INSERT INTO HASHTABLE (name, grp, rank) VALUES (?1, ?2, ?3)")
-            .unwrap();
-        stmt.execute(("test1", 1, 1)).unwrap();
-        stmt.execute(("test2", 1, 2)).unwrap();
-        stmt.execute(("test3", 1, 3)).unwrap();
-        stmt.execute(("test1", 2, 2)).unwrap();
-        stmt.execute(("test2", 2, 1)).unwrap();
-        stmt.execute(("test3", 2, 3)).unwrap();
-
-        let mut expected: Vec<String> = vec![];
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update("test1".as_bytes());
-        hasher.update("test2".as_bytes());
-        hasher.update("test3".as_bytes());
-        expected.push(base64_encode(hasher.finalize().as_bytes()));
-
-        hasher = blake3::Hasher::new();
-        hasher.update("test2".as_bytes());
-        hasher.update("test1".as_bytes());
-        hasher.update("test3".as_bytes());
-        expected.push(base64_encode(hasher.finalize().as_bytes()));
-
-        //hashing is order dependent, the subselect is for enforcing the order by
-        let mut stmt = conn
-            .prepare(
-                "
-        SELECT hash(name) 
-        FROM (SELECT name, grp FROM HASHTABLE   ORDER BY rank)
-        GROUP BY grp
-         ",
-            )
-            .unwrap();
-
-        let results: Vec<String> = stmt
-            .query([])
-            .unwrap()
-            .map(|row| Ok(row.get(0)?))
-            .collect()
-            .unwrap();
-
-        assert_eq!(expected, results);
     }
 
     #[test]

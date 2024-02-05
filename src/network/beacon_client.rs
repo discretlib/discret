@@ -69,9 +69,8 @@ pub async fn star_beacon_client(
 
     let new_conn = endpoint.connect(beacon_adress, "_")?.await?;
 
-
     let (mut send_stream, mut receiv_stream): (quinn::SendStream, quinn::RecvStream) =
-    new_conn.open_bi().await?;
+        new_conn.open_bi().await?;
 
     tokio::spawn(async move {
         let mut write_buffer: Vec<u8> = Vec::with_capacity(BEACON_MTU);
@@ -243,7 +242,7 @@ fn client_tls_config() -> ClientConfig {
         .keep_alive_interval(Some(Duration::new(KEEP_ALIVE_INTERVAL, 0)))
         .max_idle_timeout(Some(IdleTimeout::from(VarInt::from(MAX_IDLE_TIMEOUT))));
 
-        config.transport_config(Arc::new(transport));
+    config.transport_config(Arc::new(transport));
     config
 }
 
@@ -278,7 +277,7 @@ mod test {
     #[test]
     fn test_max_token() -> Result<(), Box<dyn std::error::Error>> {
         let (pub_key, _secret_key) = generate_self_signed_certificate();
-        let serialised_cert = pub_key.as_ref().clone();
+        let serialised_cert = pub_key.as_ref();
         let vect = Vec::from(serialised_cert);
         let s: SocketAddr = "[::]:0".parse().unwrap();
 

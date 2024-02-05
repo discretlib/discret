@@ -31,7 +31,6 @@ pub async fn endpoint(
     pub_key: rustls::Certificate,
     secret_key: rustls::PrivateKey,
 ) -> Result<Endpoint, Box<dyn Error>> {
-    
     let cert_chain = vec![pub_key];
 
     let mut server_config = ServerConfig::with_single_cert(cert_chain, secret_key)?;
@@ -108,7 +107,9 @@ impl rustls::client::ServerCertVerifier for ServerCertVerifier {
         if self.contains(end_entity) {
             Ok(rustls::client::ServerCertVerified::assertion())
         } else {
-            Err(rustls::Error::InvalidCertificateSignature)
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ))
         }
     }
 }
@@ -117,7 +118,6 @@ impl rustls::client::ServerCertVerifier for ServerCertVerifier {
 mod tests {
     use super::*;
     use crate::cryptography;
-
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() -> Result<(), Box<dyn Error>> {
@@ -135,13 +135,11 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-     
 
         let endpoint = client_ipv4().unwrap();
         let addr = format!("127.0.0.1:{}", localadree.port()).parse().unwrap();
 
-        
-         let connection =   endpoint.connect(addr, "localhost").unwrap().await.unwrap();
+        let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
         drop(connection);
@@ -166,12 +164,11 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-        
 
         let endpoint = client_ipv6().unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
-        let connection =   endpoint.connect(addr, "localhost").unwrap().await.unwrap();
+        let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
         drop(connection);
@@ -196,7 +193,6 @@ mod tests {
                 .await
                 .expect_err("connection should have failed due to invalid certificate");
         });
-       
 
         let endpoint = client_ipv6().unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();

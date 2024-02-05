@@ -1,10 +1,12 @@
 use super::{
     database_service::{FromRow, Writable},
     datamodel::{is_valid_id, new_id, now, RowFlag, MAX_ROW_LENTGH},
-    synch_log::invalidate_node_log,
+    synch_log::invalidate_updated_node_log,
     Error, Result,
 };
-use crate::cryptography::{base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey};
+use crate::cryptography::{
+    base64_encode, Ed2519PublicKey, Ed2519SigningKey, PublicKey, SigningKey,
+};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -204,7 +206,7 @@ impl Node {
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<()> {
+    pub fn sign(&mut self, keypair: &Ed2519SigningKey) -> Result<()> {
         self.pub_key = keypair.export_public();
 
         if !is_valid_schema(&self.schema) {
@@ -339,7 +341,7 @@ impl Writable for Node {
                     &self.size,
                     &rowid,
                 ))?;
-                invalidate_node_log(&old_node.id, old_node.mdate, conn)?;
+                invalidate_updated_node_log(&old_node.id, old_node.mdate, conn)?;
             }
             if RowFlag::is(RowFlag::INDEX_ON_SAVE, &self.flag) {
                 insert_fts_stmt.execute((&rowid, &self.text, &self.json))?;
@@ -395,7 +397,7 @@ mod tests {
 
     #[test]
     fn node_signature() {
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
         let mut node = Node {
             schema: "TEST".to_string(),
             ..Default::default()
@@ -472,7 +474,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
         let text = "Hello World";
         let mut node = Node {
             schema: "TEST".to_string(),
@@ -567,7 +569,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
         let text = "Lorem ipsum dolor sit amet";
         let mut node = Node {
             schema: "TEST".to_string(),

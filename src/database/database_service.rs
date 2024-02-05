@@ -65,7 +65,7 @@ pub fn create_connection(
     let sqlcipher_key = format!("\"x'{}'\"", hex::encode(secret));
     set_pragma("key", &sqlcipher_key, &conn)?;
 
-    let page_size = "16384";
+    let page_size = "8192";
     //Increase page size.
     //
     //Could be usefull as for WITHOUT ROWID tables
@@ -103,6 +103,9 @@ pub fn create_connection(
 
     //Best safe setting for WAL journaling.
     set_pragma("synchronous", "1", &conn)?;
+
+    //increase write lock request timeout .
+    set_pragma("busy_timeout", "5000", &conn)?;
 
     //Automatically reclaim storage after deletion
     //
@@ -470,6 +473,20 @@ mod tests {
             fs::remove_file(&path)?;
         }
         Ok(path)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_sqlite_version() {
+        let path: PathBuf = init_database_path("test_sqlite_version.db").unwrap();
+        let secret = hash(b"bytes");
+        let conn = create_connection(&path, &secret, 1024, false).unwrap();
+        let mut stmt = conn.prepare("SELECT sqlite_version();").unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let qs = rows.next().unwrap().expect("oupssie");
+
+        let val: String = qs.get(0).unwrap();
+        assert_eq!("3.39.4", val);
+        println!("Sqlite Version= {} ", val);
     }
 
     #[tokio::test(flavor = "multi_thread")]

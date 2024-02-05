@@ -3,7 +3,9 @@ use super::{
     datamodel::{is_valid_id, now, RowFlag, MAX_ROW_LENTGH},
     Error, Result,
 };
-use crate::cryptography::{base64_encode, Ed2519KeyPair, Ed2519PublicKey, KeyPair, PublicKey};
+use crate::cryptography::{
+    base64_encode, Ed2519PublicKey, Ed2519SigningKey, PublicKey, SigningKey,
+};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 pub struct Edge {
@@ -133,7 +135,7 @@ impl Edge {
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Ed2519KeyPair) -> Result<()> {
+    pub fn sign(&mut self, keypair: &Ed2519SigningKey) -> Result<()> {
         if !is_valid_id(&self.source) {
             return Err(Error::InvalidId());
         }
@@ -281,7 +283,7 @@ impl Default for Edge {
 mod tests {
 
     use crate::{
-        cryptography::{Ed2519KeyPair, KeyPair},
+        cryptography::{Ed2519SigningKey, SigningKey},
         database::{
             datamodel::{new_id, prepare_connection, DB_ID_MAX_SIZE},
             node_table::Node,
@@ -293,7 +295,7 @@ mod tests {
 
     #[test]
     fn edge_signature() {
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
         let source = new_id(10);
         let target = new_id(10);
         let mut e = Edge {
@@ -332,7 +334,7 @@ mod tests {
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        let badk = Ed2519KeyPair::new();
+        let badk = Ed2519SigningKey::new();
         e.pub_key = badk.export_public();
         e.verify().expect_err("msg");
         e.sign(&keypair).unwrap();
@@ -343,7 +345,7 @@ mod tests {
 
     #[test]
     fn edge_limit_test() {
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
         let source = new_id(10);
 
         let mut e = Edge {
@@ -393,7 +395,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let keypair = Ed2519KeyPair::new();
+        let keypair = Ed2519SigningKey::new();
 
         let mut policy_group = Node {
             schema: POLICY_GROUP_SCHEMA.to_string(),

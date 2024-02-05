@@ -2,6 +2,7 @@ pub mod database_service;
 pub mod datamodel;
 pub mod edge_table;
 pub mod node_table;
+pub mod query_language;
 pub mod security_policy;
 pub mod synch_log;
 use thiserror::Error;
