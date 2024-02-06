@@ -1,6 +1,6 @@
 use super::{
     database_service::{FromRow, Writable},
-    datamodel::{is_valid_id, now, RowFlag, MAX_ROW_LENTGH},
+    graph_database::{is_valid_id, now, RowFlag, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
@@ -285,7 +285,7 @@ mod tests {
     use crate::{
         cryptography::{Ed2519SigningKey, SigningKey},
         database::{
-            datamodel::{new_id, prepare_connection, DB_ID_MAX_SIZE},
+            graph_database::{new_id, prepare_connection, DB_ID_MAX_SIZE},
             node_table::Node,
             security_policy::{PolicyNode, PolicyRight, PEER_SCHEMA, POLICY_GROUP_SCHEMA},
         },

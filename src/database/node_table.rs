@@ -1,6 +1,6 @@
 use super::{
     database_service::{FromRow, Writable},
-    datamodel::{is_valid_id, new_id, now, RowFlag, MAX_ROW_LENTGH},
+    graph_database::{is_valid_id, new_id, now, RowFlag, MAX_ROW_LENTGH},
     synch_log::invalidate_updated_node_log,
     Error, Result,
 };
@@ -393,7 +393,7 @@ impl Default for Node {
 mod tests {
 
     use super::*;
-    use crate::database::datamodel::prepare_connection;
+    use crate::database::graph_database::prepare_connection;
 
     #[test]
     fn node_signature() {

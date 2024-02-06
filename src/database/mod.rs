@@ -1,6 +1,6 @@
 pub mod database_service;
-pub mod datamodel;
 pub mod edge_table;
+pub mod graph_database;
 pub mod node_table;
 pub mod query_language;
 pub mod security_policy;
@@ -41,8 +41,8 @@ pub enum Error {
 
     #[error(
         "id length must be between {} and {} bytes",
-        crate::database::datamodel::DB_ID_MIN_SIZE,
-        crate::database::datamodel::DB_ID_MAX_SIZE
+        crate::database::graph_database::DB_ID_MIN_SIZE,
+        crate::database::graph_database::DB_ID_MAX_SIZE
     )]
     InvalidId(),
 

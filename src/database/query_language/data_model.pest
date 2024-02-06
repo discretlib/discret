@@ -1,0 +1,32 @@
+// name {
+
+// @deprecated name{
+// intfied: Integer NOT NULL,
+// floatfield: Float not null,
+// stringfield: String,
+// boolfield: Boolean,y
+// entityfield: entityName not null
+// entitymultiplefield: [entityName] //allways retrun at least a empty array
+// indexedField: Integer indexed, //indexes and unique only applies to scalar field
+// uniqueField: String unique,
+// }
+// }
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+identifier = @{ (LETTER | NUMBER | "_")+ }
+
+deprecated = @{ "@" ~ identifier }
+
+datamodel = { SOI ~ entity* ~ EOI }
+entity    = { deprecated? ~ identifier ~ "{" ~ field ~ ("," ~ field)* ~ ","? ~ "}" }
+
+not_null     = { ^"not null" }
+indexed      = { ^"indexed" }
+unique       = { ^"unique" }
+scalar_type  = { "Integer" | "Float" | "Boolean" | "String" }
+scalar_field = { scalar_type ~ (not_null | indexed | unique)* }
+entity_array = { "[" ~ identifier ~ "]" }
+entity_field = { identifier ~ not_null? }
+
+field = { identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }

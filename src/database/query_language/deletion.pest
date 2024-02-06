@@ -1,0 +1,20 @@
+/*
+deletion namespace.deletion ($id, $id2){
+
+    //remove a reference in the parent field
+    person {
+        id:$id,
+        parent: [$sid] 
+    }
+
+    //remove person
+    person{
+        $sid
+    } 
+}
+*/
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+identifier = @{(LETTER | NUMBER)+}
+
+

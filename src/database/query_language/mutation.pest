@@ -1,0 +1,19 @@
+/*
+    mutation namespace.mutationName ($id, $id2){
+
+    // if id is passed -> update
+    // else create
+    friend {
+    id : $id
+    name: $q //update name
+    truc: {  //replace truc id by new id
+    id: $idtruc
+    }
+    atruc: [{$idtuc}, {name:}] //add $idtruc and create name
+    }
+    }
+    }
+*/
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+identifier = @{ (LETTER | NUMBER)+ }

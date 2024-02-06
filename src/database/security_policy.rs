@@ -9,8 +9,8 @@ use tokio::sync::oneshot;
 use crate::cryptography::{base64_encode, Ed2519SigningKey};
 use crate::database::{
     database_service::FromRow,
-    datamodel::{now, RowFlag},
     edge_table::Edge,
+    graph_database::{now, RowFlag},
     node_table::Node,
     Error, Result,
 };
@@ -834,8 +834,8 @@ mod tests {
         },
         database::{
             database_service::Writable,
-            datamodel::{now, prepare_connection, RowFlag},
             edge_table::Edge,
+            graph_database::{now, prepare_connection, RowFlag},
             node_table::Node,
         },
     };

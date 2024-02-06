@@ -1,0 +1,84 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+
+identifier = @{(LETTER | NUMBER)+}
+
+
+query = { SOI ~ "query" ~ identifier ~ queryParam? ~"{" ~ dataType+ ~ "}" ~ EOI }
+
+dataType = {
+  typeName ~ typeParameters?~ "{" ~ (field)+ ~ "}"
+}
+typeParameters = {
+  "(" ~")" |
+  "(" ~ typeParam ~ (", " ~ typeParam)* ~")" 
+}
+typeParam = {
+  filter|orderBy|limit
+}
+
+field = { 
+  function |
+  dataType |
+  alias |
+  identifier  
+}
+
+function = {
+  identifier ~ ":" ~ ("count" | "sum" | "avg" | "min" | "max" | "refBy")~ dataType
+}
+
+queryParam = { 
+    "(" ~")" |
+    "(" ~variablePair~("," ~ variablePair)* ~ ")" 
+}
+variable = @{"$"~identifier}
+variableType = {("String" | "Number" | "Integer")}
+variablePair = {variable ~ ":" ~ variableType}
+
+
+typeName= {alias | identifier}
+alias = {
+  identifier ~ ":" ~ identifier
+}
+
+
+filter = { identifier ~(gtOrEq | ltOrEq| eq | gt | lt )~ filterValue}
+filterValue = { variable | string | integer| number | null }
+
+orderBy = {"orderBy"~"{"~ orderParam ~ (","~orderParam)* ~ "}"}
+orderParam = {identifier~ (^"asc" | ^"desc")}
+
+limit =  { "limit"~ limitValue }
+limitValue = {unsigned_int | variable}
+
+
+eq = { "=" }
+gt = { ">" }
+gtOrEq = { ">=" }
+lt = { "<" }
+ltOrEq = { "<=" }
+
+null = { "null" }
+
+string = ${ "\"" ~ inner ~ "\"" }
+inner = @{ char* }
+char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+number = @{
+    "-"?
+    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+    ~ ("." ~ ASCII_DIGIT*)?
+    ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+integer = @{
+   "-"?~ASCII_DIGIT+ 
+}
+
+unsigned_int = { ASCII_DIGIT+ }
+
