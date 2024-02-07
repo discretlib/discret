@@ -1,22 +1,8 @@
-// name {
-
-// @deprecated name{
-// intfied: Integer NOT NULL,
-// floatfield: Float not null,
-// stringfield: String,
-// boolfield: Boolean,y
-// entityfield: entityName not null
-// entitymultiplefield: [entityName] //allways retrun at least a empty array
-// indexedField: Integer indexed, //indexes and unique only applies to scalar field
-// uniqueField: String unique,
-// }
-// }
-
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
-deprecated = @{ "@" ~ identifier }
+deprecated = @{ "@deprecated" }
 
 datamodel = { SOI ~ entity* ~ EOI }
 entity    = { deprecated? ~ identifier ~ "{" ~ field ~ ("," ~ field)* ~ ","? ~ "}" }

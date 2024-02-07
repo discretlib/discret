@@ -8,4 +8,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("{0}")]
     ParserError(String),
+
+    #[error("{0}")]
+    InvalidQuery(String),
 }

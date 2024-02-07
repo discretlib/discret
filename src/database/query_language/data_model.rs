@@ -15,18 +15,18 @@ pub struct DataModel {
 
 #[derive(Debug)]
 pub struct Entity {
-    name: String,
-    fields: HashMap<String, Field>,
-    deprecated: bool,
+    pub name: String,
+    pub fields: HashMap<String, Field>,
+    pub deprecated: bool,
 }
 
 #[derive(Debug)]
 pub struct Field {
-    name: String,
-    field_type: FieldType,
-    nullable: bool,
-    indexed: bool,
-    unique: bool,
+    pub name: String,
+    pub field_type: FieldType,
+    pub nullable: bool,
+    pub indexed: bool,
+    pub unique: bool,
 }
 
 #[derive(Debug)]
@@ -40,6 +40,10 @@ pub enum FieldType {
 }
 
 impl DataModel {
+    pub fn get_entity(&self, name: &String) -> Option<&Entity> {
+        self.entities.get(name)
+    }
+
     pub fn parse(query: &str) -> Result<DataModel, Error> {
         let mut data_model = DataModel {
             entities: HashMap::new(),
@@ -65,7 +69,8 @@ impl DataModel {
                             let entity = Self::parse_entity(pair)?;
                             data_model.entities.insert(entity.name.clone(), entity);
                         }
-                        _ => {}
+                        Rule::EOI => {}
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -159,7 +164,7 @@ impl DataModel {
         Ok(entity)
     }
 
-    pub fn check_consistency(&self) -> Result<(), Error> {
+    fn check_consistency(&self) -> Result<(), Error> {
         for entry in &self.entities {
             let entity = entry.1;
             for field_entry in &entity.fields {
@@ -185,7 +190,6 @@ impl DataModel {
                 }
             }
         }
-
         Ok(())
     }
 }

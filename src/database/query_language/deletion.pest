@@ -1,20 +1,39 @@
 /*
-deletion namespace.deletion ($id, $id2){
+    deletion delete ($id, $id2){
 
     //remove a reference in the parent field
     person {
-        id:$id,
-        parent: [$sid] 
+    $id,
+    parent: [$sid2]
     }
+
+    //remove all reference in the parent field
+    person {
+    $id,
+    parent []
+    }
+
 
     //remove person
     person{
-        $sid
-    } 
-}
+    $sid
+    }
+    }
 */
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
-identifier = @{(LETTER | NUMBER)+}
+identifier = @{ (LETTER | NUMBER | "_")+ }
 
+variable = @{ "$" ~ identifier }
 
+deletion = { SOI ~ "deletion" ~ identifier ~ query_param ~ "{" ~ entity+ ~ "}" ~ EOI }
+
+query_param = {
+    "(" ~ variable ~ ("," ~ variable)* ~ ","? ~ ")"
+}
+
+entity = { identifier ~ "{" ~ field ~ ("," ~ field)* ~ ","? ~ "}" }
+
+field       = { id_field | array_field }
+id_field    = { variable }
+array_field = { identifier ~ "[" ~ variable? ~ "]" }

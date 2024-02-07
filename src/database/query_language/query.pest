@@ -1,84 +1,78 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
+identifier = @{ (LETTER | NUMBER)+ }
 
-identifier = @{(LETTER | NUMBER)+}
+query = { SOI ~ "query" ~ identifier ~ queryParam? ~ "{" ~ dataType+ ~ "}" ~ EOI }
 
-
-query = { SOI ~ "query" ~ identifier ~ queryParam? ~"{" ~ dataType+ ~ "}" ~ EOI }
+typeParameters = {
+    "(" ~ ")"
+  | "(" ~ typeParam ~ (", " ~ typeParam)* ~ ")"
+}
+typeParam      = {
+    filter
+  | orderBy
+  | limit
+}
 
 dataType = {
-  typeName ~ typeParameters?~ "{" ~ (field)+ ~ "}"
-}
-typeParameters = {
-  "(" ~")" |
-  "(" ~ typeParam ~ (", " ~ typeParam)* ~")" 
-}
-typeParam = {
-  filter|orderBy|limit
+    typeName ~ typeParameters? ~ "{" ~ (field)+ ~ "}"
 }
 
-field = { 
-  function |
-  dataType |
-  alias |
-  identifier  
+field = {
+    function
+  | dataType
+  | alias
+  | identifier
 }
 
 function = {
-  identifier ~ ":" ~ ("count" | "sum" | "avg" | "min" | "max" | "refBy")~ dataType
+    identifier ~ ":" ~ ("count" | "sum" | "avg" | "min" | "max" | "refBy") ~ dataType
 }
 
-queryParam = { 
-    "(" ~")" |
-    "(" ~variablePair~("," ~ variablePair)* ~ ")" 
+queryParam   =  {
+    "(" ~ ")"
+  | "(" ~ variablePair ~ ("," ~ variablePair)* ~ ")"
 }
-variable = @{"$"~identifier}
-variableType = {("String" | "Number" | "Integer")}
-variablePair = {variable ~ ":" ~ variableType}
+variable     = @{ "$" ~ identifier }
+variableType =  { ("String" | "Number" | "Integer") }
+variablePair =  { variable ~ ":" ~ variableType }
 
-
-typeName= {alias | identifier}
-alias = {
-  identifier ~ ":" ~ identifier
+typeName = { alias | identifier }
+alias    = {
+    identifier ~ ":" ~ identifier
 }
 
+filter      = { identifier ~ (gtOrEq | ltOrEq | eq | gt | lt) ~ filterValue }
+filterValue = { variable | string | integer | number | null }
 
-filter = { identifier ~(gtOrEq | ltOrEq| eq | gt | lt )~ filterValue}
-filterValue = { variable | string | integer| number | null }
+orderBy    = { "orderBy" ~ "{" ~ orderParam ~ ("," ~ orderParam)* ~ "}" }
+orderParam = { identifier ~ (^"asc" | ^"desc") }
 
-orderBy = {"orderBy"~"{"~ orderParam ~ (","~orderParam)* ~ "}"}
-orderParam = {identifier~ (^"asc" | ^"desc")}
+limit      = { "limit" ~ limitValue }
+limitValue = { unsigned_int | variable }
 
-limit =  { "limit"~ limitValue }
-limitValue = {unsigned_int | variable}
-
-
-eq = { "=" }
-gt = { ">" }
+eq     = { "=" }
+gt     = { ">" }
 gtOrEq = { ">=" }
-lt = { "<" }
+lt     = { "<" }
 ltOrEq = { "<=" }
 
 null = { "null" }
 
 string = ${ "\"" ~ inner ~ "\"" }
-inner = @{ char* }
-char = {
+inner  = @{ char* }
+char   =  {
     !("\"" | "\\") ~ ANY
-    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
-    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
 number = @{
-    "-"?
-    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
-    ~ ("." ~ ASCII_DIGIT*)?
-    ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
 
 integer = @{
-   "-"?~ASCII_DIGIT+ 
+    "-"? ~ ASCII_DIGIT+
 }
 
 unsigned_int = { ASCII_DIGIT+ }
-
