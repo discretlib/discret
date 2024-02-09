@@ -1,5 +1,5 @@
 /*
-    deletion delete ($id, $id2){
+    deletion delete{
 
     //remove a reference in the parent field
     person {
@@ -26,13 +26,9 @@ identifier = @{ (LETTER | NUMBER | "_")+ }
 
 variable = @{ "$" ~ identifier }
 
-deletion = { SOI ~ "deletion" ~ identifier ~ query_param ~ "{" ~ entity+ ~ "}" ~ EOI }
+deletion = { SOI ~ "deletion" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
-query_param = {
-    "(" ~ variable ~ ("," ~ variable)* ~ ","? ~ ")"
-}
-
-entity = { identifier ~ "{" ~ field ~ ("," ~ field)* ~ ","? ~ "}" }
+entity = { identifier ~ "{" ~ field+ ~ "}" }
 
 field       = { id_field | array_field }
 id_field    = { variable }

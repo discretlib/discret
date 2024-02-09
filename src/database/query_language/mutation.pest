@@ -1,19 +1,51 @@
 /*
-    mutation namespace.mutationName ($id, $id2){
+    mutation mutationName{
 
     // if id is passed -> update
     // else create
     friend {
     id : $id
-    name: $q //update name
-    truc: {  //replace truc id by new id
-    id: $idtruc
-    }
-    atruc: [{$idtuc}, {name:}] //add $idtruc and create name
+    name: "name" //update name
+    truc: {$idtruc}
+    atruc: [$idtuc, $idtruc2] //add $idtruc and create name
     }
     }
     }
 */
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
-identifier = @{ (LETTER | NUMBER)+ }
+identifier = @{ (LETTER | NUMBER | "_")+ }
+variable   = @{ "$" ~ identifier }
+
+mutation = { SOI ~ "mutation" ~ identifier ~ query_param ~ "{" ~ entity+ ~ "}" ~ EOI }
+
+query_param = {
+    "(" ~ variable ~ ("," ~ variable)* ~ ","? ~ ")"
+}
+
+entity = { identifier ~ "{" ~ field+ ~ "}" }
+
+field = { identifier ~ ":" ~ value }
+
+entity_ref   = { "{" ~ variable ~ "}" }
+entity_array = { "[" ~ variable ~ ("," ~ variable)* ~ ","? ~ "]" }
+
+value = { variable | entity_ref | entity_array | string | integer | number | boolean | null }
+
+string = ${ "\"" ~ inner ~ "\"" }
+inner  = @{ char* }
+char   =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+number = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+boolean =  { ^"true" | ^"false" }
+null    =  { ^"null" }

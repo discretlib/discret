@@ -1,0 +1,29 @@
+parameters = {
+    SOI ~ "{" ~ field ~ ("," ~ field)+ ~ ","? ~ "}" ~ EOI
+}
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+identifier = @{ (LETTER | NUMBER | "_")+ }
+
+field = { "\"" ~ identifier ~ "\"" ~ ":" ~ value }
+
+value = { float | integer | boolean | null | string }
+
+string = ${ "\"" ~ inner ~ "\"" }
+inner  = @{ char* }
+char   =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+float = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+boolean =  { ^"true" | ^"false" }
+null    =  { ^"null" }

@@ -1,11 +1,11 @@
 use super::{
     data_model::{DataModel, FieldType},
+    parameter::{VariableType, Variables},
     Error,
 };
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
-use std::collections::HashSet;
 
 #[derive(Parser)]
 #[grammar = "database/query_language/deletion.pest"]
@@ -14,7 +14,7 @@ struct PestParser;
 #[derive(Debug)]
 struct Deletion {
     name: String,
-    variables: HashSet<String>,
+    variables: Variables,
     queries: Vec<EntityDeletion>,
 }
 
@@ -24,6 +24,15 @@ struct EntityDeletion {
     id_param: String,
     references: Vec<ReferenceDeletion>,
 }
+impl EntityDeletion {
+    pub fn new() -> Self {
+        Self {
+            entity_name: "".to_string(),
+            id_param: "".to_string(),
+            references: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct ReferenceDeletion {
@@ -32,6 +41,14 @@ struct ReferenceDeletion {
 }
 
 impl Deletion {
+    pub fn new() -> Self {
+        Self {
+            name: "".to_string(),
+            variables: Variables::new(),
+            queries: Vec::new(),
+        }
+    }
+
     pub fn parse(query: &str, data_model: &DataModel) -> Result<Deletion, Error> {
         let parse = match PestParser::parse(Rule::deletion, query) {
             Err(e) => {
@@ -43,35 +60,21 @@ impl Deletion {
         .next()
         .unwrap();
 
-        let mut deletion = Deletion {
-            name: "".to_string(),
-            variables: HashSet::new(),
-            queries: Vec::new(),
-        };
+        let mut deletion = Deletion::new();
 
         match parse.as_rule() {
             Rule::deletion => {
                 let mut deletion_pairs = parse.into_inner();
                 deletion.name = deletion_pairs.next().unwrap().as_str().to_string();
 
-                let variables_pairs = deletion_pairs.next().unwrap().into_inner();
-
-                for var_pair in variables_pairs.into_iter() {
-                    let name = var_pair.as_str();
-                    if deletion.variables.contains(name) {
-                        return Err(Error::ParserError(format!(
-                            "Duplicate variable name '{}'",
-                            name
-                        )));
-                    }
-                    deletion.variables.insert(name.to_string());
-                }
-
                 for entity_pair in deletion_pairs.into_iter() {
                     match entity_pair.as_rule() {
                         Rule::entity => {
-                            let ent =
-                                Self::parse_entity(data_model, entity_pair, &deletion.variables)?;
+                            let ent = Self::parse_entity(
+                                data_model,
+                                entity_pair,
+                                &mut deletion.variables,
+                            )?;
                             deletion.queries.push(ent);
                         }
                         Rule::EOI => {}
@@ -88,13 +91,10 @@ impl Deletion {
     fn parse_entity(
         data_model: &DataModel,
         pair: Pair<'_, Rule>,
-        variables: &HashSet<String>,
+        variables: &mut Variables,
     ) -> Result<EntityDeletion, Error> {
-        let mut entity = EntityDeletion {
-            entity_name: "".to_string(),
-            id_param: "".to_string(),
-            references: Vec::new(),
-        };
+        let mut entity = EntityDeletion::new();
+
         for entity_pair in pair.into_inner().into_iter() {
             match entity_pair.as_rule() {
                 Rule::identifier => {
@@ -113,13 +113,8 @@ impl Deletion {
                     for field in entity_pair.into_inner().into_iter() {
                         match field.as_rule() {
                             Rule::id_field => {
-                                let var = field.as_str().to_string();
-                                if !variables.contains(&var) {
-                                    return Err(Error::InvalidQuery(format!(
-                                        "Unknown variable '{}' for deleting entity '{}'",
-                                        var, entity.entity_name
-                                    )));
-                                }
+                                let var = field.as_str()[1..].to_string(); //remove $
+                                variables.add(var.clone(), VariableType::UID(false))?;
                                 entity.id_param = var;
                             }
                             Rule::array_field => {
@@ -144,13 +139,10 @@ impl Deletion {
                                 };
                                 let id_param: Option<String>;
                                 if let Some(param_pair) = array_field_pairs.next() {
-                                    let var = param_pair.as_str().to_string();
-                                    if !variables.contains(&var) {
-                                        return Err(Error::InvalidQuery(format!(
-                                            "Unknown variable '{}' for deleting '{}[{}]'  int entity '{}'",
-                                            var,name, var,entity.entity_name
-                                        )));
-                                    }
+                                    let var = param_pair.as_str()[1..].to_string(); //remove $
+
+                                    variables.add(var.clone(), VariableType::UID(false))?;
+
                                     id_param = Some(var);
                                 } else {
                                     id_param = None;
@@ -169,6 +161,7 @@ impl Deletion {
         Ok(entity)
     }
 }
+
 #[cfg(test)]
 mod tests {
 
@@ -194,19 +187,17 @@ mod tests {
 
         let deletion = Deletion::parse(
             "
-            deletion delete_person ($id, $id2, $id3){
+            deletion delete_person {
   
                 Person {
-                    $id,
-                    parent[$id2],
+                    $id
+                    parent[$id2]
                     pet[]
                 }
 
                 Pet {
-                    $id3,
+                    $id3
                 }
-
-
             }
             
           ",
@@ -216,21 +207,16 @@ mod tests {
 
         assert_eq!("delete_person", deletion.name);
 
-        assert_eq!(3, deletion.variables.len());
-        assert!(deletion.variables.contains("$id"));
-        assert!(deletion.variables.contains("$id2"));
-        assert!(deletion.variables.contains("$id3"));
-
         assert_eq!(2, deletion.queries.len());
 
         let query = deletion.queries.get(0).unwrap();
         assert_eq!("Person", query.entity_name);
-        assert_eq!("$id", query.id_param);
+        assert_eq!("id", query.id_param);
         assert_eq!(2, query.references.len());
 
         let reference = query.references.get(0).unwrap();
         assert_eq!("parent", reference.name);
-        assert_eq!(Some("$id2".to_string()), reference.id_param);
+        assert_eq!(Some("id2".to_string()), reference.id_param);
 
         let reference = query.references.get(1).unwrap();
         assert_eq!("pet", reference.name);
@@ -238,111 +224,8 @@ mod tests {
 
         let query = deletion.queries.get(1).unwrap();
         assert_eq!("Pet", query.entity_name);
-        assert_eq!("$id3", query.id_param);
+        assert_eq!("id3".to_string(), query.id_param);
         assert_eq!(0, query.references.len());
-
-        //println!("{:#?}", deletion);
-    }
-
-    #[test]
-    fn parse_invalid_variable() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String NOT NULL UNIQUE,
-                surname : String INDEXED,
-                parent : [Person],
-                pet : [Pet]
-            }
-
-            Pet {
-                name : String  UNIQUE NOT NULL,
-                parent: [Pet],
-            }
-        
-        ",
-        )
-        .unwrap();
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id, $id, $id3){
-                Pet {
-                    $id3,
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect_err("'$id' is repeated two times in the varaiables definitions");
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id, $id2, $id3){
-                Pet {
-                    $id3,
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect("'$id' is not repeated anymore");
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id, $id2, $id3){
-                Pet {
-                    $id1,
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect_err("'$id1' is not defined");
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id1, $id2, $id3){
-                Pet {
-                    $id1,
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect("'$id1' is defined");
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id1, $id2, $id3){
-                Pet {
-                    $id1,
-                    parent[$id4],
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect_err("'$id4' is not defined in 'parent[$id4]'");
-
-        let _ = Deletion::parse(
-            "
-            deletion delete_pet ($id1, $id2, $id4){
-                Pet {
-                    $id1,
-                    parent [$id4],
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect("$id4 is defined");
 
         //println!("{:#?}", deletion);
     }
@@ -368,9 +251,9 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id, $id2, $id3){
+            deletion delete_pet {
                 pet {
-                    $id3,
+                    $id3
                 }
             }
             
@@ -381,9 +264,9 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id, $id2, $id3){
+            deletion delete_pet {
                 Pet {
-                    $id3,
+                    $id3
                 }
             }
             
@@ -394,10 +277,10 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id1, $id2, $id3){
+            deletion delete_pet{
                 Person {
-                    $id1,
-                    Parent[$id2],
+                    $id1
+                    Parent[$id2]
                     pet[]
                 }
             }
@@ -411,10 +294,10 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id1, $id2, $id3){
+            deletion delete_pet{
                 Person {
-                    $id1,
-                    parent[$id2],
+                    $id1
+                    parent[$id2]
                     pet[]
                 }
             }
@@ -426,10 +309,10 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id1, $id2, $id3){
+            deletion delete_pet{
                 Person {
-                    $id1,
-                    parent[$id2],
+                    $id1
+                    parent[$id2]
                     pe[]
                 }
             }
@@ -441,10 +324,10 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_pet ($id1, $id2, $id3){
+            deletion delete_pet{
                 Person {
-                    $id1,
-                    parent[$id2],
+                    $id1
+                    parent[$id2]
                     pet[]
                 }
             }
@@ -473,9 +356,9 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_person ($id1, $id2){
+            deletion delete_person{
                 Person {
-                    $id1,
+                    $id1
                     surname[$id2]
                 }
             }",
@@ -485,9 +368,9 @@ mod tests {
 
         let _ = Deletion::parse(
             "
-            deletion delete_person ($id1, $id2){
+            deletion delete_person{
                 Person {
-                    $id1,
+                    $id1
                     parent[$id2]
                 }
             }",

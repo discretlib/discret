@@ -1,3 +1,65 @@
+// query HeroNameAndFriends($episode: Episode, orderBy: { createdAt: asc } , take: 1, after: 1 ) {
+
+// hero(episode: $episode) {
+// name
+// friends ( orderBy: { name: desc } ) {
+// name
+// }
+// }
+
+// field : referencedBy(type,[field]),
+// numfriends: count(friends)
+// sum()
+// min
+// max
+
+// }
+// @deprecated
+// subscription
+// query	mutation	subscription deletion
+// }
+
+// {
+// "episode": "JEDI"
+// }
+
+// type query String{ type+ }
+// query string ()
+// query string (parameters)
+
+// type {field+}
+
+// type(parameters)
+
+// field:
+// name
+// name()
+// name(parameters)
+// name{
+// name
+// }
+// name() {
+// name
+// }
+
+// name(parameters){
+// name
+// }
+
+// if id is passed -> update
+// else create
+// mutate name {
+// friend{ //update friends
+// id : &id
+// name: &q //update name
+// truc: {  //replace truc id by new id
+// id: $idtruc
+// }
+// atruc: [{$idtuc}, {name:}] //add $idtruc and create name
+// }
+// }
+// monitor
+
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 identifier = @{ (LETTER | NUMBER)+ }

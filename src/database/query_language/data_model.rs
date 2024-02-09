@@ -13,11 +13,40 @@ pub struct DataModel {
     entities: HashMap<String, Entity>,
 }
 
+const RESERVED_FIELD: [&str; 9] = [
+    "id",
+    "mdate",
+    "cdate",
+    "authors",
+    "__entity",
+    "__sys_flag",
+    "__sys_json",
+    "__pub_key",
+    "__signature",
+];
+
 #[derive(Debug)]
 pub struct Entity {
     pub name: String,
     pub fields: HashMap<String, Field>,
     pub deprecated: bool,
+}
+impl Entity {
+    pub fn new() -> Self {
+        Self {
+            name: "".to_string(),
+            fields: HashMap::new(),
+            deprecated: false,
+        }
+    }
+
+    pub fn add_field(&mut self, field: Field) -> Result<(), Error> {
+        if self.fields.contains_key(&field.name) {
+            return Err(Error::DuplicatedField(field.name.clone()));
+        }
+        self.fields.insert(field.name.clone(), field);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -40,14 +69,25 @@ pub enum FieldType {
 }
 
 impl DataModel {
+    pub fn new() -> Self {
+        Self {
+            entities: HashMap::new(),
+        }
+    }
+
+    pub fn add_entity(&mut self, entity: Entity) -> Result<(), Error> {
+        if self.entities.contains_key(&entity.name) {
+            return Err(Error::DuplicatedEntity(entity.name.clone()));
+        }
+        self.entities.insert(entity.name.clone(), entity);
+        Ok(())
+    }
     pub fn get_entity(&self, name: &String) -> Option<&Entity> {
         self.entities.get(name)
     }
 
     pub fn parse(query: &str) -> Result<DataModel, Error> {
-        let mut data_model = DataModel {
-            entities: HashMap::new(),
-        };
+        let mut data_model = DataModel::new();
 
         let parse = match PestParser::parse(Rule::datamodel, query) {
             Err(e) => {
@@ -67,7 +107,7 @@ impl DataModel {
                     match pair.as_rule() {
                         Rule::entity => {
                             let entity = Self::parse_entity(pair)?;
-                            data_model.entities.insert(entity.name.clone(), entity);
+                            data_model.add_entity(entity)?;
                         }
                         Rule::EOI => {}
                         _ => unreachable!(),
@@ -81,11 +121,7 @@ impl DataModel {
     }
 
     fn parse_entity(pair: Pair<'_, Rule>) -> Result<Entity, Error> {
-        let mut entity = Entity {
-            name: "".to_string(),
-            fields: HashMap::new(),
-            deprecated: true,
-        };
+        let mut entity = Entity::new();
         for entity_pair in pair.into_inner().into_iter() {
             match entity_pair.as_rule() {
                 Rule::deprecated => {
@@ -128,8 +164,7 @@ impl DataModel {
                                     _ => unreachable!(),
                                 }
                             }
-
-                            entity.fields.insert(field.name.clone(), field);
+                            entity.add_field(field)?;
                         }
                         Rule::entity_field => {
                             let mut entity_field = field_type.into_inner();
@@ -140,7 +175,7 @@ impl DataModel {
                             if let Some(_next) = entity_field.next() {
                                 field.nullable = false;
                             }
-                            entity.fields.insert(field.name.clone(), field);
+                            entity.add_field(field)?;
                         }
                         Rule::entity_array => {
                             let name = field_type.into_inner().next().unwrap().as_str();
@@ -151,7 +186,7 @@ impl DataModel {
                                 }
                                 _ => field.field_type = FieldType::Array(name.to_string()),
                             }
-                            entity.fields.insert(field.name.clone(), field);
+                            entity.add_field(field)?;
                         }
 
                         _ => unreachable!(),
@@ -202,7 +237,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_valid_model_test() {
+    fn parse_valid_model() {
         let datamodel = DataModel::parse(
             "
                 @deprecated Person {
@@ -221,7 +256,6 @@ mod tests {
                     weight : Integer,
                     is_vaccinated: Boolean
                 }
-            
           ",
         )
         .unwrap();
@@ -318,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_invalid_entity_test() {
+    fn invalid_entity() {
         let _datamodel = DataModel::parse(
             "
                 Person {
@@ -332,16 +366,84 @@ mod tests {
         let _datamodel = DataModel::parse(
             "
                 Person {
+                    child : [Person],
+                }
+            
+          ",
+        )
+        .expect("Person a valid entity");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
                     mother : InvalidEntity,
                 }
             
           ",
         )
         .expect_err("InvalidEntity is not defined in the datamodel");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    mother : Person,
+                }
+            
+          ",
+        )
+        .expect("Person is a valid entity");
     }
 
     #[test]
-    fn parse_invalid_string_test() {
+    fn duplicates() {
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [Person],
+                }
+
+                Person {
+                    name : String,
+                }
+            
+          ",
+        )
+        .expect_err("Person is duplicated");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [Person],
+                }
+
+            
+          ",
+        )
+        .expect("Person is not duplicated anymore");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : String,
+                    child : [Person],
+                }            
+          ",
+        )
+        .expect_err("child is duplicated");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                }            
+          ",
+        )
+        .expect("child is not duplicated anymore");
+    }
+
+    #[test]
+    fn parse_invalid_string() {
         let _datamodel = DataModel::parse(
             "
                 Person {
