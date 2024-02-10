@@ -28,8 +28,8 @@ variable = @{ "$" ~ identifier }
 
 deletion = { SOI ~ "deletion" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
-entity = { identifier ~ "{" ~ field+ ~ "}" }
+entity = { identifier ~ "{" ~ id_field ~ array_field* ~ "}" }
 
-field       = { id_field | array_field }
-id_field    = { variable }
+id_field = { variable }
+
 array_field = { identifier ~ "[" ~ variable? ~ "]" }

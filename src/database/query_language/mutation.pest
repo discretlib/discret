@@ -17,20 +17,17 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
 
-mutation = { SOI ~ "mutation" ~ identifier ~ query_param ~ "{" ~ entity+ ~ "}" ~ EOI }
-
-query_param = {
-    "(" ~ variable ~ ("," ~ variable)* ~ ","? ~ ")"
-}
+mutation = { SOI ~ "mutation" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
 entity = { identifier ~ "{" ~ field+ ~ "}" }
 
 field = { identifier ~ ":" ~ value }
 
-entity_ref   = { "{" ~ variable ~ "}" }
-entity_array = { "[" ~ variable ~ ("," ~ variable)* ~ ","? ~ "]" }
+value = { variable | entity_ref | entity_array | string | float | integer | boolean | null }
 
-value = { variable | entity_ref | entity_array | string | integer | number | boolean | null }
+entity_ref   = { "{" ~ entity_var ~ "}" }
+entity_array = { "[" ~ entity_var ~ "]" }
+entity_var   = { variable | string }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }
@@ -40,8 +37,8 @@ char   =  {
   | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
-number = @{
-    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+float = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
 
 integer = @{

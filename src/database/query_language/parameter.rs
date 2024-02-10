@@ -1,9 +1,6 @@
-use std::{
-    collections::HashMap,
-    fmt::{self},
-};
+use std::collections::HashMap;
 
-use super::Error;
+use super::{Error, Value, VariableType};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -19,25 +16,10 @@ pub struct Variable {
     var_type: VariableType,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum VariableType {
-    Integer(bool),
-    Float(bool),
-    Boolean(bool),
-    String(bool),
-    UID(bool),
-}
-impl fmt::Display for VariableType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
 #[derive(Debug)]
 pub struct Variables {
     vars: HashMap<String, Variable>,
 }
-
 impl Variables {
     pub fn new() -> Self {
         Self {
@@ -67,7 +49,7 @@ impl Variables {
                         Value::Boolean(_) => {}
                         Value::Null => {
                             if !nullable {
-                                return Err(Error::VariableNotNullable(var.0.to_string()));
+                                return Err(Error::NotNullable(var.0.to_string()));
                             }
                         }
                         _ => {
@@ -82,7 +64,7 @@ impl Variables {
                         Value::String(_) => {}
                         Value::Null => {
                             if !nullable {
-                                return Err(Error::VariableNotNullable(var.0.to_string()));
+                                return Err(Error::NotNullable(var.0.to_string()));
                             }
                         }
                         _ => {
@@ -97,7 +79,7 @@ impl Variables {
                         Value::Integer(_) => {}
                         Value::Null => {
                             if !nullable {
-                                return Err(Error::VariableNotNullable(var.0.to_string()));
+                                return Err(Error::NotNullable(var.0.to_string()));
                             }
                         }
                         _ => {
@@ -117,7 +99,7 @@ impl Variables {
                         }
                         Value::Null => {
                             if !nullable {
-                                return Err(Error::VariableNotNullable(var.0.to_string()));
+                                return Err(Error::NotNullable(var.0.to_string()));
                             }
                         }
                         _ => {
@@ -129,16 +111,16 @@ impl Variables {
                         }
                     },
 
-                    VariableType::UID(nullable) => match p {
+                    VariableType::Hex(nullable) => match p {
                         Value::String(e) => {
                             let decode = hex::decode(e);
                             if decode.is_err() {
-                                return Err(Error::InvalidUID(e.clone()));
+                                return Err(Error::InvalidHex(e.clone()));
                             }
                         }
                         Value::Null => {
                             if !nullable {
-                                return Err(Error::VariableNotNullable(var.0.to_string()));
+                                return Err(Error::NotNullable(var.0.to_string()));
                             }
                         }
                         _ => {
@@ -159,15 +141,6 @@ impl Variables {
         }
         Ok(())
     }
-}
-
-#[derive(Debug)]
-pub enum Value {
-    Boolean(bool),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Null,
 }
 
 #[derive(Debug)]
@@ -492,7 +465,7 @@ mod tests {
         let name = "UID";
 
         let mut vars = Variables::new();
-        vars.add(name.to_string(), VariableType::UID(false))
+        vars.add(name.to_string(), VariableType::Hex(false))
             .unwrap();
         let mut param = Parameters::new();
         vars.validate_params(param)
@@ -509,7 +482,7 @@ mod tests {
             .expect_err("param cannot be null");
 
         vars = Variables::new();
-        vars.add(name.to_string(), VariableType::UID(true)).unwrap();
+        vars.add(name.to_string(), VariableType::Hex(true)).unwrap();
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();

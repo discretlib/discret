@@ -1,8 +1,5 @@
-use super::{
-    data_model::{DataModel, FieldType},
-    parameter::{VariableType, Variables},
-    Error,
-};
+use super::{data_model::DataModel, parameter::Variables, Error};
+use super::{FieldType, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
@@ -15,7 +12,7 @@ struct PestParser;
 struct Deletion {
     name: String,
     variables: Variables,
-    queries: Vec<EntityDeletion>,
+    deletions: Vec<EntityDeletion>,
 }
 
 #[derive(Debug)]
@@ -45,7 +42,7 @@ impl Deletion {
         Self {
             name: "".to_string(),
             variables: Variables::new(),
-            queries: Vec::new(),
+            deletions: Vec::new(),
         }
     }
 
@@ -75,7 +72,7 @@ impl Deletion {
                                 entity_pair,
                                 &mut deletion.variables,
                             )?;
-                            deletion.queries.push(ent);
+                            deletion.deletions.push(ent);
                         }
                         Rule::EOI => {}
                         _ => unreachable!(),
@@ -99,61 +96,49 @@ impl Deletion {
             match entity_pair.as_rule() {
                 Rule::identifier => {
                     let name = entity_pair.as_str().to_string();
-                    if data_model.get_entity(&name).is_none() {
-                        return Err(Error::InvalidQuery(format!(
-                            "Entity name '{}' not found in the data model",
-                            name
-                        )));
-                    }
+                    data_model.get_entity(&name)?;
                     entity.entity_name = name;
                 }
-                Rule::field => {
-                    let dm_entity = data_model.get_entity(&entity.entity_name).unwrap();
 
-                    for field in entity_pair.into_inner().into_iter() {
-                        match field.as_rule() {
-                            Rule::id_field => {
-                                let var = field.as_str()[1..].to_string(); //remove $
-                                variables.add(var.clone(), VariableType::UID(false))?;
-                                entity.id_param = var;
-                            }
-                            Rule::array_field => {
-                                let mut array_field_pairs = field.into_inner();
-                                let name = array_field_pairs.next().unwrap().as_str().to_string();
-                                match dm_entity.fields.get(&name) {
-                                    None => {
-                                        return Err(Error::InvalidQuery(format!(
-                                            "Unknown field '{}' in entity '{}'",
-                                            name, entity.entity_name
-                                        )))
-                                    }
-                                    Some(e) => match e.field_type {
-                                        FieldType::Array(_) => {}
-                                        _ => {
-                                            return Err(Error::InvalidQuery(format!(
-                                                "'{}' in entity '{}' is not defined as an array in the data model",
-                                                name, entity.entity_name
-                                            )))
-                                        }
-                                    },
-                                };
-                                let id_param: Option<String>;
-                                if let Some(param_pair) = array_field_pairs.next() {
-                                    let var = param_pair.as_str()[1..].to_string(); //remove $
-
-                                    variables.add(var.clone(), VariableType::UID(false))?;
-
-                                    id_param = Some(var);
-                                } else {
-                                    id_param = None;
-                                }
-                                entity.references.push(ReferenceDeletion { name, id_param });
-                            }
-
-                            _ => unreachable!(),
-                        }
-                    }
+                Rule::id_field => {
+                    let var = entity_pair.as_str()[1..].to_string(); //remove $
+                    variables.add(var.clone(), VariableType::Hex(false))?;
+                    entity.id_param = var;
                 }
+                Rule::array_field => {
+                    let dm_entity = data_model.get_entity(&entity.entity_name).unwrap();
+                    let mut array_field_pairs = entity_pair.into_inner();
+                    let name = array_field_pairs.next().unwrap().as_str().to_string();
+                    match dm_entity.fields.get(&name) {
+                        None => {
+                            return Err(Error::InvalidQuery(format!(
+                                "Unknown field '{}' in entity '{}'",
+                                name, entity.entity_name
+                            )))
+                        }
+                        Some(e) => match e.field_type {
+                            FieldType::Array(_) => {}
+                            _ => {
+                                return Err(Error::InvalidQuery(format!(
+                                "'{}' in entity '{}' is not defined as an array in the data model",
+                                name, entity.entity_name
+                            )))
+                            }
+                        },
+                    };
+                    let id_param: Option<String>;
+                    if let Some(param_pair) = array_field_pairs.next() {
+                        let var = param_pair.as_str()[1..].to_string(); //remove $
+
+                        variables.add(var.clone(), VariableType::Hex(false))?;
+
+                        id_param = Some(var);
+                    } else {
+                        id_param = None;
+                    }
+                    entity.references.push(ReferenceDeletion { name, id_param });
+                }
+
                 _ => unreachable!(),
             }
         }
@@ -207,9 +192,9 @@ mod tests {
 
         assert_eq!("delete_person", deletion.name);
 
-        assert_eq!(2, deletion.queries.len());
+        assert_eq!(2, deletion.deletions.len());
 
-        let query = deletion.queries.get(0).unwrap();
+        let query = deletion.deletions.get(0).unwrap();
         assert_eq!("Person", query.entity_name);
         assert_eq!("id", query.id_param);
         assert_eq!(2, query.references.len());
@@ -222,7 +207,7 @@ mod tests {
         assert_eq!("pet", reference.name);
         assert_eq!(None, reference.id_param);
 
-        let query = deletion.queries.get(1).unwrap();
+        let query = deletion.deletions.get(1).unwrap();
         assert_eq!("Pet", query.entity_name);
         assert_eq!("id3".to_string(), query.id_param);
         assert_eq!(0, query.references.len());

@@ -1,4 +1,4 @@
-use super::Error;
+use super::{Error, FieldType, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
@@ -8,71 +8,156 @@ use std::collections::HashMap;
 #[grammar = "database/query_language/data_model.pest"]
 struct PestParser;
 
+const AUTHOR_TABLE: &str = "__SysAuthor";
+const ID_FIELD: &str = "id";
+const CREATION_DATE_FIELD: &str = "cdate";
+const MODIFICATION_DATE_FIELD: &str = "mdate";
+const AUTHORS_FIELD: &str = "__authors";
+const ENTITY_FIELD: &str = "__entity";
+const FLAG_FIELD: &str = "__sys_flag";
+const JSON_FIELD: &str = "__sys_json";
+const PUB_KEY_FIELD: &str = "__pub_key";
+const SIGNATURE_FIELD: &str = "__signature";
+
+lazy_static::lazy_static! {
+    //
+    // constant map of the system field definition
+    //
+    pub static ref SYSTEM_FIELDS: HashMap<String, Field> = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            ID_FIELD.to_string(),
+            Field {
+                name: ID_FIELD.to_string(),
+                field_type: FieldType::Hex,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: true,
+                readable: true,
+            },
+        );
+
+        fields.insert(
+            CREATION_DATE_FIELD.to_string(),
+            Field {
+                name: CREATION_DATE_FIELD.to_string(),
+                field_type: FieldType::Integer,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+
+       fields.insert(
+            MODIFICATION_DATE_FIELD.to_string(),
+            Field {
+                name: MODIFICATION_DATE_FIELD.to_string(),
+                field_type: FieldType::Integer,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+
+        fields.insert(
+            AUTHORS_FIELD.to_string(),
+            Field {
+                name: AUTHORS_FIELD.to_string(),
+                field_type: FieldType::Array(AUTHOR_TABLE.to_string()),
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+
+       fields.insert(
+            ENTITY_FIELD.to_string(),
+            Field {
+                name: ENTITY_FIELD.to_string(),
+                field_type: FieldType::String,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+
+        fields.insert(
+            FLAG_FIELD.to_string(),
+            Field {
+                name: FLAG_FIELD.to_string(),
+                field_type: FieldType::Hex,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: false,
+            },
+        );
+
+        fields.insert(
+            JSON_FIELD.to_string(),
+            Field {
+                name: JSON_FIELD.to_string(),
+                field_type: FieldType::String,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: false,
+            },
+        );
+
+        fields.insert(
+            PUB_KEY_FIELD.to_string(),
+            Field {
+                name: PUB_KEY_FIELD.to_string(),
+                field_type: FieldType::Hex,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+
+        fields.insert(
+            SIGNATURE_FIELD.to_string(),
+            Field {
+                name: SIGNATURE_FIELD.to_string(),
+                field_type: FieldType::Hex,
+                nullable: false,
+                indexed: false,
+                unique: false,
+                mutable: false,
+                readable: true,
+            },
+        );
+        fields
+    };
+}
+
 #[derive(Debug)]
 pub struct DataModel {
     entities: HashMap<String, Entity>,
 }
-
-const RESERVED_FIELD: [&str; 9] = [
-    "id",
-    "mdate",
-    "cdate",
-    "authors",
-    "__entity",
-    "__sys_flag",
-    "__sys_json",
-    "__pub_key",
-    "__signature",
-];
-
-#[derive(Debug)]
-pub struct Entity {
-    pub name: String,
-    pub fields: HashMap<String, Field>,
-    pub deprecated: bool,
-}
-impl Entity {
-    pub fn new() -> Self {
-        Self {
-            name: "".to_string(),
-            fields: HashMap::new(),
-            deprecated: false,
-        }
-    }
-
-    pub fn add_field(&mut self, field: Field) -> Result<(), Error> {
-        if self.fields.contains_key(&field.name) {
-            return Err(Error::DuplicatedField(field.name.clone()));
-        }
-        self.fields.insert(field.name.clone(), field);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct Field {
-    pub name: String,
-    pub field_type: FieldType,
-    pub nullable: bool,
-    pub indexed: bool,
-    pub unique: bool,
-}
-
-#[derive(Debug)]
-pub enum FieldType {
-    Entity(String),
-    Array(String),
-    String,
-    Integer,
-    Float,
-    Boolean,
-}
-
 impl DataModel {
     pub fn new() -> Self {
-        Self {
+        let mut dm = Self {
             entities: HashMap::new(),
-        }
+        };
+        let mut sys_author = Entity::new();
+        sys_author.name = AUTHOR_TABLE.to_string();
+        dm.entities.insert(AUTHOR_TABLE.to_string(), sys_author);
+        dm
     }
 
     pub fn add_entity(&mut self, entity: Entity) -> Result<(), Error> {
@@ -82,8 +167,16 @@ impl DataModel {
         self.entities.insert(entity.name.clone(), entity);
         Ok(())
     }
-    pub fn get_entity(&self, name: &String) -> Option<&Entity> {
-        self.entities.get(name)
+
+    pub fn get_entity(&self, name: &String) -> Result<&Entity, Error> {
+        if let Some(entity) = self.entities.get(name) {
+            Ok(entity)
+        } else {
+            Err(Error::InvalidQuery(format!(
+                "Entity '{}' not found in the data model",
+                name
+            )))
+        }
     }
 
     pub fn parse(query: &str) -> Result<DataModel, Error> {
@@ -139,6 +232,8 @@ impl DataModel {
                         indexed: false,
                         nullable: true,
                         unique: false,
+                        readable: true,
+                        mutable: true,
                     };
 
                     let field_type = field_pair.next().unwrap();
@@ -149,9 +244,9 @@ impl DataModel {
                             let scalar_type = scalar_field.next().unwrap().as_str();
 
                             match scalar_type {
-                                "Integer" => field.field_type = FieldType::Integer,
-                                "Float" => field.field_type = FieldType::Float,
                                 "Boolean" => field.field_type = FieldType::Boolean,
+                                "Float" => field.field_type = FieldType::Float,
+                                "Integer" => field.field_type = FieldType::Integer,
                                 "String" => field.field_type = FieldType::String,
                                 _ => unreachable!(),
                             }
@@ -181,8 +276,8 @@ impl DataModel {
                             let name = field_type.into_inner().next().unwrap().as_str();
                             field.nullable = false;
                             match name {
-                                "Integer" | "Float" | "Boolean" | "String" => {
-                                    return Err(Error::ParserError(format! ("{}.{} [{}] only Entity are supported in array, NOT scalar fields (Integer, Float, Boolean, String ) ",entity.name , field.name, name)));
+                                "Boolean" | "Float" | "Integer" | "String" => {
+                                    return Err(Error::ParserError(format! ("{}.{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported",entity.name , field.name, name)));
                                 }
                                 _ => field.field_type = FieldType::Array(name.to_string()),
                             }
@@ -195,7 +290,6 @@ impl DataModel {
                 _ => unreachable!(),
             }
         }
-
         Ok(entity)
     }
 
@@ -226,6 +320,80 @@ impl DataModel {
             }
         }
         Ok(())
+    }
+}
+#[derive(Debug)]
+pub struct Entity {
+    pub name: String,
+    pub fields: HashMap<String, Field>,
+    pub deprecated: bool,
+}
+impl Entity {
+    pub fn new() -> Self {
+        Self {
+            name: "".to_string(),
+            fields: HashMap::new(),
+            deprecated: false,
+        }
+    }
+
+    pub fn add_field(&mut self, field: Field) -> Result<(), Error> {
+        if self.fields.contains_key(&field.name) {
+            return Err(Error::DuplicatedField(field.name.clone()));
+        }
+        if SYSTEM_FIELDS.contains_key(&field.name) {
+            return Err(Error::SystemFieldConflict(field.name.clone()));
+        }
+        self.fields.insert(field.name.clone(), field);
+        Ok(())
+    }
+    pub fn get_field(&self, name: &String) -> Result<&Field, Error> {
+        if let Some(field) = self.fields.get(name) {
+            Ok(field)
+        } else if let Some(field) = SYSTEM_FIELDS.get(name) {
+            Ok(field)
+        } else {
+            Err(Error::InvalidQuery(format!(
+                "Field '{}' does not exist in entity '{}' ",
+                name, self.name
+            )))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Field {
+    pub name: String,
+    pub field_type: FieldType,
+    pub nullable: bool,
+    pub indexed: bool,
+    pub unique: bool,
+    pub mutable: bool,
+    pub readable: bool,
+}
+impl Field {
+    pub fn new() -> Self {
+        Self {
+            name: "".to_string(),
+            field_type: FieldType::Boolean,
+            nullable: false,
+            indexed: false,
+            unique: false,
+            mutable: false,
+            readable: false,
+        }
+    }
+
+    pub fn get_variable_type(&self) -> VariableType {
+        match self.field_type {
+            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Hex => {
+                VariableType::Hex(self.nullable)
+            }
+            FieldType::Boolean => VariableType::Boolean(self.nullable),
+            FieldType::Integer => VariableType::Integer(self.nullable),
+            FieldType::Float => VariableType::Float(self.nullable),
+            FieldType::String => VariableType::String(self.nullable),
+        }
     }
 }
 
@@ -259,8 +427,6 @@ mod tests {
           ",
         )
         .unwrap();
-
-        assert_eq!(2, datamodel.entities.len());
 
         let pet = datamodel.entities.get("Pet").unwrap();
         assert_eq!("Pet", pet.name);
@@ -463,5 +629,70 @@ mod tests {
           ",
         )
         .expect_err("@deprecated must be before the entity name");
+    }
+
+    #[test]
+    fn system_field_collision() {
+        let mut entity = Entity::new();
+
+        let mut field = Field::new();
+        field.name = AUTHORS_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = AUTHORS_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = CREATION_DATE_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = ENTITY_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = FLAG_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = ID_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = JSON_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = MODIFICATION_DATE_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = PUB_KEY_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
+
+        let mut field = Field::new();
+        field.name = SIGNATURE_FIELD.to_string();
+        entity
+            .add_field(field)
+            .expect_err("system field allready defined");
     }
 }
