@@ -465,17 +465,17 @@ mod tests {
         let data_model = DataModel::parse(
             "
             Person {
-                name : String NOT NULL UNIQUE,
-                surname : String INDEXED,
+                name : String ,
+                surname : String ,
                 parents : [Person],
                 pet : Pet,
                 age : Integer,
                 weight : Float,
-                is_human : Boolean NOT NULL
+                is_human : Boolean 
             }
 
             Pet {
-                name : String  UNIQUE NOT NULL,
+                name : String ,
             }
         
         ",
@@ -486,17 +486,23 @@ mod tests {
             r#"
             mutation mutmut {
                 Person {
-                    id : $id1
-                    name : $id2
-                    surname : "dridri"
-                    parents : [$id3]
-                    age: 10
-                    weight: 123
-                    pet : {$id3}
+                    id : $id
+                    name : $name
+                    surname : $surname
+                    parents : [$father_id]
+                    age: $age
+                    weight: $weight
+                    pet : {$pet_id}
+                    is_human : $human
                 }
 
                 Person {
-                    name : "Silvia"
+                    name : "Doe"
+                    surname : "John"
+                    parents : ["0D12CF34B2"]
+                    age: 32
+                    weight: 123.4
+                    pet : {"3E12CF34B2"}
                     is_human : true
                 }
             }

@@ -156,14 +156,14 @@ mod tests {
         let data_model = DataModel::parse(
             "
             Person {
-                name : String NOT NULL UNIQUE,
-                surname : String INDEXED,
+                name : String ,
+                surname : String ,
                 parent : [Person],
                 pet : [Pet]
             }
 
             Pet {
-                name : String  UNIQUE NOT NULL,
+                name : String ,
             }
         
         ",
@@ -220,14 +220,14 @@ mod tests {
         let data_model = DataModel::parse(
             "
             Person {
-                name : String NOT NULL UNIQUE,
-                surname : String INDEXED,
+                name : String ,
+                surname : String ,
                 parent : [Person],
                 pet : [Pet]
             }
 
             Pet {
-                name : String  UNIQUE NOT NULL,
+                name : String,
             }
         
         ",
@@ -330,8 +330,8 @@ mod tests {
         let data_model = DataModel::parse(
             "
             Person {
-                name : String NOT NULL UNIQUE,
-                surname : String INDEXED,
+                name : String ,
+                surname : String ,
                 parent : [Person],
                 pet : [Person]
             }        

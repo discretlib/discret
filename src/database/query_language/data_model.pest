@@ -1,18 +1,43 @@
+// add DEFAULT to be used with the ifnull() sqlite function
+// partial index every entity id
+
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
-deprecated = @{ "@deprecated" }
+deprecated = @{ ^"@deprecated" }
+
+deprecable_identifier = { deprecated? ~ identifier }
 
 datamodel = { SOI ~ entity* ~ EOI }
-entity    = { deprecated? ~ identifier ~ "{" ~ field ~ ("," ~ field)* ~ ","? ~ "}" }
+entity    = { deprecable_identifier ~ "{" ~ entry ~ ("," ~ entry)* ~ ","? ~ "}" }
 
-not_null     = { ^"not null" }
-indexed      = { ^"indexed" }
-unique       = { ^"unique" }
-scalar_type  = { "Integer" | "Float" | "Boolean" | "String" }
-scalar_field = { scalar_type ~ (not_null | indexed | unique)* }
-entity_array = { "[" ~ identifier ~ "]" }
-entity_field = { identifier ~ not_null? }
+nullable      = { ^"nullable" }
+default       = { ^"default" ~ default_value }
+default_value = { float | integer | boolean | string }
+scalar_type   = { ^"Integer" | ^"Float" | ^"Boolean" | ^"String" }
+scalar_field  = { scalar_type ~ (nullable | default)? }
+entity_array  = { "[" ~ identifier ~ "]" }
+entity_field  = { identifier ~ nullable? }
+field         = { deprecable_identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
 
-field = { identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
+index        = { ^"index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
+unique_index = { ^"unique_index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
+entry        = { index | unique_index | field }
+
+string = ${ "\"" ~ inner ~ "\"" }
+inner  = @{ char* }
+char   =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+float = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+boolean =  { ^"true" | ^"false" }

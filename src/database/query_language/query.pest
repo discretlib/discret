@@ -1,125 +1,47 @@
-// query HeroNameAndFriends($episode: Episode, orderBy: { createdAt: asc } , take: 1, after: 1 ) {
-
-// hero(episode: $episode) {
-// name
-// friends ( orderBy: { name: desc } ) {
-// name
-// }
-// }
-
-// field : referencedBy(type,[field]),
-// numfriends: count(friends)
-// sum()
-// min
-// max
-
-// }
-// @deprecated
-// subscription
-// query	mutation	subscription deletion
-// }
-
-// {
-// "episode": "JEDI"
-// }
-
-// type query String{ type+ }
-// query string ()
-// query string (parameters)
-
-// type {field+}
-
-// type(parameters)
-
-// field:
-// name
-// name()
-// name(parameters)
-// name{
-// name
-// }
-// name() {
-// name
-// }
-
-// name(parameters){
-// name
-// }
-
-// if id is passed -> update
-// else create
-// mutate name {
-// friend{ //update friends
-// id : &id
-// name: &q //update name
-// truc: {  //replace truc id by new id
-// id: $idtruc
-// }
-// atruc: [{$idtuc}, {name:}] //add $idtruc and create name
-// }
-// }
-// monitor
-
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
-identifier = @{ (LETTER | NUMBER)+ }
+identifier = @{ (LETTER | NUMBER | "_")+ }
+variable   = @{ "$" ~ identifier }
 
-query = { SOI ~ "query" ~ identifier ~ queryParam? ~ "{" ~ dataType+ ~ "}" ~ EOI }
+query      = { SOI ~ query_type ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
+query_type = { "query" | "subscription" }
 
-typeParameters = {
+entity      = { entity_name ~ entity_param? ~ "{" ~ field+ ~ "}" }
+entity_name = { identifier ~ (":" ~ identifier)? }
+
+named_field = { identifier ~ (":" ~ identifier)? }
+field       = { entity | function | named_field }
+
+entity_param = {
     "(" ~ ")"
-  | "(" ~ typeParam ~ (", " ~ typeParam)* ~ ")"
-}
-typeParam      = {
-    filter
-  | orderBy
-  | limit
+  | "(" ~ param ~ ("," ~ param)* ~ ","? ~ ")"
 }
 
-dataType = {
-    typeName ~ typeParameters? ~ "{" ~ (field)+ ~ "}"
-}
+param = { search | order_by | limit | skip | before | after | filter }
 
-field = {
-    function
-  | dataType
-  | alias
-  | identifier
-}
+search       = { "search" ~ "(" ~ search_value ~ ")" }
+search_value = { variable | string }
 
-function = {
-    identifier ~ ":" ~ ("count" | "sum" | "avg" | "min" | "max" | "refBy") ~ dataType
-}
+order_by        = { "order_by" ~ "(" ~ order_param ~ ("," ~ order_param)* ~ ","? ~ ")" }
+order_param     = { identifier ~ order_direction }
+order_direction = { ^"asc" | ^"desc" }
 
-queryParam   =  {
-    "(" ~ ")"
-  | "(" ~ variablePair ~ ("," ~ variablePair)* ~ ")"
-}
-variable     = @{ "$" ~ identifier }
-variableType =  { ("String" | "Number" | "Integer") }
-variablePair =  { variable ~ ":" ~ variableType }
+limit       = { "limit " ~ limit_value }
+skip        = { "skip " ~ limit_value }
+limit_value = { unsigned_int | variable }
 
-typeName = { alias | identifier }
-alias    = {
-    identifier ~ ":" ~ identifier
-}
+before       = { "before " ~ before_value }
+after        = { "after " ~ before_value }
+before_value = { variable | string }
 
-filter      = { identifier ~ (gtOrEq | ltOrEq | eq | gt | lt) ~ filterValue }
-filterValue = { variable | string | integer | number | null }
-
-orderBy    = { "orderBy" ~ "{" ~ orderParam ~ ("," ~ orderParam)* ~ "}" }
-orderParam = { identifier ~ (^"asc" | ^"desc") }
-
-limit      = { "limit" ~ limitValue }
-limitValue = { unsigned_int | variable }
+filter       = { identifier ~ (gtOrEq | ltOrEq | eq | gt | lt) ~ filter_value }
+filter_value = { variable | float | string | integer | boolean | null }
 
 eq     = { "=" }
 gt     = { ">" }
 gtOrEq = { ">=" }
 lt     = { "<" }
 ltOrEq = { "<=" }
-
-null = { "null" }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }
@@ -129,12 +51,25 @@ char   =  {
   | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
-number = @{
-    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+float = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
 
 integer = @{
     "-"? ~ ASCII_DIGIT+
 }
+boolean =  { ^"true" | ^"false" }
 
 unsigned_int = { ASCII_DIGIT+ }
+
+null = { ^"null" }
+
+function      = { identifier ~ ":" ~ function_list }
+function_list = { avg_fn | count_fn | max_fn | min_fn | sum_fn | ref_by_fn }
+
+ref_by_fn = { "ref_by" ~ "(" ~ identifier ~ "," ~ identifier ~ entity_param? ~ "{" ~ field+ ~ "}" ~ ")" }
+avg_fn    = { "avg" ~ "(" ~ identifier ~ ")" }
+count_fn  = { "count" ~ "(" ~ ")" }
+max_fn    = { "max" ~ "(" ~ identifier ~ ")" }
+min_fn    = { "min" ~ "(" ~ identifier ~ ")" }
+sum_fn    = { "sum" ~ "(" ~ identifier ~ ")" }

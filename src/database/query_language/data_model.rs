@@ -1,4 +1,4 @@
-use super::{Error, FieldType, VariableType};
+use super::{Error, FieldType, Value, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
@@ -30,9 +30,9 @@ lazy_static::lazy_static! {
             Field {
                 name: ID_FIELD.to_string(),
                 field_type: FieldType::Hex,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: true,
                 readable: true,
             },
@@ -43,9 +43,9 @@ lazy_static::lazy_static! {
             Field {
                 name: CREATION_DATE_FIELD.to_string(),
                 field_type: FieldType::Integer,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -56,9 +56,9 @@ lazy_static::lazy_static! {
             Field {
                 name: MODIFICATION_DATE_FIELD.to_string(),
                 field_type: FieldType::Integer,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -69,9 +69,9 @@ lazy_static::lazy_static! {
             Field {
                 name: AUTHORS_FIELD.to_string(),
                 field_type: FieldType::Array(AUTHOR_TABLE.to_string()),
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -82,9 +82,9 @@ lazy_static::lazy_static! {
             Field {
                 name: ENTITY_FIELD.to_string(),
                 field_type: FieldType::String,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -95,9 +95,9 @@ lazy_static::lazy_static! {
             Field {
                 name: FLAG_FIELD.to_string(),
                 field_type: FieldType::Hex,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: false,
             },
@@ -108,9 +108,9 @@ lazy_static::lazy_static! {
             Field {
                 name: JSON_FIELD.to_string(),
                 field_type: FieldType::String,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: false,
             },
@@ -121,9 +121,9 @@ lazy_static::lazy_static! {
             Field {
                 name: PUB_KEY_FIELD.to_string(),
                 field_type: FieldType::Hex,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -134,9 +134,9 @@ lazy_static::lazy_static! {
             Field {
                 name: SIGNATURE_FIELD.to_string(),
                 field_type: FieldType::Hex,
+                default_value: None,
                 nullable: false,
-                indexed: false,
-                unique: false,
+                deprecated: false,
                 mutable: false,
                 readable: true,
             },
@@ -168,7 +168,7 @@ impl DataModel {
         Ok(())
     }
 
-    pub fn get_entity(&self, name: &String) -> Result<&Entity, Error> {
+    pub fn get_entity(&self, name: &str) -> Result<&Entity, Error> {
         if let Some(entity) = self.entities.get(name) {
             Ok(entity)
         } else {
@@ -217,80 +217,193 @@ impl DataModel {
         let mut entity = Entity::new();
         for entity_pair in pair.into_inner().into_iter() {
             match entity_pair.as_rule() {
-                Rule::deprecated => {
-                    entity.deprecated = true;
+                Rule::deprecable_identifier => {
+                    for i in entity_pair.into_inner() {
+                        match i.as_rule() {
+                            Rule::deprecated => entity.deprecated = true,
+                            Rule::identifier => entity.name = i.as_str().to_string(),
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-                Rule::identifier => {
-                    entity.name = entity_pair.as_str().to_string();
+                Rule::entry => {
+                    for i in entity_pair.into_inner() {
+                        match i.as_rule() {
+                            Rule::field => {
+                                let field = Self::parse_field_type(i)?;
+                                entity.add_field(field)?;
+                            }
+                            Rule::index => {
+                                let index = Self::parse_index(i, false)?;
+                                entity.add_index(index)?;
+                            }
+                            Rule::unique_index => {
+                                let index = Self::parse_index(i, true)?;
+                                entity.add_index(index)?;
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-                Rule::field => {
-                    let mut field_pair = entity_pair.into_inner();
-                    let name = field_pair.next().unwrap().as_str();
-                    let mut field = Field {
-                        name: name.to_string(),
-                        field_type: FieldType::Boolean,
-                        indexed: false,
-                        nullable: true,
-                        unique: false,
-                        readable: true,
-                        mutable: true,
-                    };
 
-                    let field_type = field_pair.next().unwrap();
+                _ => unreachable!(),
+            }
+        }
+        entity.check_consistency()?;
+        Ok(entity)
+    }
 
-                    match field_type.as_rule() {
-                        Rule::scalar_field => {
-                            let mut scalar_field = field_type.into_inner();
-                            let scalar_type = scalar_field.next().unwrap().as_str();
+    fn parse_index(entity_pair: Pair<'_, Rule>, unique: bool) -> Result<Index, Error> {
+        let mut index = Index::new(unique);
 
-                            match scalar_type {
-                                "Boolean" => field.field_type = FieldType::Boolean,
-                                "Float" => field.field_type = FieldType::Float,
-                                "Integer" => field.field_type = FieldType::Integer,
-                                "String" => field.field_type = FieldType::String,
+        for field in entity_pair.into_inner() {
+            index.add_field(field.as_str().to_string())?;
+        }
+        //   println!("{:#?}", entity_pair);
+        Ok(index)
+    }
+
+    fn parse_field_type(entity_pair: Pair<'_, Rule>) -> Result<Field, Error> {
+        let mut field = Field::new();
+        let mut field_pairs = entity_pair.into_inner();
+
+        let name_pair = field_pairs.next().unwrap();
+
+        for i in name_pair.into_inner() {
+            match i.as_rule() {
+                Rule::deprecated => field.deprecated = true,
+                Rule::identifier => field.name = i.as_str().to_string(),
+                _ => unreachable!(),
+            }
+        }
+
+        let field_type = field_pairs.next().unwrap();
+
+        match field_type.as_rule() {
+            Rule::scalar_field => {
+                let mut scalar_field = field_type.into_inner();
+                let scalar_type = scalar_field.next().unwrap().as_str();
+
+                match scalar_type {
+                    "Boolean" => field.field_type = FieldType::Boolean,
+                    "Float" => field.field_type = FieldType::Float,
+                    "Integer" => field.field_type = FieldType::Integer,
+                    "String" => field.field_type = FieldType::String,
+                    _ => unreachable!(),
+                }
+
+                if let Some(pair) = scalar_field.into_iter().next() {
+                    match pair.as_rule() {
+                        Rule::nullable => field.nullable = true,
+                        Rule::default => {
+                            let value_pair = pair
+                                .into_inner()
+                                .next()
+                                .unwrap()
+                                .into_inner()
+                                .next()
+                                .unwrap();
+                            match value_pair.as_rule() {
+                                Rule::boolean => {
+                                    let value = value_pair.as_str();
+                                    match field.field_type {
+                                        FieldType::Boolean => {
+                                            field.default_value =
+                                                Some(Value::Boolean(value.parse()?))
+                                        }
+                                        _ => {
+                                            return Err(Error::InvalidDefaultValue(
+                                                field.name.clone(),
+                                                "Boolean".to_string(),
+                                                field.field_type.to_string(),
+                                            ))
+                                        }
+                                    }
+                                }
+                                Rule::float => {
+                                    let value = value_pair.as_str();
+                                    match field.field_type {
+                                        FieldType::Float => {
+                                            field.default_value = Some(Value::Float(value.parse()?))
+                                        }
+                                        _ => {
+                                            return Err(Error::InvalidDefaultValue(
+                                                field.name.clone(),
+                                                "Float".to_string(),
+                                                field.field_type.to_string(),
+                                            ))
+                                        }
+                                    }
+                                }
+
+                                Rule::integer => {
+                                    let value = value_pair.as_str();
+                                    match field.field_type {
+                                        FieldType::Float => {
+                                            field.default_value = Some(Value::Float(value.parse()?))
+                                        }
+                                        FieldType::Integer => {
+                                            field.default_value =
+                                                Some(Value::Integer(value.parse()?))
+                                        }
+                                        _ => {
+                                            return Err(Error::InvalidDefaultValue(
+                                                field.name.clone(),
+                                                "Integer".to_string(),
+                                                field.field_type.to_string(),
+                                            ))
+                                        }
+                                    }
+                                }
+
+                                Rule::string => {
+                                    let value = value_pair.into_inner().next().unwrap().as_str();
+                                    match field.field_type {
+                                        FieldType::String => {
+                                            field.default_value =
+                                                Some(Value::String(value.to_string()))
+                                        }
+                                        _ => {
+                                            return Err(Error::InvalidDefaultValue(
+                                                field.name.clone(),
+                                                "String".to_string(),
+                                                field.field_type.to_string(),
+                                            ))
+                                        }
+                                    }
+                                }
+
                                 _ => unreachable!(),
                             }
-
-                            for pair in scalar_field.into_iter() {
-                                match pair.as_rule() {
-                                    Rule::not_null => field.nullable = false,
-                                    Rule::unique => field.unique = true,
-                                    Rule::indexed => field.indexed = true,
-                                    _ => unreachable!(),
-                                }
-                            }
-                            entity.add_field(field)?;
-                        }
-                        Rule::entity_field => {
-                            let mut entity_field = field_type.into_inner();
-
-                            let name = entity_field.next().unwrap().as_str().to_string();
-                            field.field_type = FieldType::Entity(name);
-
-                            if let Some(_next) = entity_field.next() {
-                                field.nullable = false;
-                            }
-                            entity.add_field(field)?;
-                        }
-                        Rule::entity_array => {
-                            let name = field_type.into_inner().next().unwrap().as_str();
-                            field.nullable = false;
-                            match name {
-                                "Boolean" | "Float" | "Integer" | "String" => {
-                                    return Err(Error::ParserError(format! ("{}.{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported",entity.name , field.name, name)));
-                                }
-                                _ => field.field_type = FieldType::Array(name.to_string()),
-                            }
-                            entity.add_field(field)?;
                         }
 
                         _ => unreachable!(),
                     }
                 }
-                _ => unreachable!(),
             }
+            Rule::entity_field => {
+                let mut entity_field = field_type.into_inner();
+
+                let name = entity_field.next().unwrap().as_str().to_string();
+                field.field_type = FieldType::Entity(name);
+
+                if let Some(_next) = entity_field.next() {
+                    field.nullable = true;
+                }
+            }
+            Rule::entity_array => {
+                let name = field_type.into_inner().next().unwrap().as_str();
+                match name {
+                    "Boolean" | "Float" | "Integer" | "String" => {
+                        return Err(Error::ParserError(format! ("{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
+                    }
+                    _ => field.field_type = FieldType::Array(name.to_string()),
+                }
+            }
+
+            _ => unreachable!(),
         }
-        Ok(entity)
+        Ok(field)
     }
 
     fn check_consistency(&self) -> Result<(), Error> {
@@ -322,10 +435,45 @@ impl DataModel {
         Ok(())
     }
 }
+
+#[derive(Debug)]
+pub struct Index {
+    fields: Vec<String>,
+    unique: bool,
+}
+impl Index {
+    pub fn new(unique: bool) -> Self {
+        Self {
+            fields: Vec::new(),
+            unique,
+        }
+    }
+    pub fn add_field(&mut self, name: String) -> Result<(), Error> {
+        if self.fields.contains(&name) {
+            return Err(Error::InvalidQuery(format!(
+                "'{}' is duplicated in the Index",
+                name
+            )));
+        }
+        self.fields.push(name);
+        Ok(())
+    }
+
+    pub fn name(&self) -> String {
+        let mut name = String::new();
+        for i in &self.fields {
+            name.push('$');
+            name.push_str(i);
+        }
+        name
+    }
+}
+
 #[derive(Debug)]
 pub struct Entity {
     pub name: String,
     pub fields: HashMap<String, Field>,
+    pub indexes: HashMap<String, Index>,
     pub deprecated: bool,
 }
 impl Entity {
@@ -333,6 +481,7 @@ impl Entity {
         Self {
             name: "".to_string(),
             fields: HashMap::new(),
+            indexes: HashMap::new(),
             deprecated: false,
         }
     }
@@ -347,7 +496,20 @@ impl Entity {
         self.fields.insert(field.name.clone(), field);
         Ok(())
     }
-    pub fn get_field(&self, name: &String) -> Result<&Field, Error> {
+
+    pub fn add_index(&mut self, index: Index) -> Result<(), Error> {
+        let name = index.name();
+        if self.indexes.contains_key(&name) {
+            return Err(Error::InvalidQuery(format!(
+                "Index '{}' allready exists",
+                name
+            )));
+        }
+        self.indexes.insert(name, index);
+        Ok(())
+    }
+
+    pub fn get_field(&self, name: &str) -> Result<&Field, Error> {
         if let Some(field) = self.fields.get(name) {
             Ok(field)
         } else if let Some(field) = SYSTEM_FIELDS.get(name) {
@@ -359,15 +521,39 @@ impl Entity {
             )))
         }
     }
+
+    pub fn check_consistency(&self) -> Result<(), Error> {
+        for index in self.indexes.values() {
+            for field in &index.fields {
+                if let Some(e) = self.fields.get(field) {
+                    match e.field_type {
+                        FieldType::Array(_) | FieldType::Entity(_) => {
+                            return Err(Error::InvalidQuery(format!(
+                                "Invalid Index: field '{}' cannot be indexed because of its type '{}'. Only scalar values can be indexed ",
+                                field, e.field_type
+                            )));
+                        }
+                        _ => {}
+                    }
+                } else {
+                    return Err(Error::InvalidQuery(format!(
+                        "Invalid Index: field '{}' does not exist in entity '{}' ",
+                        field, self.name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub struct Field {
     pub name: String,
     pub field_type: FieldType,
+    pub default_value: Option<Value>,
     pub nullable: bool,
-    pub indexed: bool,
-    pub unique: bool,
+    pub deprecated: bool,
     pub mutable: bool,
     pub readable: bool,
 }
@@ -376,9 +562,9 @@ impl Field {
         Self {
             name: "".to_string(),
             field_type: FieldType::Boolean,
+            default_value: None,
             nullable: false,
-            indexed: false,
-            unique: false,
+            deprecated: false,
             mutable: false,
             readable: false,
         }
@@ -407,24 +593,27 @@ mod tests {
     #[test]
     fn parse_valid_model() {
         let datamodel = DataModel::parse(
-            "
+            r#"
                 @deprecated Person {
-                    name : String NOT NULL UNIQUE,
-                    surname : String INDEXED,
+                    name : String ,
+                    surname : String nullable,
                     child : [Person],
-                    mother : Person not null,
-                    father : Person, 
+                    mother : Person ,
+                    father : Person NULLABLE, 
+                    unique_index(name, surname),
+                     
                 }
 
                 Pet {
-                    name : String  UNIQUE NOT NULL,
-                    surname : String INDEXED,
+                    name : String default "John",
+                    surname : String NULLABLE,
                     owners : [Person],
-                    age : Float,
-                    weight : Integer,
-                    is_vaccinated: Boolean
+                    @deprecated  age : Float NULLABLE,
+                    weight : Integer NULLABLE,
+                    is_vaccinated: Boolean NULLABLE,
+                    INDEX(weight)
                 }
-          ",
+          "#,
         )
         .unwrap();
 
@@ -434,20 +623,17 @@ mod tests {
         let age = pet.fields.get("age").unwrap();
         assert_eq!(FieldType::Float.type_id(), age.field_type.type_id());
         assert_eq!(true, age.nullable);
-        assert_eq!(false, age.unique);
-        assert_eq!(false, age.indexed);
 
         let name = pet.fields.get("name").unwrap();
         assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
         assert_eq!(false, name.nullable);
-        assert_eq!(true, name.unique);
-        assert_eq!(false, name.indexed);
+        if let Some(Value::String(e)) = &name.default_value {
+            assert_eq!("John", e);
+        }
 
         let surname = pet.fields.get("surname").unwrap();
         assert_eq!(FieldType::String.type_id(), surname.field_type.type_id());
         assert_eq!(true, surname.nullable);
-        assert_eq!(false, surname.unique);
-        assert_eq!(true, surname.indexed);
 
         let owner = pet.fields.get("owners").unwrap();
         match &owner.field_type {
@@ -455,14 +641,16 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(false, owner.nullable);
-        assert_eq!(false, owner.unique);
-        assert_eq!(false, owner.indexed);
+
+        let index = &pet.indexes;
+        assert_eq!(1, index.len());
+        for i in index.values() {
+            assert_eq!("weight", i.fields[0])
+        }
 
         let weight = pet.fields.get("weight").unwrap();
         assert_eq!(FieldType::Integer.type_id(), weight.field_type.type_id());
         assert_eq!(true, weight.nullable);
-        assert_eq!(false, weight.unique);
-        assert_eq!(false, weight.indexed);
 
         let is_vaccinated = pet.fields.get("is_vaccinated").unwrap();
         assert_eq!(
@@ -470,22 +658,16 @@ mod tests {
             is_vaccinated.field_type.type_id()
         );
         assert_eq!(true, is_vaccinated.nullable);
-        assert_eq!(false, is_vaccinated.unique);
-        assert_eq!(false, is_vaccinated.indexed);
 
         let person = datamodel.entities.get("Person").unwrap();
         assert_eq!("Person", person.name);
         let name = person.fields.get("name").unwrap();
         assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
         assert_eq!(false, name.nullable);
-        assert_eq!(true, name.unique);
-        assert_eq!(false, name.indexed);
 
         let surname = person.fields.get("surname").unwrap();
         assert_eq!(FieldType::String.type_id(), surname.field_type.type_id());
         assert_eq!(true, surname.nullable);
-        assert_eq!(false, surname.unique);
-        assert_eq!(true, surname.indexed);
 
         let child = person.fields.get("child").unwrap();
         match &child.field_type {
@@ -493,8 +675,6 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(false, child.nullable);
-        assert_eq!(false, child.unique);
-        assert_eq!(false, child.indexed);
 
         let mother = person.fields.get("mother").unwrap();
         match &mother.field_type {
@@ -502,8 +682,6 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(false, mother.nullable);
-        assert_eq!(false, mother.unique);
-        assert_eq!(false, mother.indexed);
 
         let father = person.fields.get("father").unwrap();
         match &father.field_type {
@@ -511,8 +689,6 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(true, father.nullable);
-        assert_eq!(false, father.unique);
-        assert_eq!(false, father.indexed);
 
         //println!("{:#?}", datamodel)
     }
@@ -632,6 +808,99 @@ mod tests {
     }
 
     #[test]
+    fn default_value() {
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    is_vaccinated : Boolean default "true" ,
+                }
+            
+          "#,
+        )
+        .expect_err("default must be a boolean not a string");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    is_vaccinated : Boolean default false ,
+                }
+            
+          "#,
+        )
+        .expect("default is a boolean");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    weight : Float default true ,
+                }
+            
+          "#,
+        )
+        .expect_err("default must be a Float not a boolean");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    weight : Float default 12 ,
+                }
+            
+          "#,
+        )
+        .expect("default is an Integer which will be parsed to a Float");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    weight : Float default 12.5 ,
+                }
+            
+          "#,
+        )
+        .expect("default is an Float");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    age : Integer default 12.5 ,
+                }
+            
+          "#,
+        )
+        .expect_err("default must be a Integer not a Float");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    age : Integer default 12 ,
+                }
+            
+          "#,
+        )
+        .expect("default is an Integer");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String default 12.2 ,
+                }
+            
+          ",
+        )
+        .expect_err("default must be a string not a float");
+
+        let _datamodel = DataModel::parse(
+            r#"
+                Person {
+                    name : String default "test" ,
+                }
+            
+          "#,
+        )
+        .expect("default is a string");
+    }
+
+    #[test]
     fn system_field_collision() {
         let mut entity = Entity::new();
 
@@ -694,5 +963,81 @@ mod tests {
         entity
             .add_field(field)
             .expect_err("system field allready defined");
+    }
+
+    #[test]
+    fn index() {
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(invalid_field)
+                }            
+          ",
+        )
+        .expect_err("index has an invalid field name");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(child)
+                }            
+          ",
+        )
+        .expect_err("child cannot be indexed because it is not a scalar type");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(father)
+                }            
+          ",
+        )
+        .expect_err("father cannot be indexed because it is not a scalar type");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(name, name)
+                }            
+          ",
+        )
+        .expect_err("name is repeated twice");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(name),
+                    index(name)
+                }            
+          ",
+        )
+        .expect_err("index(name) is defined twice");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    name : String,
+                    child : [Person],
+                    father: Person,
+                    index(name)
+                }            
+          ",
+        )
+        .expect("index is valid");
     }
 }

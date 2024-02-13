@@ -37,7 +37,7 @@ impl fmt::Display for VariableType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldType {
     Array(String),
     Entity(String),
@@ -52,6 +52,57 @@ impl fmt::Display for FieldType {
         write!(f, "{:?}", self)
     }
 }
+
+// #[derive(Debug)]
+// pub struct ParsingError {
+//     start: usize,
+//     end: usize,
+//     fragment: String,
+//     msg: String,
+// }
+// impl ParsingError {
+//     pub fn pest_parsing_error(msg: String) -> Self {
+//         Self {
+//             start: 0,
+//             end: 0,
+//             fragment: "".to_string(),
+//             msg,
+//         }
+//     }
+
+//     pub fn conflicting_variable_type(
+//         defined_type: &VariableType,
+//         new_type: &VariableType,
+//         fragment: String,
+//         start: usize,
+//         end: usize,
+//     ) -> Self {
+//         let msg = format!(
+//             "allready defined as a '{}' and is conflicting with a field that requires '{}'",
+//             defined_type, new_type
+//         );
+//         Self {
+//             start,
+//             end,
+//             fragment,
+//             msg,
+//         }
+//     }
+// }
+
+// impl fmt::Display for ParsingError {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         if self.start == 0 {
+//             write!(f, "{}", self.fragment)
+//         } else {
+//             write!(
+//                 f,
+//                 "'{}' {}. Position: {}-{}",
+//                 self.fragment, self.msg, self.start, self.end
+//             )
+//         }
+//     }
+// }
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -83,13 +134,13 @@ pub enum Error {
     SystemFieldConflict(String),
 
     #[error(transparent)]
-    ParseBoolError(#[from] std::str::ParseBoolError),
+    BoolParsingError(#[from] std::str::ParseBoolError),
 
     #[error(transparent)]
-    ParseIntError(#[from] std::num::ParseIntError),
+    IntParsingError(#[from] std::num::ParseIntError),
 
     #[error(transparent)]
-    ParseFloatError(#[from] std::num::ParseFloatError),
+    FloatParsingError(#[from] std::num::ParseFloatError),
 
     #[error("{0}")]
     MissingParameter(String),
@@ -97,6 +148,9 @@ pub enum Error {
     #[error("'{0}' is not an hexadecimal value")]
     InvalidHex(String),
 
-    #[error("Parameter '{0}' is not a {1}. Value:{2}")]
+    #[error("'{0}' is not a {1}. value:{2}")]
     ConflictingParameterType(String, String, String),
+
+    #[error("field {0} default value is a '{1}' is not a {2}")]
+    InvalidDefaultValue(String, String, String),
 }
