@@ -1,4 +1,5 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+comma      = _{ "," }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
@@ -14,7 +15,7 @@ field       = { entity | function | named_field }
 
 entity_param = {
     "(" ~ ")"
-  | "(" ~ param ~ ("," ~ param)* ~ ","? ~ ")"
+  | "(" ~ param ~ (comma ~ param)* ~ comma? ~ ")"
 }
 
 param = { search | order_by | limit | skip | before | after | filter }
@@ -22,7 +23,7 @@ param = { search | order_by | limit | skip | before | after | filter }
 search       = { "search" ~ "(" ~ search_value ~ ")" }
 search_value = { variable | string }
 
-order_by        = { "order_by" ~ "(" ~ order_param ~ ("," ~ order_param)* ~ ","? ~ ")" }
+order_by        = { "order_by" ~ "(" ~ order_param ~ (comma ~ order_param)* ~ comma? ~ ")" }
 order_param     = { identifier ~ order_direction }
 order_direction = { ^"asc" | ^"desc" }
 

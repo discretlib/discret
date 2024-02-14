@@ -165,6 +165,11 @@ impl Writable for InvalidateNodeLog {
         Ok(())
     }
 }
+impl Default for InvalidateNodeLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl InvalidateNodeLog {
     pub fn new() -> Self {
         Self {
@@ -197,6 +202,11 @@ impl Writable for InvalidateEdgeLog {
             stmt.execute((pol_grp, schema, date))?;
         }
         Ok(())
+    }
+}
+impl Default for InvalidateEdgeLog {
+    fn default() -> Self {
+        InvalidateEdgeLog::new()
     }
 }
 impl InvalidateEdgeLog {

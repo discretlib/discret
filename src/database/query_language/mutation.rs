@@ -23,6 +23,11 @@ pub struct EntityMutation {
     name: String,
     fields: HashMap<String, MutationField>,
 }
+impl Default for EntityMutation {
+    fn default() -> Self {
+        EntityMutation::new()
+    }
+}
 impl EntityMutation {
     pub fn new() -> Self {
         Self {
@@ -31,7 +36,7 @@ impl EntityMutation {
         }
     }
     pub fn add_field(&mut self, field: MutationField) -> Result<(), Error> {
-        if let Some(_) = self.fields.get(&field.name) {
+        if self.fields.get(&field.name).is_some() {
             Err(Error::DuplicatedField(field.name.clone()))
         } else {
             self.fields.insert(field.name.clone(), field);
@@ -45,6 +50,11 @@ pub struct MutationField {
     name: String,
     field_type: FieldType,
     field_value: FieldValue,
+}
+impl Default for MutationField {
+    fn default() -> Self {
+        MutationField::new()
+    }
 }
 impl MutationField {
     pub fn new() -> Self {
@@ -61,6 +71,11 @@ pub struct Mutation {
     name: String,
     variables: Variables,
     mutations: Vec<EntityMutation>,
+}
+impl Default for Mutation {
+    fn default() -> Self {
+        Mutation::new()
+    }
 }
 impl Mutation {
     pub fn new() -> Self {
@@ -84,27 +99,21 @@ impl Mutation {
         .next()
         .unwrap();
 
-        match parse.as_rule() {
-            Rule::mutation => {
-                let mut mutation_pairs = parse.into_inner();
-                mutation.name = mutation_pairs.next().unwrap().as_str().to_string();
+        if parse.as_rule() == Rule::mutation {
+            let mut mutation_pairs = parse.into_inner();
+            mutation.name = mutation_pairs.next().unwrap().as_str().to_string();
 
-                for entity_pair in mutation_pairs.into_iter() {
-                    match entity_pair.as_rule() {
-                        Rule::entity => {
-                            let ent = Self::parse_entity(
-                                data_model,
-                                entity_pair,
-                                &mut mutation.variables,
-                            )?;
-                            mutation.mutations.push(ent);
-                        }
-                        Rule::EOI => {}
-                        _ => unreachable!(),
+            for entity_pair in mutation_pairs {
+                match entity_pair.as_rule() {
+                    Rule::entity => {
+                        let ent =
+                            Self::parse_entity(data_model, entity_pair, &mut mutation.variables)?;
+                        mutation.mutations.push(ent);
                     }
+                    Rule::EOI => {}
+                    _ => unreachable!(),
                 }
             }
-            _ => {}
         }
 
         Ok(mutation)
@@ -116,7 +125,7 @@ impl Mutation {
         variables: &mut Variables,
     ) -> Result<EntityMutation, Error> {
         let mut entity = EntityMutation::new();
-        for entity_pair in pair.into_inner().into_iter() {
+        for entity_pair in pair.into_inner() {
             match entity_pair.as_rule() {
                 Rule::identifier => {
                     let name = entity_pair.as_str().to_string();
@@ -254,7 +263,7 @@ impl Mutation {
             _ => {
                 return Err(Error::InvalidQuery(format!(
                     "Entity Field '{}' must contain a variable or an hex string.  value '{}' ",
-                    mutation_field.name.to_string(),
+                    mutation_field.name,
                     var_pair.as_str()
                 )))
             }
@@ -304,7 +313,7 @@ impl Mutation {
             _ => {
                 return Err(Error::InvalidQuery(format!(
                     "Entity Field '{}' must contain a variable or an hex string.  value '{}' ",
-                    mutation_field.name.to_string(),
+                    mutation_field.name,
                     var_pair.as_str()
                 )))
             }
@@ -511,6 +520,6 @@ mod tests {
         )
         .unwrap();
 
-        println!("{:#?}", _mutation);
+        // println!("{:#?}", _mutation);
     }
 }

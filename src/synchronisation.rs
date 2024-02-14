@@ -20,10 +20,10 @@ fn main() {
 
 //If you want to perform this operation on vectors, you could convert to HashSet or BTreeSet and then create a vector from this:
 
-fn vect_difference(v1: &Vec<i32>, v2: &Vec<i32>) -> Vec<i32> {
-    let s1: HashSet<i32> = v1.iter().cloned().collect();
-    let s2: HashSet<i32> = v2.iter().cloned().collect();
-    (&s1 - &s2).iter().cloned().collect()
-}
+// fn vect_difference(v1: &Vec<i32>, v2: &Vec<i32>) -> Vec<i32> {
+//     let s1: HashSet<i32> = v1.iter().cloned().collect();
+//     let s2: HashSet<i32> = v2.iter().cloned().collect();
+//     (&s1 - &s2).iter().cloned().collect()
+// }
 
 //

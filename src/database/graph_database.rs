@@ -175,10 +175,7 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
 
             let blob = ctx.get_raw(0).as_blob_or_null()?;
 
-            let result = match blob {
-                Some(data) => Some(base64_encode(data)),
-                None => None,
-            };
+            let result = blob.map(base64_encode);
 
             Ok(result)
         },

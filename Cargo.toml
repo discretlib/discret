@@ -4,14 +4,8 @@ version = "0.1.0"
 license = "AGPL"
 authors = ["Adrien Salais <adrien.salais@gmail.com>"]
 keywords = ["p2p"]
-
 edition = "2021"
 
-[profile.release-lto]
-inherits = "release"
-lto = "fat"
-codegen-units = 1
-strip = "debuginfo"
 
 [dependencies]
 ## database  3.39.4

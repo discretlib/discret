@@ -20,6 +20,11 @@ pub struct Variable {
 pub struct Variables {
     vars: HashMap<String, Variable>,
 }
+impl Default for Variables {
+    fn default() -> Self {
+        Variables::new()
+    }
+}
 impl Variables {
     pub fn new() -> Self {
         Self {
@@ -94,7 +99,7 @@ impl Variables {
                     VariableType::Float(nullable) => match p {
                         Value::Float(_) => {}
                         Value::Integer(e) => {
-                            let convert = Value::Float(e.clone() as f64);
+                            let convert = Value::Float(*e as f64);
                             params.params.insert(var.0.clone(), convert);
                         }
                         Value::Null => {
@@ -146,6 +151,11 @@ impl Variables {
 #[derive(Debug)]
 pub struct Parameters {
     params: HashMap<String, Value>,
+}
+impl Default for Parameters {
+    fn default() -> Self {
+        Parameters::new()
+    }
 }
 impl Parameters {
     pub fn new() -> Self {
@@ -221,7 +231,11 @@ impl Parameters {
 pub struct SQLVariables {
     vars: Vec<String>,
 }
-
+impl Default for SQLVariables {
+    fn default() -> Self {
+        SQLVariables::new()
+    }
+}
 impl SQLVariables {
     pub fn new() -> Self {
         Self { vars: Vec::new() }
@@ -237,13 +251,13 @@ impl SQLVariables {
             if let Some(val) = para {
                 match val {
                     Value::Boolean(e) => {
-                        v.push(Box::new(e.clone()));
+                        v.push(Box::new(*e));
                     }
                     Value::Float(e) => {
-                        v.push(Box::new(e.clone()));
+                        v.push(Box::new(*e));
                     }
                     Value::Integer(e) => {
-                        v.push(Box::new(e.clone()));
+                        v.push(Box::new(*e));
                     }
                     Value::Null => {
                         let null: Option<String> = None;

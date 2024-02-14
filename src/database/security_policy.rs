@@ -612,11 +612,11 @@ impl SecurityPolicy {
             if user.is_some() {
                 Ok(())
             } else {
-                return Err(Error::PolicyError(format!(
+                Err(Error::PolicyError(format!(
                     "Peer '{}' cannot update this policy group '{}'",
                     base64_encode(&node.pub_key),
                     base64_encode(&node.id)
-                )));
+                )))
             }
         } else if node.schema.eq(POLICY_SCHEMA) {
             if previous_version.mdate > node.mdate {

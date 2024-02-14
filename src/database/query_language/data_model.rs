@@ -149,6 +149,11 @@ lazy_static::lazy_static! {
 pub struct DataModel {
     entities: HashMap<String, Entity>,
 }
+impl Default for DataModel {
+    fn default() -> Self {
+        DataModel::new()
+    }
+}
 impl DataModel {
     pub fn new() -> Self {
         let mut dm = Self {
@@ -215,7 +220,7 @@ impl DataModel {
 
     fn parse_entity(pair: Pair<'_, Rule>) -> Result<Entity, Error> {
         let mut entity = Entity::new();
-        for entity_pair in pair.into_inner().into_iter() {
+        for entity_pair in pair.into_inner() {
             match entity_pair.as_rule() {
                 Rule::deprecable_identifier => {
                     for i in entity_pair.into_inner() {
@@ -292,7 +297,7 @@ impl DataModel {
                     _ => unreachable!(),
                 }
 
-                if let Some(pair) = scalar_field.into_iter().next() {
+                if let Some(pair) = scalar_field.next() {
                     match pair.as_rule() {
                         Rule::nullable => field.nullable = true,
                         Rule::default => {
@@ -441,6 +446,7 @@ pub struct Index {
     fields: Vec<String>,
     unique: bool,
 }
+
 impl Index {
     pub fn new(unique: bool) -> Self {
         Self {
@@ -475,6 +481,11 @@ pub struct Entity {
     pub fields: HashMap<String, Field>,
     pub indexes: HashMap<String, Index>,
     pub deprecated: bool,
+}
+impl Default for Entity {
+    fn default() -> Self {
+        Entity::new()
+    }
 }
 impl Entity {
     pub fn new() -> Self {
@@ -557,6 +568,11 @@ pub struct Field {
     pub mutable: bool,
     pub readable: bool,
 }
+impl Default for Field {
+    fn default() -> Self {
+        Field::new()
+    }
+}
 impl Field {
     pub fn new() -> Self {
         Self {
@@ -565,8 +581,8 @@ impl Field {
             default_value: None,
             nullable: false,
             deprecated: false,
-            mutable: false,
-            readable: false,
+            mutable: true,
+            readable: true,
         }
     }
 

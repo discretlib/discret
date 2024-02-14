@@ -21,6 +21,11 @@ struct EntityDeletion {
     id_param: String,
     references: Vec<ReferenceDeletion>,
 }
+impl Default for EntityDeletion {
+    fn default() -> Self {
+        EntityDeletion::new()
+    }
+}
 impl EntityDeletion {
     pub fn new() -> Self {
         Self {
@@ -36,7 +41,11 @@ struct ReferenceDeletion {
     name: String,
     id_param: Option<String>,
 }
-
+impl Default for Deletion {
+    fn default() -> Self {
+        Deletion::new()
+    }
+}
 impl Deletion {
     pub fn new() -> Self {
         Self {
@@ -64,7 +73,7 @@ impl Deletion {
                 let mut deletion_pairs = parse.into_inner();
                 deletion.name = deletion_pairs.next().unwrap().as_str().to_string();
 
-                for entity_pair in deletion_pairs.into_iter() {
+                for entity_pair in deletion_pairs {
                     match entity_pair.as_rule() {
                         Rule::entity => {
                             let ent = Self::parse_entity(
@@ -92,7 +101,7 @@ impl Deletion {
     ) -> Result<EntityDeletion, Error> {
         let mut entity = EntityDeletion::new();
 
-        for entity_pair in pair.into_inner().into_iter() {
+        for entity_pair in pair.into_inner() {
             match entity_pair.as_rule() {
                 Rule::identifier => {
                     let name = entity_pair.as_str().to_string();
