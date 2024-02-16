@@ -23,13 +23,13 @@ pub enum Error {
     DecodeError(#[from] base64::DecodeError),
 }
 
-//magic number for the ALPN protocol that allows for less roundtrip during tls negociation
+/// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
-///20,067
+///
 /// Derive a password using argon2id
 ///  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-/// - 20480 mb of memory
+/// - 20480 KB of memory
 /// - an iteration count of 2
 /// - parallelism count of 2
 /// - the login is used as a salt
@@ -56,6 +56,10 @@ pub fn hash(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).as_bytes().to_owned()
 }
 
+pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
+    blake3::derive_key(context, key_material)
+}
+
 pub fn base64_encode(data: &[u8]) -> String {
     enc64.encode(data)
 }
@@ -66,7 +70,7 @@ pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
 
 pub trait SigningKey {
     fn new() -> Self;
-    fn create_from(random: [u8; 32]) -> Self;
+    fn create_from(random: &[u8; 32]) -> Self;
     fn import(keypair: &[u8]) -> Result<Box<Self>, Error>;
     fn export(&self) -> Vec<u8>;
     fn export_public(&self) -> Vec<u8>;
@@ -84,13 +88,13 @@ impl SigningKey for Ed2519SigningKey {
 
         OsRng.fill_bytes(&mut random);
 
-        Ed2519SigningKey::create_from(random)
+        Ed2519SigningKey::create_from(&random)
     }
 
-    fn create_from(random: [u8; 32]) -> Self {
-        let sk: ed25519_dalek::SecretKey = random;
+    fn create_from(random: &[u8; 32]) -> Self {
+        let sk: &ed25519_dalek::SecretKey = random;
         Ed2519SigningKey {
-            signing_key: ed25519_dalek::SigningKey::from(&sk),
+            signing_key: ed25519_dalek::SigningKey::from(sk),
         }
     }
 
@@ -198,7 +202,6 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     #[test]
     fn control_derive_pass_phrase() {
@@ -224,7 +227,7 @@ mod tests {
     #[test]
     fn control_ed25519() {
         let rd = hash(b"not random");
-        let signing_key = Ed2519SigningKey::create_from(rd);
+        let signing_key = Ed2519SigningKey::create_from(&rd);
 
         let exp_kp = signing_key.export();
 

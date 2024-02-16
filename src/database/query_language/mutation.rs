@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::database::query_language::VariableType;
+use crate::{base64_decode, database::query_language::VariableType};
 
 use super::{
     data_model::{DataModel, Field},
@@ -212,10 +212,10 @@ impl Mutation {
         Ok(entity)
     }
 
-    fn validate_hex(var: &str, name: &String) -> Result<(), Error> {
-        if hex::decode(var).is_err() {
+    fn validate_base64(var: &str, name: &String) -> Result<(), Error> {
+        if base64_decode(var.as_bytes()).is_err() {
             return Err(Error::InvalidQuery(format!(
-                "Entity Field '{}' value '{}' is not a valid hexadecimal ",
+                "Entity Field '{}' value '{}' is not a valid base64 ",
                 &name, var
             )));
         }
@@ -250,19 +250,19 @@ impl Mutation {
         match var_pair.as_rule() {
             Rule::variable => {
                 let var = &var_pair.as_str()[1..];
-                variables.add(var.to_string(), VariableType::Hex(field.nullable))?;
+                variables.add(var.to_string(), VariableType::Base64(field.nullable))?;
                 mutation_field.field_value = FieldValue::Variable(var.to_string());
             }
             Rule::string => {
                 let var = var_pair.into_inner().next().unwrap().as_str();
                 let name = &mutation_field.name;
-                Mutation::validate_hex(var, name)?;
+                Mutation::validate_base64(var, name)?;
                 mutation_field.field_value = FieldValue::Value(Value::String(var.to_string()));
             }
 
             _ => {
                 return Err(Error::InvalidQuery(format!(
-                    "Entity Field '{}' must contain a variable or an hex string.  value '{}' ",
+                    "Entity Field '{}' must contain a variable or an base64 string.  value '{}' ",
                     mutation_field.name,
                     var_pair.as_str()
                 )))
@@ -300,19 +300,19 @@ impl Mutation {
         match var_pair.as_rule() {
             Rule::variable => {
                 let var = &var_pair.as_str()[1..];
-                variables.add(var.to_string(), VariableType::Hex(field.nullable))?;
+                variables.add(var.to_string(), VariableType::Base64(field.nullable))?;
                 mutation_field.field_value = FieldValue::Variable(var.to_string());
             }
             Rule::string => {
                 let var = var_pair.into_inner().next().unwrap().as_str();
                 let name = &mutation_field.name;
-                Mutation::validate_hex(var, name)?;
+                Mutation::validate_base64(var, name)?;
                 mutation_field.field_value = FieldValue::Value(Value::String(var.to_string()));
             }
 
             _ => {
                 return Err(Error::InvalidQuery(format!(
-                    "Entity Field '{}' must contain a variable or an hex string.  value '{}' ",
+                    "Entity Field '{}' must contain a variable or a base64 string.  value '{}' ",
                     mutation_field.name,
                     var_pair.as_str()
                 )))
@@ -403,15 +403,15 @@ impl Mutation {
             FieldType::String => {
                 mutation_field.field_value = FieldValue::Value(Value::String(value.to_string()));
             }
-            FieldType::Hex => {
-                Mutation::validate_hex(value, &field.name)?;
+            FieldType::Base64 => {
+                Mutation::validate_base64(value, &field.name)?;
                 mutation_field.field_value = FieldValue::Value(Value::String(value.to_string()));
             }
             _ => {
                 return Err(Error::InvalidFieldType(
                     mutation_field.name.to_string(),
                     field.field_type.to_string(),
-                    "Float".to_string(),
+                    "String".to_string(),
                 ))
             }
         }
@@ -508,10 +508,10 @@ mod tests {
                 Person {
                     name : "Doe"
                     surname : "John"
-                    parents : ["0D12CF34B2"]
+                    parents : ["emV0emV0"]
                     age: 32
                     weight: 123.4
-                    pet : {"3E12CF34B2"}
+                    pet : {"emV0emV0"}
                     is_human : true
                 }
             }
@@ -521,5 +521,235 @@ mod tests {
         .unwrap();
 
         // println!("{:#?}", _mutation);
+    }
+    #[test]
+    fn non_scalar_field() {
+        let data_model = DataModel::parse(
+            "
+            Person {
+                name : String ,
+                parents : [Person],
+                someone : Person,
+            }
+        
+        ",
+        )
+        .unwrap();
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    parents : $father_id
+                    
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("parents need to use the syntax parents : [..]");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    someone : $someone_id
+                    
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("someone need to use the syntax someone : {..}");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    parents : [$father_id]
+                    someone : {$someone_id}
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid syntax");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    parents : ["qsdgqzaddfq"]
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("parents require a valid base64");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    someone : {"qsdgqzaddfq"}
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("parents require a valid base64");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    parents : ["emV0emV0"]
+                    someone : {"emV0emV0"}
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid syntax");
+    }
+
+    #[test]
+    fn scalar_field() {
+        let data_model = DataModel::parse(
+            "
+            Person {
+                name : String ,
+                surname : String ,
+                age : Integer,
+                weight : Float,
+                is_human : Boolean 
+            }
+        
+        ",
+        )
+        .unwrap();
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    name : [$name]
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("scalar field cannot use the syntax name : [$name]");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    weight : "name"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("weight is not a string");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    weight : true
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("weight is not a boolean");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    weight : 1
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("weight is a float compatible with integer");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : $id
+                    weight : 1.12
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("weight is a float ");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : "qsdgqzaddfq"
+                    
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("id requires a valid base64 string");
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id : "emV0emV0"
+                    
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("id is a valid base64 string");
+    }
+
+    #[test]
+    fn duplicated_field() {
+        let data_model = DataModel::parse(
+            "
+            Person {
+                name : String ,
+            }
+        
+        ",
+        )
+        .unwrap();
+
+        let _mutation = Mutation::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                    name : $name2
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("duplicated name");
     }
 }

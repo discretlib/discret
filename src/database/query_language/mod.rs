@@ -27,7 +27,7 @@ pub enum Value {
 pub enum VariableType {
     Boolean(bool),
     Float(bool),
-    Hex(bool),
+    Base64(bool),
     Integer(bool),
     String(bool),
 }
@@ -43,7 +43,7 @@ pub enum FieldType {
     Entity(String),
     Boolean,
     Float,
-    Hex,
+    Base64,
     Integer,
     String,
 }
@@ -145,8 +145,8 @@ pub enum Error {
     #[error("{0}")]
     MissingParameter(String),
 
-    #[error("'{0}' is not an hexadecimal value")]
-    InvalidHex(String),
+    #[error("'{0}' is not a base64 value")]
+    InvalidBase64(String),
 
     #[error("'{0}' is not a {1}. value:{2}")]
     ConflictingParameterType(String, String, String),

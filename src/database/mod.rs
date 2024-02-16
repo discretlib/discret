@@ -1,10 +1,7 @@
-pub mod database_service;
-pub mod edge_table;
+pub mod edge;
 pub mod graph_database;
-pub mod node_table;
+pub mod node;
 pub mod query_language;
-pub mod security_policy;
-pub mod synch_log;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
@@ -29,6 +26,9 @@ pub enum Error {
 
     #[error("{0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("{0}")]
+    Utf8Error(#[from] std::str::Utf8Error),
 
     #[error("{0}")]
     DatabaseRowToLong(String),

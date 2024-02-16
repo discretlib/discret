@@ -9,7 +9,7 @@ use pest_derive::Parser;
 struct PestParser;
 
 #[derive(Debug)]
-struct Deletion {
+pub struct Deletion {
     name: String,
     variables: Variables,
     deletions: Vec<EntityDeletion>,
@@ -111,7 +111,7 @@ impl Deletion {
 
                 Rule::id_field => {
                     let var = entity_pair.as_str()[1..].to_string(); //remove $
-                    variables.add(var.clone(), VariableType::Hex(false))?;
+                    variables.add(var.clone(), VariableType::Base64(false))?;
                     entity.id_param = var;
                 }
                 Rule::array_field => {
@@ -139,7 +139,7 @@ impl Deletion {
                     if let Some(param_pair) = array_field_pairs.next() {
                         let var = param_pair.as_str()[1..].to_string(); //remove $
 
-                        variables.add(var.clone(), VariableType::Hex(false))?;
+                        variables.add(var.clone(), VariableType::Base64(false))?;
 
                         id_param = Some(var);
                     } else {

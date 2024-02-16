@@ -29,7 +29,7 @@ lazy_static::lazy_static! {
             ID_FIELD.to_string(),
             Field {
                 name: ID_FIELD.to_string(),
-                field_type: FieldType::Hex,
+                field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
                 deprecated: false,
@@ -94,7 +94,7 @@ lazy_static::lazy_static! {
             FLAG_FIELD.to_string(),
             Field {
                 name: FLAG_FIELD.to_string(),
-                field_type: FieldType::Hex,
+                field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
                 deprecated: false,
@@ -120,7 +120,7 @@ lazy_static::lazy_static! {
             PUB_KEY_FIELD.to_string(),
             Field {
                 name: PUB_KEY_FIELD.to_string(),
-                field_type: FieldType::Hex,
+                field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
                 deprecated: false,
@@ -133,7 +133,7 @@ lazy_static::lazy_static! {
             SIGNATURE_FIELD.to_string(),
             Field {
                 name: SIGNATURE_FIELD.to_string(),
-                field_type: FieldType::Hex,
+                field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
                 deprecated: false,
@@ -588,8 +588,8 @@ impl Field {
 
     pub fn get_variable_type(&self) -> VariableType {
         match self.field_type {
-            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Hex => {
-                VariableType::Hex(self.nullable)
+            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Base64 => {
+                VariableType::Base64(self.nullable)
             }
             FieldType::Boolean => VariableType::Boolean(self.nullable),
             FieldType::Integer => VariableType::Integer(self.nullable),

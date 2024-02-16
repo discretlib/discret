@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::database::query_language::VariableType;
+use crate::{base64_decode, database::query_language::VariableType};
 
 use super::{
     data_model::{DataModel, Entity},
@@ -650,13 +650,13 @@ impl Query {
                     match val.as_rule(){
                         Rule::variable => {
                             let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Hex(false))?;
+                            variables.add(var.to_string(), VariableType::Base64(true))?;
                             parameters.before = Some(FieldValue::Variable(var.to_string()));
 
                         }
                         Rule::string => {
                             let value = val.into_inner().next().unwrap().as_str();
-                            Self::validate_hex(value, "Before")?;
+                            Self::validate_base64(value, "Before")?;
                             parameters.before = Some(FieldValue::Value(Value::String(value.to_string())));
                         }
                         _=> unreachable!()
@@ -668,13 +668,13 @@ impl Query {
                     match val.as_rule(){
                         Rule::variable => {
                             let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Hex(false))?;
+                            variables.add(var.to_string(), VariableType::Base64(true))?;
                             parameters.after = Some(FieldValue::Variable(var.to_string()));
 
                         }
                         Rule::string => {
                             let value = val.into_inner().next().unwrap().as_str();
-                            Self::validate_hex(value, "After")?;
+                            Self::validate_base64(value, "After")?;
                             parameters.after = Some(FieldValue::Value(Value::String(value.to_string())));
                         }
                         _=> unreachable!()
@@ -768,8 +768,8 @@ impl Query {
                 let value_str = value_pair.into_inner().next().unwrap().as_str();
                 match field.field_type {
                     FieldType::String => FieldValue::Value(Value::String(value_str.to_string())),
-                    FieldType::Hex => {
-                        Self::validate_hex(value_str, &name)?;
+                    FieldType::Base64 => {
+                        Self::validate_base64(value_str, &name)?;
                         FieldValue::Value(Value::String(value_str.to_string()))
                     }
                     _ => {
@@ -798,10 +798,10 @@ impl Query {
         })
     }
 
-    fn validate_hex(var: &str, name: &str) -> Result<(), Error> {
-        if hex::decode(var).is_err() {
+    fn validate_base64(var: &str, name: &str) -> Result<(), Error> {
+        if base64_decode(var.as_bytes()).is_err() {
             return Err(Error::InvalidQuery(format!(
-                "'{}' value '{}' is not a valid hexadecimal ",
+                "'{}' value '{}' is not a valid base64 string ",
                 &name, var
             )));
         }
@@ -815,7 +815,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn parse_valid_mutation() {
+    fn parse_valid_query() {
         let data_model = DataModel::parse(
             "
             Person {
@@ -849,7 +849,7 @@ mod tests {
                     order_by(surname asc, name desc ),
                     limit 30,
                     skip 2,
-                    before "A21212",
+                    before "emV0emV0",
                 ){
                     a_name:name 
                     surname 
@@ -865,7 +865,6 @@ mod tests {
                         name
                     }
                 }
-
 
                 Parametrized : Person (
                     search($search),
@@ -1100,7 +1099,7 @@ mod tests {
 
 
     #[test]
-    fn duplicated_field_and_aliases() {
+    fn duplicated_field() {
         let data_model = DataModel::parse(
             "
             Person {
@@ -1648,5 +1647,50 @@ mod tests {
 
 
     }
+    #[test]
+    fn before_after() {
+        let data_model = DataModel::parse(
+            "
+            Person {
+                name : String,
+            } 
 
+        ",
+        )
+        .unwrap();
+
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person (before $id, after $id) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("'after' and 'before' filters cannot be used at the same time");
+
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person (before $id) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person (after $id) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");        
+    }
 }

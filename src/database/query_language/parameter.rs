@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::base64_decode;
+
 use super::{Error, Value, VariableType};
 
 use pest::Parser;
@@ -116,11 +118,11 @@ impl Variables {
                         }
                     },
 
-                    VariableType::Hex(nullable) => match p {
+                    VariableType::Base64(nullable) => match p {
                         Value::String(e) => {
-                            let decode = hex::decode(e);
+                            let decode = base64_decode(e.as_bytes());
                             if decode.is_err() {
-                                return Err(Error::InvalidHex(e.clone()));
+                                return Err(Error::InvalidBase64(e.clone()));
                             }
                         }
                         Value::Null => {
@@ -479,7 +481,7 @@ mod tests {
         let name = "UID";
 
         let mut vars = Variables::new();
-        vars.add(name.to_string(), VariableType::Hex(false))
+        vars.add(name.to_string(), VariableType::Base64(false))
             .unwrap();
         let mut param = Parameters::new();
         vars.validate_params(param)
@@ -496,7 +498,8 @@ mod tests {
             .expect_err("param cannot be null");
 
         vars = Variables::new();
-        vars.add(name.to_string(), VariableType::Hex(true)).unwrap();
+        vars.add(name.to_string(), VariableType::Base64(true))
+            .unwrap();
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
@@ -524,9 +527,9 @@ mod tests {
 
         param = Parameters::new();
         param
-            .add(name.to_string(), Value::String("GHIKIlmp".to_string()))
+            .add(name.to_string(), Value::String("+^%".to_string()))
             .unwrap();
         vars.validate_params(param)
-            .expect_err("param is not an hex string");
+            .expect_err("param is not an base64 string");
     }
 }
