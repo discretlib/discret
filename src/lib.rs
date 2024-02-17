@@ -130,77 +130,84 @@ impl Account {
     }
 }
 
-struct Application {
-    name: String,
-    data_model: DataModel,
-    graph_database: GraphDatabase,
-    database_path: PathBuf,
-    signing_key: Ed2519SigningKey,
-}
-impl Application {
-    pub fn new(
-        name: &str,
-        secret: &[u8; 32],
-        data_folder: PathBuf,
-        data_model: &str,
-    ) -> Result<Self, Error> {
-        let database_secret = derive_key(name, secret);
-        let database_name = derive_key("DATABASE_NAME", &database_secret);
-        let signature_key = derive_key("SIGNING_KEY", secret);
-        let signing_key = Ed2519SigningKey::create_from(&signature_key);
+// struct Application<'a> {
+//     name: String,
+//     data_model: DataModel,
+//     graph_database: GraphDatabase<'a>,
+//     database_path: PathBuf,
+//     signing_key: Ed2519SigningKey,
+// }
+// impl Application<'_> {
+//     pub fn new(
+//         name: &str,
+//         secret: &[u8; 32],
+//         data_folder: PathBuf,
+//         data_model: &str,
+//     ) -> Result<Self, Error> {
+//         let database_secret = derive_key(name, secret);
+//         let database_name = derive_key("DATABASE_NAME", &database_secret);
+//         let signature_key = derive_key("SIGNING_KEY", secret);
+//         let signing_key = Ed2519SigningKey::create_from(&signature_key);
 
-        let database_path = build_path(data_folder, &base64_encode(&database_name))?;
+//         let database_path = build_path(data_folder, &base64_encode(&database_name))?;
 
-        let graph_database =
-            GraphDatabase::new(&database_path, &database_secret, 8192, false, 4, 1000)?;
+//         let data_model = DataModel::parse(data_model)?;
+//         let graph_database = GraphDatabase::new(
+//             &database_path,
+//             &database_secret,
+//             8192,
+//             false,
+//             4,
+//             1000,
+//             //   &data_model,
+//         )?;
 
-        let data_model = DataModel::parse(data_model)?;
-        Ok(Self {
-            name: name.to_string(),
-            data_model,
-            graph_database,
-            database_path,
-            signing_key,
-        })
-    }
+//         Ok(Self {
+//             name: name.to_string(),
+//             data_model,
+//             graph_database,
+//             database_path,
+//             signing_key,
+//         })
+//     }
 
-    pub fn query(&self, query: &str, _params: Option<Parameters>) -> Result<String, Error> {
-        let querytype = query.trim().split_once(' ');
-        if let Some(e) = querytype {
-            match e.0 {
-                "query" | "subscription" => {
-                    println!("query");
-                    let _query = Query::parse(query, &self.data_model)?;
-                }
-                "mutation" => {
-                    println!("mutation");
-                    let _mutation = Mutation::parse(query, &self.data_model)?;
-                }
-                "deletion" => {
-                    let _deletion = Deletion::parse(query, &self.data_model)?;
-                    println!("deletion")
-                }
+//     pub fn query(&self, query: &str, _params: Option<Parameters>) -> Result<String, Error> {
+//         let querytype = query.trim().split_once(' ');
+//         if let Some(e) = querytype {
+//             match e.0 {
+//                 "query" | "subscription" => {
+//                     println!("query");
+//                     let _query = Query::parse(query, &self.data_model)?;
+//                 }
+//                 "mutation" => {
+//                     println!("mutation");
+//                     let _mutation = Mutation::parse(query, &self.data_model)?;
+//                 }
+//                 "deletion" => {
+//                     let _deletion = Deletion::parse(query, &self.data_model)?;
+//                     println!("deletion")
+//                 }
 
-                _ => {
-                    return Err(Error::ParsingError(
-                        crate::database::query_language::Error::InvalidQuery(format!(
-                            "Invalid Query {}",
-                            query
-                        )),
-                    ))
-                }
-            }
-        } else {
-            return Err(Error::ParsingError(
-                crate::database::query_language::Error::InvalidQuery(format!(
-                    "Invalid Query {}",
-                    query
-                )),
-            ));
-        }
-        Ok("".to_string())
-    }
-}
+//                 _ => {
+//                     return Err(Error::ParsingError(
+//                         crate::database::query_language::Error::InvalidQuery(format!(
+//                             "Invalid Query {}",
+//                             query
+//                         )),
+//                     ))
+//                 }
+//             }
+//         } else {
+//             return Err(Error::ParsingError(
+//                 crate::database::query_language::Error::InvalidQuery(format!(
+//                     "Invalid Query {}",
+//                     query
+//                 )),
+//             ));
+//         }
+//         Ok("".to_string())
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -220,8 +227,8 @@ mod tests {
             weight : Float,
             is_human : Boolean
         }";
-        let app = Application::new("my_new_app", &secret, DATA_PATH.into(), data_model).unwrap();
+        //    let _app = Application::new("my_new_app", &secret, DATA_PATH.into(), data_model).unwrap();
 
-        app.query("query", None).unwrap();
+        // app.query("query", None).unwrap();
     }
 }

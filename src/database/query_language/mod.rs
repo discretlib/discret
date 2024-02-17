@@ -5,7 +5,8 @@ pub mod parameter;
 pub mod query;
 
 use std::fmt;
-//new_without_default
+
+use serde_json::Number;
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -21,6 +22,55 @@ pub enum Value {
     Float(f64),
     String(String),
     Null,
+}
+impl Value {
+    pub fn as_boolean(&self) -> Option<bool> {
+        if let Self::Boolean(e) = self {
+            Some(*e)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Self::Float(e) => Some(*e as i64),
+            Self::Integer(e) => Some(*e),
+            _ => None,
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Float(e) => Some(*e),
+            Self::Integer(e) => Some(*e as f64),
+            _ => None,
+        }
+    }
+
+    pub fn as_string(&self) -> Option<&String> {
+        if let Self::String(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_serde_json_value(&self) -> Result<serde_json::Value, Error> {
+        match self {
+            Value::Boolean(v) => Ok(serde_json::Value::Bool(*v)),
+            Value::Integer(v) => Ok(serde_json::Value::Number(Number::from(*v))),
+            Value::Float(v) => {
+                let number = Number::from_f64(*v);
+                match number {
+                    Some(e) => Ok(serde_json::Value::Number(e)),
+                    None => Err(Error::InvalidFloat(*v)),
+                }
+            }
+            Value::String(v) => Ok(serde_json::Value::String(String::from(v))),
+            Value::Null => Ok(serde_json::Value::Null),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -153,4 +203,7 @@ pub enum Error {
 
     #[error("field {0} default value is a '{1}' is not a {2}")]
     InvalidDefaultValue(String, String, String),
+
+    #[error("float {0} is not a valid JSON float")]
+    InvalidFloat(f64),
 }

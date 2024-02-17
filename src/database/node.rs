@@ -1,5 +1,5 @@
 use super::{
-    graph_database::{new_id, now, valid_id_len, FromRow, Statement, MAX_ROW_LENTGH},
+    graph_database::{new_id, now, valid_id_len, FromRow, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
@@ -7,6 +7,7 @@ use crate::cryptography::{
 };
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
@@ -50,7 +51,7 @@ impl Node {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    fn len(&self) -> Result<usize> {
         let mut len = 0;
         len += self.id.len();
         len += 8; //date
@@ -58,7 +59,8 @@ impl Node {
         len += self._entity.as_bytes().len();
 
         if let Some(v) = &self._json_data {
-            len += v.as_bytes().len();
+            let serialized = serde_json::to_string(v)?;
+            len += serialized.as_bytes().len();
         }
 
         if let Some(v) = &self._binary_data {
@@ -67,10 +69,10 @@ impl Node {
 
         len += &self._pub_key.len();
         len += &self._signature.len();
-        len
+        Ok(len)
     }
 
-    fn hash(&self) -> blake3::Hash {
+    fn hash(&self) -> Result<blake3::Hash> {
         let mut hasher = blake3::Hasher::new();
 
         hasher.update(&self.id);
@@ -79,7 +81,8 @@ impl Node {
         hasher.update(self._entity.as_bytes());
 
         if let Some(v) = &self._json_data {
-            hasher.update(v.as_bytes());
+            let serialized = serde_json::to_string(v)?;
+            hasher.update(serialized.as_bytes());
         }
 
         if let Some(v) = &self._binary_data {
@@ -87,7 +90,7 @@ impl Node {
         }
 
         hasher.update(&self._pub_key);
-        hasher.finalize()
+        Ok(hasher.finalize())
     }
 
     pub fn verify(&self) -> Result<()> {
@@ -95,8 +98,8 @@ impl Node {
             return Err(Error::InvalidId());
         }
 
-        let size = self.len();
-        if size > MAX_ROW_LENTGH.try_into().unwrap() {
+        let size = self.len()?;
+        if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too large. {} bytes instead of {}",
                 base64_encode(&self.id),
@@ -105,15 +108,16 @@ impl Node {
             )));
         }
 
-        //ensure that the Json field is well formed
+        //ensure that the Json field is an Object field
         if let Some(v) = &self._json_data {
-            let v: std::result::Result<serde_json::Value, serde_json::Error> =
-                serde_json::from_str(v);
-            if v.is_err() {
-                return Err(Error::from(v.expect_err("this is an error")));
+            let value: Value = serde_json::from_str(v)?;
+            if value.as_object().is_none() {
+                return Err(Error::InvalidNode(String::from(
+                    "json field is not an Object",
+                )));
             }
         }
-        let hash = self.hash();
+        let hash = self.hash()?;
 
         let pub_key = Ed2519PublicKey::import(&self._pub_key)?;
         pub_key.verify(hash.as_bytes(), &self._signature)?;
@@ -128,18 +132,18 @@ impl Node {
             return Err(Error::InvalidId());
         }
 
-        //ensure that the Json field is well formed
+        //ensure that the Json field is an Object field
         if let Some(v) = &self._json_data {
-            let v: std::result::Result<serde_json::Value, serde_json::Error> =
-                serde_json::from_str(v);
-            if v.is_err() {
-                // println!("Error id:{}",self.text.clone().unwrap() );
-                return Err(Error::from(v.expect_err("this is an error")));
+            let value: Value = serde_json::from_str(v)?;
+            if value.as_object().is_none() {
+                return Err(Error::InvalidNode(String::from(
+                    "json field is not an Object",
+                )));
             }
         }
 
-        let size = self.len();
-        if size > MAX_ROW_LENTGH.try_into().unwrap() {
+        let size = self.len()?;
+        if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too long {} bytes instead of {}",
                 base64_encode(&self.id.clone()),
@@ -148,67 +152,74 @@ impl Node {
             )));
         }
 
-        let hash = self.hash();
+        let hash = self.hash()?;
         let signature = keypair.sign(hash.as_bytes());
         self._signature = signature;
 
         Ok(())
     }
-}
 
-impl FromRow for Node {
-    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
-        |row| {
-            Ok(Box::new(Node {
-                id: row.get(0)?,
-                cdate: row.get(1)?,
-                mdate: row.get(2)?,
-                _entity: row.get(3)?,
-                _json_data: row.get(4)?,
-                _binary_data: row.get(5)?,
-                _pub_key: row.get(6)?,
-                _signature: row.get(7)?,
-            }))
-        }
+    pub fn get(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<Option<Box<Node>>> {
+        let mut get_stmt = conn.prepare_cached(
+            "SELECT id , cdate, mdate, _entity,_json_data, _binary_data, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?",
+        )?;
+        let node = get_stmt
+            .query_row((id, entity), Node::from_row())
+            .optional()?;
+        Ok(node)
     }
-}
-impl Statement for Node {
-    //Updates needs to delete old data from the full text search index. To do so it must retrieve of old data before updating
-    fn execute(&self, conn: &Connection) -> Result<Vec<String>> {
-        let mut insert_fts_stmt =
-            conn.prepare_cached("INSERT INTO _node_fts (rowid, text) VALUES (?, json_data(?))")?;
 
-        let mut chek_stmt = conn
-            .prepare_cached("SELECT rowid , _json_data FROM _node WHERE id = ? AND _entity = ?")?;
-
-        struct PreviousRow(i64, String);
-
-        let previous_row = chek_stmt
-            .query_row((&self.id, &self._entity), |row| {
-                Ok(PreviousRow(row.get(0)?, row.get(1)?))
-            })
+    pub fn exist(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<bool> {
+        let mut exists_stmt =
+            conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
+        let node: Option<i64> = exists_stmt
+            .query_row((id, entity), |row| Ok(row.get(0)?))
             .optional()?;
 
-        if let Some(old_row) = previous_row {
-            let mut delete_fts_stmt = conn.prepare_cached(
-                "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, json_data(?))",
-            )?;
-            delete_fts_stmt.execute((&old_row.0, &old_row.1))?;
-            insert_fts_stmt.execute((&old_row.0, &self._json_data))?;
+        Ok(node.is_some())
+    }
+
+    ///
+    /// intended to be used in the GraphDatase insert thread
+    /// only insert statement are done to avoid any overhead on in the thread
+    ///
+    pub fn write(
+        &self,
+        conn: &Connection,
+        index: bool,
+        rowid: Option<i64>,
+        previous_fts: Option<String>,
+        current_fts: Option<String>,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        const UPDATE_FTS_QUERY: &'static str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
+        if let Some(id) = rowid {
+            if let Some(previous) = previous_fts {
+                let mut delete_fts_stmt = conn.prepare_cached(
+                    "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, ?)",
+                )?;
+                delete_fts_stmt.execute((id, previous))?;
+            }
+
+            if index {
+                if let Some(current) = current_fts {
+                    let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
+                    insert_fts_stmt.execute((id, current))?;
+                }
+            }
 
             let mut update_node_stmt = conn.prepare_cached(
                 "
-                UPDATE _node SET 
-                    id = ?,
-                    cdate = ?,
-                    mdate = ?,
-                    _entity = ?,
-                    _json_data = ?,
-                    _binary_data = ?,
-                    _pub_key = ?,
-                    _signature = ?
-                WHERE
-                    rowid = ? ",
+            UPDATE _node SET 
+                id = ?,
+                cdate = ?,
+                mdate = ?,
+                _entity = ?,
+                _json_data = ?,
+                _binary_data = ?,
+                _pub_key = ?,
+                _signature = ?
+            WHERE
+                rowid = ? ",
             )?;
 
             update_node_stmt.execute((
@@ -220,9 +231,8 @@ impl Statement for Node {
                 &self._binary_data,
                 &self._pub_key,
                 &self._signature,
-                &old_row.0,
+                id,
             ))?;
-            //   invalidate_updated_node_log(&old_node.id, old_node.mdate, conn)?;
         } else {
             let mut insert_stmt = conn.prepare_cached(
                 "INSERT INTO _node ( 
@@ -248,11 +258,31 @@ impl Statement for Node {
                 &self._pub_key,
                 &self._signature,
             ))?;
-
-            insert_fts_stmt.execute((&rowid, &self._json_data))?;
+            if index {
+                if let Some(current) = current_fts {
+                    let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
+                    insert_fts_stmt.execute((rowid, current))?;
+                }
+            }
         }
+        Ok(())
+    }
+}
 
-        Ok(Vec::new())
+impl FromRow for Node {
+    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
+        |row| {
+            Ok(Box::new(Node {
+                id: row.get(0)?,
+                cdate: row.get(1)?,
+                mdate: row.get(2)?,
+                _entity: row.get(3)?,
+                _json_data: row.get(4)?,
+                _binary_data: row.get(5)?,
+                _pub_key: row.get(6)?,
+                _signature: row.get(7)?,
+            }))
+        }
     }
 }
 
@@ -276,7 +306,6 @@ impl Default for Node {
 mod tests {
 
     use super::*;
-    use crate::database::graph_database::add_json_data_function;
 
     #[test]
     fn node_signature() {
@@ -309,11 +338,15 @@ mod tests {
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node._json_data = Some("f".to_string());
+        let bad_json = r#"["expecting an object, not an array"]"#.to_string();
+        node._json_data = Some(bad_json);
         node.verify().expect_err("Invalid json");
         node.sign(&keypair).expect_err("Invalid json");
-
-        node._json_data = Some("{}".to_string());
+        let good_json = r#"{
+            "randomtext": "Lorem ipsum dolor sit amet"
+        }"#
+        .to_string();
+        node._json_data = Some(good_json);
         node.verify()
             .expect_err("_json_data has changed, verification fails");
         node.sign(&keypair).unwrap();
@@ -343,18 +376,29 @@ mod tests {
     fn node_fts() {
         let conn = Connection::open_in_memory().unwrap();
         Node::create_table(&conn).unwrap();
-        add_json_data_function(&conn).unwrap();
+
         let keypair = Ed2519SigningKey::new();
+
+        let good_json = r#"{
+            "randomtext": "Lorem ipsum dolor sit amet"
+        }"#
+        .to_string();
+
         let mut node = Node {
             _entity: "TEST".to_string(),
             cdate: now(),
-            _json_data: Some(String::from(
-                r#"{ "randomtext": "Lorem ipsum dolor sit amet"}"#,
-            )),
+            _json_data: Some(good_json),
             ..Default::default()
         };
         node.sign(&keypair).unwrap();
-        node.execute(&conn).unwrap();
+        node.write(
+            &conn,
+            true,
+            None,
+            None,
+            Some(String::from("Lorem ipsum dolor sit amet")),
+        )
+        .unwrap();
 
         let mut stmt = conn.prepare("SELECT _node.* FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid WHERE _node_fts MATCH ? ORDER BY rank;").unwrap();
         let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
@@ -365,19 +409,54 @@ mod tests {
             res.push(node);
         }
         assert_eq!(1, res.len());
+        let id = &res[0].id;
 
         let results = stmt.query_map(["randomtext"], Node::from_row()).unwrap();
         assert_eq!(0, results.count()); //JSON fields name are not indexed
 
-        node._json_data = Some(String::from(
-            r#"{ "randomtext": "ipsum dolor sit amet conjectur"}"#,
-        ));
+        let mut rowid_stmt = conn
+            .prepare_cached("SELECT rowid FROM _node WHERE id = ?")
+            .unwrap();
+        let row_id: i64 = rowid_stmt.query_row([id], |row| Ok(row.get(0)?)).unwrap();
+
+        node._json_data = Some(
+            r#"{
+            "randomtext": "ipsum dolor sit amet Conjectur"
+        }"#
+            .to_string(),
+        );
         //node can be writen without resigning first, which could lead to errors
-        node.execute(&conn).unwrap();
+        node.write(
+            &conn,
+            true,
+            Some(row_id),
+            Some(String::from("Lorem ipsum dolor sit amet")),
+            Some(String::from("ipsum dolor sit amet Conjectur")),
+        )
+        .unwrap();
+
         let results = stmt.query_map(["lorem"], Node::from_row()).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
 
         let results = stmt.query_map(["conjectur"], Node::from_row()).unwrap();
         assert_eq!(1, results.count()); //Search table is correctly updated
+
+        //
+        // Test disabling indexing
+        //
+        node.write(
+            &conn,
+            false,
+            Some(row_id),
+            Some(String::from("ipsum dolor sit amet Conjectur")),
+            Some(String::from("will not be inserted")),
+        )
+        .unwrap();
+
+        let results = stmt.query_map(["lorem"], Node::from_row()).unwrap();
+        assert_eq!(0, results.count()); //Search table is correctly updated
+
+        let results = stmt.query_map(["inserted"], Node::from_row()).unwrap();
+        assert_eq!(0, results.count()); //Search table is correctly updated
     }
 }

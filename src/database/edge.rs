@@ -1,16 +1,18 @@
 use super::{
-    graph_database::{now, valid_id_len, FromRow, Statement, MAX_ROW_LENTGH},
+    graph_database::{now, valid_id_len, FromRow, StatementResult, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
     base64_encode, Ed2519PublicKey, Ed2519SigningKey, PublicKey, SigningKey,
 };
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Edge {
-    pub from: Vec<u8>,
+    pub src: Vec<u8>,
     pub label: String,
-    pub to: Vec<u8>,
+    pub dest: Vec<u8>,
     pub cdate: i64,
     pub pub_key: Vec<u8>,
     pub signature: Vec<u8>,
@@ -20,20 +22,20 @@ impl Edge {
         conn.execute(
             " 
             CREATE TABLE _edge (
-                from BLOB NOT NULL,
+                src BLOB NOT NULL,
                 label TEXT NOT NULL,
-                to BLOB NOT NULL,
+                dest BLOB NOT NULL,
                 cdate INTEGER NOT NULL,
                 pub_key BLOB NOT NULL,
                 signature BLOB NOT NULL,
-                PRIMARY KEY (from, label, to)
+                PRIMARY KEY (src, label, dest)
             ) WITHOUT ROWID, STRICT;
             ",
             [],
         )?;
 
         conn.execute(
-            " CREATE UNIQUE INDEX _edge_to_label_from_idx ON _edge(to, label, from)",
+            " CREATE UNIQUE INDEX _edge_dest_label_src_idx ON _edge(src, label, dest)",
             [],
         )?;
         Ok(())
@@ -41,9 +43,9 @@ impl Edge {
 
     fn len(&self) -> usize {
         let mut len = 0;
-        len += &self.from.len();
+        len += &self.src.len();
         len += &self.label.as_bytes().len();
-        len += &self.to.len();
+        len += &self.dest.len();
         len += 8; //cdate
         len += &self.pub_key.len();
         len += &self.signature.len();
@@ -52,9 +54,9 @@ impl Edge {
 
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.from);
+        hasher.update(&self.src);
         hasher.update(&self.label.as_bytes());
-        hasher.update(&self.to);
+        hasher.update(&self.dest);
         hasher.update(&self.cdate.to_le_bytes());
         hasher.update(&self.pub_key);
         hasher.finalize()
@@ -65,19 +67,19 @@ impl Edge {
         if size > MAX_ROW_LENTGH.try_into().unwrap() {
             return Err(Error::DatabaseRowToLong(format!(
                 "Edge {}-{}-{} is too long {} bytes instead of {}",
-                base64_encode(&self.from),
+                base64_encode(&self.src),
                 &self.label,
-                base64_encode(&self.to),
+                base64_encode(&self.dest),
                 size,
                 MAX_ROW_LENTGH
             )));
         }
 
-        if !valid_id_len(&self.from) {
+        if !valid_id_len(&self.src) {
             return Err(Error::InvalidId());
         }
 
-        if !valid_id_len(&self.to) {
+        if !valid_id_len(&self.dest) {
             return Err(Error::InvalidId());
         }
         let hash = self.hash();
@@ -88,11 +90,11 @@ impl Edge {
     }
 
     pub fn sign(&mut self, keypair: &Ed2519SigningKey) -> Result<()> {
-        if !valid_id_len(&self.from) {
+        if !valid_id_len(&self.src) {
             return Err(Error::InvalidId());
         }
 
-        if !valid_id_len(&self.to) {
+        if !valid_id_len(&self.dest) {
             return Err(Error::InvalidId());
         }
 
@@ -102,9 +104,9 @@ impl Edge {
         if size > MAX_ROW_LENTGH.try_into().unwrap() {
             return Err(Error::DatabaseRowToLong(format!(
                 "Edge {}-{}-{} is too long {} bytes instead of {}",
-                base64_encode(&self.from),
+                base64_encode(&self.src),
                 &self.label,
-                base64_encode(&self.to),
+                base64_encode(&self.dest),
                 size,
                 MAX_ROW_LENTGH
             )));
@@ -116,15 +118,99 @@ impl Edge {
 
         Ok(())
     }
+
+    fn write(&self, conn: &Connection) -> std::result::Result<StatementResult, rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _edge (src, label, dest, cdate, pub_key, signature) 
+                            VALUES (?, ?, ?, ?, ?, ?)",
+        )?;
+        insert_stmt.execute((
+            &self.src,
+            &self.label,
+            &self.dest,
+            &self.cdate,
+            &self.pub_key,
+            &self.signature,
+        ))?;
+
+        Ok(StatementResult::String(String::from("ok")))
+    }
+
+    pub fn get(
+        src: Vec<u8>,
+        label: String,
+        dest: Vec<u8>,
+        conn: &Connection,
+    ) -> Result<Option<Box<Edge>>> {
+        let mut get_stmt = conn.prepare_cached(
+            "SELECT  src, label, dest, cdate, pub_key, signature 
+            FROM _edge
+            WHERE 
+                src = ? AND
+                label = ? AND
+                dest = ?",
+        )?;
+
+        let edge = get_stmt.query_row((src, label, dest), Edge::from_row())?;
+        Ok(Some(edge))
+    }
+
+    pub fn exists(src: Vec<u8>, label: String, dest: Vec<u8>, conn: &Connection) -> Result<bool> {
+        let mut exists_stmt = conn.prepare_cached(
+            "SELECT  1
+            FROM _edge
+            WHERE 
+                src = ? AND
+                label = ? AND
+                dest = ?",
+        )?;
+        let node: Option<i64> = exists_stmt
+            .query_row((src, label, dest), |row| Ok(row.get(0)?))
+            .optional()?;
+
+        Ok(node.is_some())
+    }
+
+    pub fn has_edge(src: Vec<u8>, label: String, conn: &Connection) -> Result<bool> {
+        let mut exists_stmt = conn.prepare_cached(
+            "SELECT  1
+            FROM _edge
+            WHERE 
+                src = ? AND
+                label = ? ",
+        )?;
+        let node: Option<i64> = exists_stmt
+            .query_row((src, label), |row| Ok(row.get(0)?))
+            .optional()?;
+
+        Ok(node.is_some())
+    }
+
+    pub fn get_edges(src: Vec<u8>, label: String, conn: &Connection) -> Result<Vec<Box<Edge>>> {
+        let mut edges_stmt = conn.prepare_cached(
+            "SELECT  src, label, dest, cdate, pub_key, signature 
+            FROM _edge
+            WHERE 
+                src = ? AND
+                label = ? ",
+        )?;
+        let edges = edges_stmt.query_map((src, label), Edge::from_row())?;
+        let mut rows = vec![];
+        for edge in edges {
+            rows.push(edge?);
+        }
+
+        Ok(rows)
+    }
 }
 
 impl FromRow for Edge {
     fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
             Ok(Box::new(Edge {
-                from: row.get(0)?,
+                src: row.get(0)?,
                 label: row.get(1)?,
-                to: row.get(2)?,
+                dest: row.get(2)?,
                 cdate: row.get(3)?,
                 pub_key: row.get(4)?,
                 signature: row.get(5)?,
@@ -133,31 +219,12 @@ impl FromRow for Edge {
     }
 }
 
-impl Statement for Edge {
-    fn execute(&self, conn: &Connection) -> Result<Vec<String>> {
-        let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO edge_all (from, label, to, cdate, pub_key, signature) 
-                            VALUES (?, ?, ?, ?, ?, ?)",
-        )?;
-        insert_stmt.execute((
-            &self.from,
-            &self.label,
-            &self.to,
-            &self.cdate,
-            &self.pub_key,
-            &self.signature,
-        ))?;
-
-        Ok(Vec::new())
-    }
-}
-
 impl Default for Edge {
     fn default() -> Self {
         Self {
-            from: vec![],
+            src: vec![],
             label: String::from(""),
-            to: vec![],
+            dest: vec![],
             cdate: now(),
             pub_key: vec![],
             signature: vec![],
@@ -181,9 +248,9 @@ mod tests {
         let from = new_id(10);
         let to = new_id(10);
         let mut e = Edge {
-            from: from.clone(),
+            src: from.clone(),
             label: String::from("Test"),
-            to: to.clone(),
+            dest: to.clone(),
             ..Default::default()
         };
 
@@ -191,13 +258,13 @@ mod tests {
         e.verify().unwrap();
 
         let bad_id = new_id(10);
-        e.from = bad_id.clone();
+        e.src = bad_id.clone();
         e.verify()
             .expect_err("'from' has changed, verification must fail");
-        e.from = from.clone();
+        e.src = from.clone();
         e.verify().unwrap();
 
-        e.to = bad_id.clone();
+        e.dest = bad_id.clone();
         e.verify()
             .expect_err("'to' has changed, verification must fail");
         e.sign(&keypair).unwrap();
@@ -226,33 +293,33 @@ mod tests {
         let source = new_id(10);
 
         let mut e = Edge {
-            from: source.clone(),
-            to: source.clone(),
+            src: source.clone(),
+            dest: source.clone(),
             ..Default::default()
         };
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        e.from = vec![];
+        e.src = vec![];
         e.verify().expect_err("'from' is too short");
         e.sign(&keypair).expect_err("'from' is too short");
 
-        e.from = source.clone();
-        e.to = vec![];
+        e.src = source.clone();
+        e.dest = vec![];
         e.verify().expect_err("'to' is too short");
         e.sign(&keypair).expect_err("'to' is too short");
 
-        e.to = source.clone();
+        e.dest = source.clone();
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
         let arr = [0 as u8; DB_ID_MAX_SIZE + 1];
 
-        e.from = arr.to_vec();
+        e.src = arr.to_vec();
         e.verify().expect_err("'from' is too long");
         e.sign(&keypair).expect_err("'from' is too long");
 
-        e.to = arr.to_vec();
+        e.dest = arr.to_vec();
         e.verify().expect_err("'to' is too long");
         e.sign(&keypair).expect_err("'to' is too long");
     }

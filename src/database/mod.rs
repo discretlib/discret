@@ -1,6 +1,7 @@
 pub mod edge;
 pub mod graph_database;
 pub mod node;
+pub mod query_builder;
 pub mod query_language;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -13,7 +14,13 @@ pub enum Error {
     DatabaseError(#[from] rusqlite::Error),
 
     #[error("{0}")]
+    ParsingError(#[from] query_language::Error),
+
+    #[error("{0}")]
     JSONError(#[from] serde_json::Error),
+
+    #[error("Invalid JSON Object {0}")]
+    InvalidJsonObject(String),
 
     #[error("{0}")]
     PolicyError(String),
@@ -48,4 +55,9 @@ pub enum Error {
 
     #[error("database schema cannot be empty or have more than {0} characters")]
     InvalidNodeSchema(usize),
+
+    #[error("entity {0} with id {1} could not be found and cannot be updated")]
+    InvalidMutationId(String, String),
+    #[error("unknown entity {0} with id {1} and cannot be inserted in field {2}.{3}")]
+    UnknownEntity(String, String, String, String),
 }

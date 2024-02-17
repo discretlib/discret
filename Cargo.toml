@@ -9,7 +9,7 @@ edition = "2021"
 
 [dependencies]
 ## database  3.39.4
-rusqlite = { version = "0.30.0", features = ["bundled-sqlcipher-vendored-openssl","backup","vtab","url" ,"blob","chrono","serde_json","hooks", "window"] }
+rusqlite = { version = "0.31.0", features = ["bundled-sqlcipher-vendored-openssl","backup","vtab","url" ,"blob","chrono","serde_json","hooks", "window"] }
 zstd = "0.13.0"
 
 ## Serialisation

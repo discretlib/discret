@@ -48,7 +48,7 @@ impl Variables {
         }
         Ok(())
     }
-    pub fn validate_params(&self, mut params: Parameters) -> Result<(), Error> {
+    pub fn validate_params(&self, params: &Parameters) -> Result<(), Error> {
         for var in &self.vars {
             if let Some(p) = params.params.get(var.0) {
                 match var.1.var_type {
@@ -100,10 +100,7 @@ impl Variables {
 
                     VariableType::Float(nullable) => match p {
                         Value::Float(_) => {}
-                        Value::Integer(e) => {
-                            let convert = Value::Float(*e as f64);
-                            params.params.insert(var.0.clone(), convert);
-                        }
+                        Value::Integer(_) => {}
                         Value::Null => {
                             if !nullable {
                                 return Err(Error::NotNullable(var.0.to_string()));
@@ -152,7 +149,7 @@ impl Variables {
 
 #[derive(Debug)]
 pub struct Parameters {
-    params: HashMap<String, Value>,
+    pub params: HashMap<String, Value>,
 }
 impl Default for Parameters {
     fn default() -> Self {
@@ -332,17 +329,17 @@ mod tests {
         vars.add(name.to_string(), VariableType::Boolean(false))
             .unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Integer(1)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -351,11 +348,11 @@ mod tests {
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param).expect("param can be null");
+        vars.validate_params(&param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Boolean(true)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
     }
 
@@ -367,17 +364,17 @@ mod tests {
         vars.add(name.to_string(), VariableType::Float(false))
             .unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Boolean(true)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -386,16 +383,16 @@ mod tests {
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param).expect("param can be null");
+        vars.validate_params(&param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Float(1.23)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Integer(123)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("Integer params will be casted to float");
     }
 
@@ -407,17 +404,17 @@ mod tests {
         vars.add(name.to_string(), VariableType::Integer(false))
             .unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Boolean(true)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -426,16 +423,16 @@ mod tests {
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param).expect("param can be null");
+        vars.validate_params(&param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Float(1.23)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("Floats ARE NOT cast to integer");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Integer(123)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
     }
 
@@ -447,17 +444,17 @@ mod tests {
         vars.add(name.to_string(), VariableType::String(false))
             .unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Boolean(true)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -466,13 +463,13 @@ mod tests {
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param).expect("param can be null");
+        vars.validate_params(&param).expect("param can be null");
 
         param = Parameters::new();
         param
             .add(name.to_string(), Value::String("hello".to_string()))
             .unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
     }
 
@@ -484,17 +481,17 @@ mod tests {
         vars.add(name.to_string(), VariableType::Base64(false))
             .unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Boolean(true)).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -503,7 +500,7 @@ mod tests {
 
         param = Parameters::new();
         param.add(name.to_string(), Value::Null).unwrap();
-        vars.validate_params(param).expect("param can be null");
+        vars.validate_params(&param).expect("param can be null");
 
         param = Parameters::new();
         param
@@ -512,7 +509,7 @@ mod tests {
                 Value::String("0123456789ABCDEF".to_string()),
             )
             .unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
 
         param = Parameters::new();
@@ -522,14 +519,14 @@ mod tests {
                 Value::String("0123456789abcdef".to_string()),
             )
             .unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect("param has the right type");
 
         param = Parameters::new();
         param
             .add(name.to_string(), Value::String("+^%".to_string()))
             .unwrap();
-        vars.validate_params(param)
+        vars.validate_params(&param)
             .expect_err("param is not an base64 string");
     }
 }

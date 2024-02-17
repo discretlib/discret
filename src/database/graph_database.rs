@@ -13,13 +13,101 @@ pub trait FromRow {
     fn from_row() -> MappingFn<Self>;
 }
 
-pub trait Statement {
-    fn execute(&self, conn: &Connection) -> Result<Vec<String>>;
+pub trait Readable {
+    fn read(&self, conn: &Connection) -> Result<StatementResult>;
 }
 
-pub struct Query {
-    pub stmt: Box<dyn Statement + Send>,
-    pub reply: oneshot::Sender<Result<Vec<String>>>,
+pub struct ReadQuery {
+    pub stmt: Box<dyn Readable + Send>,
+    pub reply: oneshot::Sender<Result<StatementResult>>,
+}
+
+/// Trait use to write content in the database
+///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
+///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
+pub trait Writeable {
+    fn write(&self, conn: &Connection) -> std::result::Result<StatementResult, rusqlite::Error>;
+}
+
+pub struct WriteQuery {
+    pub stmt: Box<dyn Writeable + Send>,
+    pub reply: oneshot::Sender<Result<StatementResult>>,
+}
+
+//
+// used during the insertion of nodes to retrieve a previous node with its rowid
+// the rowid will be used during the insertion to update the full text search table
+//
+#[derive(Debug)]
+pub struct InsertQuery {
+    pub rowid: Option<i64>,
+    pub index: bool,
+    pub previous_fts_str: Option<String>,
+    pub current_fts_str: Option<String>,
+    pub node: Node,
+    pub edge_deletions: Vec<Edge>,
+    pub edge_insertion: Vec<Edge>,
+}
+
+#[derive(Debug)]
+pub enum StatementResult {
+    Edge(Edge),
+    Edges(Vec<Edge>),
+    Node(Node),
+    Nodes(Vec<Node>),
+    InsertQuery(Vec<InsertQuery>),
+    String(String),
+    Strings(Vec<String>),
+    None,
+}
+impl StatementResult {
+    fn as_edge(&self) -> Option<&Edge> {
+        if let Self::Edge(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn as_edges(&self) -> Option<&Vec<Edge>> {
+        if let Self::Edges(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn as_node(&self) -> Option<&Node> {
+        if let Self::Node(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn as_nodes(&self) -> Option<&Vec<Node>> {
+        if let Self::Nodes(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn as_string(&self) -> Option<&String> {
+        if let Self::String(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn as_strings(&self) -> Option<&Vec<String>> {
+        if let Self::Strings(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
 }
 
 //Create a sqlcipher database connection
@@ -124,7 +212,6 @@ pub fn create_connection(
 }
 
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
-    add_json_data_function(conn)?;
     add_base64_function(conn)?;
     if !is_initialized(conn)? {
         conn.execute("BEGIN TRANSACTION", [])?;
@@ -150,9 +237,7 @@ pub fn is_initialized(conn: &Connection) -> Result<bool> {
 ///
 /// Database main entry point
 ///
-/// Thread Safe: Clone it to safely perform queries across different thread
 ///
-#[derive(Clone)]
 pub struct GraphDatabase {
     reader: DatabaseReader,
     writer: BufferedDatabaseWriter,
@@ -194,7 +279,7 @@ impl GraphDatabase {
 //
 #[derive(Clone)]
 pub struct DatabaseReader {
-    sender: flume::Sender<Query>,
+    sender: flume::Sender<ReadQuery>,
 }
 impl DatabaseReader {
     pub fn new(
@@ -204,7 +289,7 @@ impl DatabaseReader {
         enable_memory_security: bool,
         parallelism: usize,
     ) -> Result<Self> {
-        let (sender, receiver) = flume::bounded::<Query>(100);
+        let (sender, receiver) = flume::bounded::<ReadQuery>(100);
         for _i in 0..parallelism {
             let conn =
                 create_connection(path, secret, cache_size_in_kb, enable_memory_security).unwrap();
@@ -213,7 +298,7 @@ impl DatabaseReader {
             let local_receiver = receiver.clone();
             thread::spawn(move || {
                 while let Ok(q) = local_receiver.recv() {
-                    if let Err(_) = q.reply.send(q.stmt.execute(&conn)) {
+                    if let Err(_) = q.reply.send(q.stmt.read(&conn)) {
                         println!("Reply channel is allready closed");
                     }
                 }
@@ -222,9 +307,9 @@ impl DatabaseReader {
         Ok(Self { sender })
     }
 
-    pub async fn query_async(&self, stmt: Box<dyn Statement + Send>) -> Result<Vec<String>> {
-        let (reply, receive_response) = oneshot::channel::<Result<Vec<String>>>();
-        let query = Query { stmt, reply };
+    pub async fn query_async(&self, stmt: Box<dyn Readable + Send>) -> Result<StatementResult> {
+        let (reply, receive_response) = oneshot::channel::<Result<StatementResult>>();
+        let query = ReadQuery { stmt, reply };
         self.sender
             .send_async(query)
             .await
@@ -233,9 +318,9 @@ impl DatabaseReader {
         receive_response.await.map_err(Error::from)?
     }
 
-    pub fn query_blocking(&self, stmt: Box<dyn Statement + Send>) -> Result<Vec<String>> {
-        let (reply, receive_response) = oneshot::channel::<Result<Vec<String>>>();
-        let query = Query { stmt, reply };
+    pub fn query_blocking(&self, stmt: Box<dyn Readable + Send>) -> Result<StatementResult> {
+        let (reply, receive_response) = oneshot::channel::<Result<StatementResult>>();
+        let query = ReadQuery { stmt, reply };
         self.sender
             .send(query)
             .map_err(|e| Error::TokioSendError(e.to_string()))?;
@@ -245,10 +330,10 @@ impl DatabaseReader {
 }
 
 struct Optimize {}
-impl Statement for Optimize {
-    fn execute(&self, conn: &Connection) -> Result<Vec<String>> {
+impl Writeable for Optimize {
+    fn write(&self, conn: &Connection) -> std::result::Result<StatementResult, rusqlite::Error> {
         conn.execute("PRAGMA OPTIMIZE", [])?;
-        Ok(Vec::new())
+        Ok(StatementResult::None)
     }
 }
 
@@ -281,7 +366,7 @@ pub fn set_pragma(pragma: &str, value: &str, conn: &rusqlite::Connection) -> Res
 //
 #[derive(Clone)]
 pub struct BufferedDatabaseWriter {
-    sender: mpsc::Sender<Query>,
+    sender: mpsc::Sender<WriteQuery>,
 }
 impl BufferedDatabaseWriter {
     pub fn new(
@@ -295,8 +380,10 @@ impl BufferedDatabaseWriter {
         //only a few query can be buffered here
         //the real buffering using the buffer_size happens later
         const WRITE_QUERY_BUFFER: usize = 4;
-        let (send_write, mut receive_write): (mpsc::Sender<Query>, mpsc::Receiver<Query>) =
-            mpsc::channel::<Query>(WRITE_QUERY_BUFFER);
+        let (send_write, mut receive_write): (
+            mpsc::Sender<WriteQuery>,
+            mpsc::Receiver<WriteQuery>,
+        ) = mpsc::channel::<WriteQuery>(WRITE_QUERY_BUFFER);
 
         //allows only one infligh buffer: one that is currentlu being processed
         const PROCESS_CHANNEL_SIZE: usize = 1;
@@ -304,12 +391,12 @@ impl BufferedDatabaseWriter {
             mpsc::channel::<bool>(PROCESS_CHANNEL_SIZE);
 
         let (send_buffer, mut receive_buffer): (
-            mpsc::Sender<Vec<Query>>,
-            mpsc::Receiver<Vec<Query>>,
-        ) = mpsc::channel::<Vec<Query>>(PROCESS_CHANNEL_SIZE);
+            mpsc::Sender<Vec<WriteQuery>>,
+            mpsc::Receiver<Vec<WriteQuery>>,
+        ) = mpsc::channel::<Vec<WriteQuery>>(PROCESS_CHANNEL_SIZE);
 
         tokio::spawn(async move {
-            let mut query_buffer: Vec<Query> = vec![];
+            let mut query_buffer: Vec<WriteQuery> = vec![];
             let mut query_buffer_length = 0;
             let mut inflight: usize = 0;
 
@@ -389,54 +476,54 @@ impl BufferedDatabaseWriter {
         Ok(Self { sender: send_write })
     }
 
-    fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<Query>>) -> Option<Vec<Query>> {
+    fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<WriteQuery>>) -> Option<Vec<WriteQuery>> {
         receive_buffer.blocking_recv()
     }
 
-    pub async fn write_async(
-        &self,
-        stmt: Box<dyn Statement + Send>,
-    ) -> Result<Result<Vec<String>>> {
-        let (reply, reciev) = oneshot::channel::<Result<Vec<String>>>();
-        let _ = self.sender.send(Query { stmt, reply }).await;
-        reciev.await.map_err(Error::from)
+    pub async fn write_async(&self, stmt: Box<dyn Writeable + Send>) -> Result<StatementResult> {
+        let (reply, reciev) = oneshot::channel::<Result<StatementResult>>();
+        let _ = self.sender.send(WriteQuery { stmt, reply }).await;
+        reciev.await.map_err(Error::from)?
     }
 
-    pub fn write_blocking(&self, stmt: Box<dyn Statement + Send>) -> Result<Result<Vec<String>>> {
-        let (reply, reciev) = oneshot::channel::<Result<Vec<String>>>();
-        let _ = self.sender.blocking_send(Query { stmt, reply });
-        reciev.blocking_recv().map_err(Error::from)
+    pub fn write_blocking(&self, stmt: Box<dyn Writeable + Send>) -> Result<StatementResult> {
+        let (reply, reciev) = oneshot::channel::<Result<StatementResult>>();
+        let _ = self.sender.blocking_send(WriteQuery { stmt, reply });
+        reciev.blocking_recv().map_err(Error::from)?
     }
 
-    pub async fn send_async(&self, msg: Query) -> Result<()> {
+    pub async fn send_async(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .send(msg)
             .await
             .map_err(|e| Error::TokioSendError(e.to_string()))
     }
 
-    pub fn send_blocking(&self, msg: Query) -> Result<()> {
+    pub fn send_blocking(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .blocking_send(msg)
             .map_err(|e| Error::TokioSendError(e.to_string()))
     }
 
-    pub async fn optimize_async(&self) -> Result<Result<Vec<String>>> {
+    pub async fn optimize_async(&self) -> Result<StatementResult> {
         self.write_async(Box::new(Optimize {})).await
     }
 
-    pub fn optimize_blocking(&self) -> Result<Result<Vec<String>>> {
+    pub fn optimize_blocking(&self) -> Result<StatementResult> {
         self.write_blocking(Box::new(Optimize {}))
     }
 
-    fn process_batch_write(buffer: &Vec<Query>, conn: &Connection) -> Result<Vec<Vec<String>>> {
+    fn process_batch_write(
+        buffer: &Vec<WriteQuery>,
+        conn: &Connection,
+    ) -> Result<Vec<StatementResult>> {
         conn.execute("BEGIN TRANSACTION", [])?;
         let mut result = Vec::new();
         for query in buffer {
-            match query.stmt.execute(conn) {
+            match query.stmt.write(conn) {
                 Err(e) => {
                     conn.execute("ROLLBACK", [])?;
-                    return Err(e);
+                    return Err(Error::DatabaseError(e));
                 }
                 Ok(e) => {
                     result.push(e);
@@ -486,61 +573,6 @@ pub fn now() -> i64 {
         .as_millis()
         .try_into()
         .unwrap()
-}
-
-///
-/// Sqlite function to extract textual data from JSON
-/// it is used to feed data to the full text search
-///   
-pub fn add_json_data_function(db: &Connection) -> rusqlite::Result<()> {
-    db.create_scalar_function(
-        "json_data",
-        1,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        move |ctx| {
-            assert_eq!(ctx.len(), 1, "called with unexpected number of arguments");
-
-            let data = ctx.get_raw(0).as_str_or_null()?;
-
-            let mut extracted = String::new();
-            let result = match data {
-                Some(json) => {
-                    let v: serde_json::Value = serde_json::from_str(json)
-                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
-                    extract_json(v, &mut extracted)?;
-                    Some(extracted)
-                }
-                None => None,
-            };
-
-            Ok(result)
-        },
-    )?;
-
-    Ok(())
-}
-
-fn extract_json(val: serde_json::Value, buff: &mut String) -> rusqlite::Result<()> {
-    match val {
-        serde_json::Value::String(v) => {
-            buff.push_str(&v);
-            buff.push('\n');
-            Ok(())
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                extract_json(v, buff)?;
-            }
-            Ok(())
-        }
-        serde_json::Value::Object(map) => {
-            for v in map {
-                extract_json(v.1, buff)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
 }
 
 ///
@@ -604,19 +636,22 @@ mod tests {
         name: String,
         surname: String,
     }
-    impl Statement for InsertPerson {
-        fn execute(&self, conn: &Connection) -> std::result::Result<Vec<String>, Error> {
+    impl Writeable for InsertPerson {
+        fn write(
+            &self,
+            conn: &Connection,
+        ) -> std::result::Result<StatementResult, rusqlite::Error> {
             let mut stmt =
                 conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 
             stmt.execute((&self.name, &self.surname))?;
-            Ok(Vec::new())
+            Ok(StatementResult::None)
         }
     }
     use std::str;
     struct SelectAll {}
-    impl Statement for SelectAll {
-        fn execute(&self, conn: &Connection) -> std::result::Result<Vec<String>, Error> {
+    impl Readable for SelectAll {
+        fn read(&self, conn: &Connection) -> Result<StatementResult, Error> {
             let mut stmt = conn.prepare_cached(
                 "
             SELECT 	
@@ -631,7 +666,7 @@ mod tests {
             while let Some(row) = rows.next()? {
                 result.push(row.get(0)?);
             }
-            Ok(result)
+            Ok(StatementResult::Strings(result))
         }
     }
 
@@ -695,12 +730,14 @@ mod tests {
                 surname: "Bob".to_string(),
             }))
             .await
-            .unwrap()
             .unwrap();
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
         let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
-        assert_eq!(r#"{"name":"Steven","surname":"Bob"}"#, res[0]);
+        assert_eq!(
+            r#"{"name":"Steven","surname":"Bob"}"#,
+            res.as_strings().unwrap()[0]
+        );
         // println!("{}", res);
     }
 
@@ -730,7 +767,10 @@ mod tests {
 
             let reader = DatabaseReader::new(&path, &secret, 8192, false, 1).unwrap();
             let res = reader.query_blocking(Box::new(SelectAll {})).unwrap();
-            assert_eq!(r#"{"name":"Steven","surname":"Bob"}"#, res[0]);
+            assert_eq!(
+                r#"{"name":"Steven","surname":"Bob"}"#,
+                res.as_strings().unwrap()[0]
+            );
         })
         .join();
     }
@@ -758,9 +798,9 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<Vec<String>, Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<StatementResult, Error>>();
 
-            let query = Query {
+            let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
@@ -775,7 +815,7 @@ mod tests {
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
         let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
 
-        assert_eq!(loop_number, res.len());
+        assert_eq!(loop_number, res.as_strings().unwrap().len());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -801,9 +841,9 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<Vec<String>, Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<StatementResult, Error>>();
 
-            let query = Query {
+            let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
@@ -818,7 +858,7 @@ mod tests {
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
         let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
         // println!("{}", res.len());
-        assert_eq!(loop_number, res.len());
+        assert_eq!(loop_number, res.as_strings().unwrap().len());
     }
 
     //batch write is much faster than inserting row one by one
@@ -844,12 +884,26 @@ mod tests {
                 surname: "Bob".to_string(),
             }))
             .await
-            .unwrap()
             .unwrap();
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
+
+        struct BadPerson {
+            name: String,
+            surname: String,
+        }
+        impl Readable for BadPerson {
+            fn read(&self, conn: &Connection) -> Result<StatementResult, Error> {
+                let mut stmt =
+                    conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
+
+                stmt.execute((&self.name, &self.surname))?;
+                Ok(StatementResult::None)
+            }
+        }
+
         let _ = reader
-            .query_async(Box::new(InsertPerson {
+            .query_async(Box::new(BadPerson {
                 name: "Steven".to_string(),
                 surname: "Bob".to_string(),
             }))

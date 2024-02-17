@@ -20,8 +20,8 @@ struct PestParser;
 //
 #[derive(Debug)]
 pub struct EntityMutation {
-    name: String,
-    fields: HashMap<String, MutationField>,
+    pub name: String,
+    pub fields: HashMap<String, MutationField>,
 }
 impl Default for EntityMutation {
     fn default() -> Self {
@@ -47,9 +47,9 @@ impl EntityMutation {
 
 #[derive(Debug)]
 pub struct MutationField {
-    name: String,
-    field_type: FieldType,
-    field_value: FieldValue,
+    pub name: String,
+    pub field_type: FieldType,
+    pub field_value: FieldValue,
 }
 impl Default for MutationField {
     fn default() -> Self {
@@ -68,9 +68,9 @@ impl MutationField {
 
 #[derive(Debug)]
 pub struct Mutation {
-    name: String,
-    variables: Variables,
-    mutations: Vec<EntityMutation>,
+    pub name: String,
+    pub variables: Variables,
+    pub mutations: Vec<EntityMutation>,
 }
 impl Default for Mutation {
     fn default() -> Self {

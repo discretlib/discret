@@ -8,16 +8,17 @@ use std::collections::HashMap;
 #[grammar = "database/query_language/data_model.pest"]
 struct PestParser;
 
-const AUTHOR_TABLE: &str = "__SysAuthor";
-const ID_FIELD: &str = "id";
+const AUTHOR_TABLE: &str = "_SysAuthor";
+const AUTHORS_FIELD: &str = "_authors";
+
+pub const ID_FIELD: &str = "id";
 const CREATION_DATE_FIELD: &str = "cdate";
 const MODIFICATION_DATE_FIELD: &str = "mdate";
-const AUTHORS_FIELD: &str = "__authors";
-const ENTITY_FIELD: &str = "__entity";
-const FLAG_FIELD: &str = "__sys_flag";
-const JSON_FIELD: &str = "__sys_json";
-const PUB_KEY_FIELD: &str = "__pub_key";
-const SIGNATURE_FIELD: &str = "__signature";
+const ENTITY_FIELD: &str = "_entity";
+const JSON_FIELD: &str = "_json_data";
+const BINARY_FIELD: &str = "_binary_data";
+const PUB_KEY_FIELD: &str = "_pub_key";
+const SIGNATURE_FIELD: &str = "_signature";
 
 lazy_static::lazy_static! {
     //
@@ -34,7 +35,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: true,
-                readable: true,
             },
         );
 
@@ -47,7 +47,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
 
@@ -60,7 +59,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
 
@@ -73,7 +71,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
 
@@ -86,20 +83,18 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
 
         fields.insert(
-            FLAG_FIELD.to_string(),
+            BINARY_FIELD.to_string(),
             Field {
-                name: FLAG_FIELD.to_string(),
+                name: BINARY_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
                 deprecated: false,
-                mutable: false,
-                readable: false,
+                mutable: true,
             },
         );
 
@@ -112,7 +107,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: false,
             },
         );
 
@@ -125,7 +119,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
 
@@ -138,7 +131,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                readable: true,
             },
         );
         fields
@@ -566,7 +558,6 @@ pub struct Field {
     pub nullable: bool,
     pub deprecated: bool,
     pub mutable: bool,
-    pub readable: bool,
 }
 impl Default for Field {
     fn default() -> Self {
@@ -582,7 +573,6 @@ impl Field {
             nullable: false,
             deprecated: false,
             mutable: true,
-            readable: true,
         }
     }
 
@@ -945,7 +935,7 @@ mod tests {
             .expect_err("system field allready defined");
 
         let mut field = Field::new();
-        field.name = FLAG_FIELD.to_string();
+        field.name = BINARY_FIELD.to_string();
         entity
             .add_field(field)
             .expect_err("system field allready defined");
