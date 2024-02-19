@@ -290,6 +290,10 @@ impl Query {
                             let alias;
                             if name_pair.len() == 2 {
                                 let alias_name = name_pair.next().unwrap().as_str();
+                                if alias_name.starts_with('_') {
+                                    return Err(Error::InvalidName(alias_name.to_string()));
+                                }
+                                
                                 if model_entity.get_field(alias_name).is_ok(){
                                     return Err(Error::InvalidQuery(format!(
                                         "alias: '{}' is conflicting with a field name in entity:'{}'",
@@ -332,6 +336,9 @@ impl Query {
                             let alias;
                             if name_pair.len() == 2 {
                                 let alias_name = name_pair.next().unwrap().as_str();
+                                if alias_name.starts_with('_') {
+                                    return Err(Error::InvalidName(alias_name.to_string()));
+                                }
                                 if model_entity.get_field(alias_name).is_ok(){
                                     return Err(Error::InvalidQuery(format!(
                                         "alias: '{}' is conflicting with a field name in entity:'{}'",
@@ -542,6 +549,9 @@ impl Query {
         let name;
         if name_pair.len() == 2 {
             let alias = name_pair.next().unwrap().as_str().to_string();
+            if alias.starts_with('_') {
+                return Err(Error::InvalidName(alias));
+            }
             name = name_pair.next().unwrap().as_str().to_string();
         
 
@@ -1433,6 +1443,75 @@ mod tests {
         )
         .expect("ref_by(..) is correct ");
 
+
+    }
+
+    #[test]
+    fn start_with_underscore() {
+        let data_model = DataModel::parse(
+            "
+            Person {
+                name : String,
+                age : Integer,
+                parents : [Person],
+                pets : [Pet],
+                someone : Person
+            } 
+
+            Pet {
+                name: String
+            }
+        ",
+        )
+        .unwrap();
+
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person {
+                    name
+                }
+
+                _pet: Person {
+                    name
+                }
+
+            } "#,
+            &data_model,
+        )
+        .expect_err("alias cannot starts with an _");
+    
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person {
+                    name
+                }
+
+                pet: Person {
+                   _name : name
+                }
+
+            } "#,
+            &data_model,
+        )
+        .expect_err("alias cannot starts with an _");
+
+        let _query = Query::parse(
+            r#"
+            query aquery {
+                Person {
+                    name
+                }
+
+                pet: Person {
+                    _pub_key
+                }
+
+            } "#,
+            &data_model,
+        )
+        .expect("_pub_key is a valid system field");
 
     }
 

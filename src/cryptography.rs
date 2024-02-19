@@ -24,6 +24,7 @@ pub enum Error {
 }
 
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
+/// used by the quic protocol
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
 ///
@@ -33,6 +34,7 @@ pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 /// - an iteration count of 2
 /// - parallelism count of 2
 /// - the login is used as a salt
+///
 pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = hash(login.as_bytes());
@@ -52,22 +54,38 @@ pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     hash(hashed.as_bytes())
 }
 
+///
+/// hash a byte array using the Blake3 hash function
+///
 pub fn hash(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).as_bytes().to_owned()
 }
 
+///
+/// derive a ket from a string context and a secret
+/// provided by the Blake3 hash function  
+///
 pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
     blake3::derive_key(context, key_material)
 }
 
+///
+/// encode bytes into a base 64 String
+///
 pub fn base64_encode(data: &[u8]) -> String {
     enc64.encode(data)
 }
 
+///
+/// decode a base 64 String into bytes
+///
 pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
     enc64.decode(data).map_err(Error::from)
 }
 
+///
+/// Defines the necessary function to sign  data  
+///
 pub trait SigningKey {
     fn new() -> Self;
     fn create_from(random: &[u8; 32]) -> Self;
@@ -77,23 +95,30 @@ pub trait SigningKey {
     fn sign(&self, message: &[u8]) -> Vec<u8>;
 }
 
+///
+/// when exporting a key the first byte is a flag indicating the public key algorithm used
+/// currenlty useless but might become usefull in the future
+///
 const KEY_TYPE_ED_2519: u8 = 1;
 
-pub struct Ed2519SigningKey {
+///
+/// Signing key using Ed25519 signature scheme
+///
+pub struct Ed25519SigningKey {
     signing_key: ed25519_dalek::SigningKey,
 }
-impl SigningKey for Ed2519SigningKey {
+impl SigningKey for Ed25519SigningKey {
     fn new() -> Self {
         let mut random: [u8; 32] = [0; 32];
 
         OsRng.fill_bytes(&mut random);
 
-        Ed2519SigningKey::create_from(&random)
+        Ed25519SigningKey::create_from(&random)
     }
 
     fn create_from(random: &[u8; 32]) -> Self {
         let sk: &ed25519_dalek::SecretKey = random;
-        Ed2519SigningKey {
+        Ed25519SigningKey {
             signing_key: ed25519_dalek::SigningKey::from(sk),
         }
     }
@@ -112,7 +137,7 @@ impl SigningKey for Ed2519SigningKey {
         let ke: [u8; 32] = keypair[1..33].try_into().unwrap();
         let keypair = ed25519_dalek::SigningKey::from(ke);
 
-        Ok(Box::new(Ed2519SigningKey {
+        Ok(Box::new(Ed25519SigningKey {
             signing_key: keypair,
         }))
     }
@@ -136,12 +161,18 @@ impl SigningKey for Ed2519SigningKey {
     }
 }
 
+///
+/// Defines the necessary function to verify data  
+///
 pub trait PublicKey {
     fn import(public_key: &[u8]) -> Result<Box<Self>, Error>;
     fn export(&self) -> Vec<u8>;
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error>;
 }
 
+///
+/// verification key using Ed25519 signature scheme
+///
 pub struct Ed2519PublicKey {
     public_key: ed25519_dalek::VerifyingKey,
 }
@@ -185,6 +216,11 @@ impl PublicKey for Ed2519PublicKey {
     }
 }
 
+///
+/// generate self signed certificate to be used by the QUIC protocol
+///
+/// the discret system does not relies on certificate authorithy to ensure privacy and encryption
+///
 pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
     let mut param = rcgen::CertificateParams::new(vec!["".into()]);
     param.alg = &rcgen::PKCS_ED25519;
@@ -227,7 +263,7 @@ mod tests {
     #[test]
     fn control_ed25519() {
         let rd = hash(b"not random");
-        let signing_key = Ed2519SigningKey::create_from(&rd);
+        let signing_key = Ed25519SigningKey::create_from(&rd);
 
         let exp_kp = signing_key.export();
 
@@ -244,7 +280,7 @@ mod tests {
         let msg = b"message to sign";
         let signature = signing_key.sign(&msg.to_vec());
 
-        let keypair = Ed2519SigningKey::import(&exp_kp).unwrap();
+        let keypair = Ed25519SigningKey::import(&exp_kp).unwrap();
 
         let exp_pub = keypair.export_public();
         let imp_pub = Ed2519PublicKey::import(&exp_pub).unwrap();

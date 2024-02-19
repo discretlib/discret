@@ -1,13 +1,12 @@
 /*
     mutation mutationName{
 
-    // if id is passed -> update
-    // else create
+
     friend {
     id : $id
     name: "name" //update name
-    truc: {$idtruc}
-    atruc: [$idtuc, $idtruc2] //add $idtruc and create name
+    truc: {id:$idtruc}
+    atruc: [{id:$id}, {name:"qdqs"}] //add $idtruc and create name then add it
     }
     }
     }
@@ -19,15 +18,15 @@ variable   = @{ "$" ~ identifier }
 
 mutation = { SOI ~ "mutation" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
-entity = { identifier ~ "{" ~ field+ ~ "}" }
+entity      = { entity_name ~ "{" ~ field+ ~ "}" }
+entity_name = { identifier ~ (":" ~ identifier)? }
 
 field = { identifier ~ ":" ~ value }
 
 value = { variable | entity_ref | entity_array | string | float | integer | boolean | null }
 
-entity_ref   = { "{" ~ entity_var ~ "}" }
-entity_array = { "[" ~ entity_var ~ "]" }
-entity_var   = { variable | string }
+entity_ref   = { "{" ~ field+ ~ "}" }
+entity_array = { "[" ~ entity_ref ~ ("," ~ entity_ref)* ~ ","? ~ "]" }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }

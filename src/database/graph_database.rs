@@ -5,63 +5,49 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{base64_decode, base64_encode};
 
-use super::{edge::Edge, node::Node, Error, Result};
+use super::{edge::Edge, mutation_query::MutationQuery, node::Node, Error, Result};
 use rand::{rngs::OsRng, RngCore};
 
 pub type MappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
+
 pub trait FromRow {
     fn from_row() -> MappingFn<Self>;
 }
 
 pub trait Readable {
-    fn read(&self, conn: &Connection) -> Result<StatementResult>;
+    fn read(&self, conn: &Connection) -> Result<QueryResult>;
 }
 
 pub struct ReadQuery {
     pub stmt: Box<dyn Readable + Send>,
-    pub reply: oneshot::Sender<Result<StatementResult>>,
+    pub reply: oneshot::Sender<Result<QueryResult>>,
 }
 
 /// Trait use to write content in the database
 ///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
 ///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
 pub trait Writeable {
-    fn write(&self, conn: &Connection) -> std::result::Result<StatementResult, rusqlite::Error>;
+    fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error>;
 }
 
 pub struct WriteQuery {
     pub stmt: Box<dyn Writeable + Send>,
-    pub reply: oneshot::Sender<Result<StatementResult>>,
-}
-
-//
-// used during the insertion of nodes to retrieve a previous node with its rowid
-// the rowid will be used during the insertion to update the full text search table
-//
-#[derive(Debug)]
-pub struct InsertQuery {
-    pub rowid: Option<i64>,
-    pub index: bool,
-    pub previous_fts_str: Option<String>,
-    pub current_fts_str: Option<String>,
-    pub node: Node,
-    pub edge_deletions: Vec<Edge>,
-    pub edge_insertion: Vec<Edge>,
+    pub reply: oneshot::Sender<Result<QueryResult>>,
 }
 
 #[derive(Debug)]
-pub enum StatementResult {
+pub enum QueryResult {
     Edge(Edge),
     Edges(Vec<Edge>),
     Node(Node),
     Nodes(Vec<Node>),
-    InsertQuery(Vec<InsertQuery>),
+    MutationQuery(MutationQuery),
     String(String),
     Strings(Vec<String>),
     None,
 }
-impl StatementResult {
-    fn as_edge(&self) -> Option<&Edge> {
+impl QueryResult {
+    pub fn as_edge(&self) -> Option<&Edge> {
         if let Self::Edge(e) = self {
             Some(e)
         } else {
@@ -69,7 +55,7 @@ impl StatementResult {
         }
     }
 
-    fn as_edges(&self) -> Option<&Vec<Edge>> {
+    pub fn as_edges(&self) -> Option<&Vec<Edge>> {
         if let Self::Edges(e) = self {
             Some(e)
         } else {
@@ -77,7 +63,7 @@ impl StatementResult {
         }
     }
 
-    fn as_node(&self) -> Option<&Node> {
+    pub fn as_node(&self) -> Option<&Node> {
         if let Self::Node(e) = self {
             Some(e)
         } else {
@@ -85,7 +71,7 @@ impl StatementResult {
         }
     }
 
-    fn as_nodes(&self) -> Option<&Vec<Node>> {
+    pub fn as_nodes(&self) -> Option<&Vec<Node>> {
         if let Self::Nodes(e) = self {
             Some(e)
         } else {
@@ -93,7 +79,7 @@ impl StatementResult {
         }
     }
 
-    fn as_string(&self) -> Option<&String> {
+    pub fn as_string(&self) -> Option<&String> {
         if let Self::String(e) = self {
             Some(e)
         } else {
@@ -101,7 +87,7 @@ impl StatementResult {
         }
     }
 
-    fn as_strings(&self) -> Option<&Vec<String>> {
+    pub fn as_strings(&self) -> Option<&Vec<String>> {
         if let Self::Strings(e) = self {
             Some(e)
         } else {
@@ -132,7 +118,6 @@ pub fn create_connection(
     cache_size_in_kb: u32,
     enable_memory_security: bool,
 ) -> Result<Connection> {
-    //let conn = rusqlite::Connection::open(path)?;
     let mut flags = rusqlite::OpenFlags::empty();
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE);
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
@@ -142,7 +127,8 @@ pub fn create_connection(
 
     //Disable mutex so a single connection can only be used by one thread.
     //
-    //Perfect for rust concurency model
+    //safe to use because of the rust strong concurency model
+    //
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX);
     let conn = rusqlite::Connection::open_with_flags(path, flags)?;
 
@@ -155,10 +141,10 @@ pub fn create_connection(
     let sqlcipher_key = format!("\"x'{}'\"", hex::encode(secret));
     set_pragma("key", &sqlcipher_key, &conn)?;
 
-    let page_size = "8192";
     //
     // Increase page size as JSON data can be quite large
     //
+    let page_size = "8192";
     set_pragma("cipher_page_size", page_size, &conn)?;
     set_pragma("page_size", page_size, &conn)?;
 
@@ -170,21 +156,22 @@ pub fn create_connection(
     }
 
     //Temp files are stored in memory.
-    //
-    //required for sqlciper security
+    //any other values would break sqlciper security
     set_pragma("temp_store", "2", &conn)?;
 
     //Enable mmap for increased performance,
     //
     //Value is the one recommended in the doc: 256 Mb
-    //--is it ok on phones?
-    // Disabled because it hides the real RAM usage
+    //  - Is it ok on phones?
+    //  - Disabled because it hides the real RAM usage on linux, which is anoying for destop applications
     //set_pragma("mmap_size", "268435456", &conn)?;
 
-    //8mb cache size.
+    //
+    //larger cache size can greatly increase performances by reducing disk access
+    //
     set_pragma("cache_size", &format!("-{}", cache_size_in_kb), &conn)?;
 
-    //WAL journaling system allows for concurent READ/WRITE.
+    //WAL journaling system allows concurent READ/WRITE.
     set_pragma("journal_mode", "WAL", &conn)?;
 
     //WAL checkpoin every 1000 dirty pages.
@@ -193,7 +180,8 @@ pub fn create_connection(
     //Best safe setting for WAL journaling.
     set_pragma("synchronous", "1", &conn)?;
 
-    //increase write lock request timeout .
+    //increase write lock request timeout
+    //has probably no effect because we insert data from a single thread
     set_pragma("busy_timeout", "5000", &conn)?;
 
     //Automatically reclaim storage after deletion
@@ -211,19 +199,15 @@ pub fn create_connection(
     Ok(conn)
 }
 
+///
+/// Creates the necessary tables in one transaction.
+///
+/// Add a user defined function to handle base64 encoding directly in the database
+///
+/// This function is separated from create_connection() to be able to create unit test using in_memory databases
+///
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
     add_base64_function(conn)?;
-    if !is_initialized(conn)? {
-        conn.execute("BEGIN TRANSACTION", [])?;
-        Node::create_table(conn)?;
-        Edge::create_table(conn)?;
-        // DailySynchLog::create_table(conn)?;
-        conn.execute("COMMIT", [])?;
-    }
-    Ok(())
-}
-
-pub fn is_initialized(conn: &Connection) -> Result<bool> {
     let initialised: Option<String> = conn
         .query_row(
             "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name = '_node'",
@@ -231,7 +215,15 @@ pub fn is_initialized(conn: &Connection) -> Result<bool> {
             |row| row.get(0),
         )
         .optional()?;
-    Ok(initialised.is_some())
+
+    if initialised.is_none() {
+        conn.execute("BEGIN TRANSACTION", [])?;
+        Node::create_table(conn)?;
+        Edge::create_table(conn)?;
+        // DailySynchLog::create_table(conn)?;
+        conn.execute("COMMIT", [])?;
+    }
+    Ok(())
 }
 
 ///
@@ -307,8 +299,8 @@ impl DatabaseReader {
         Ok(Self { sender })
     }
 
-    pub async fn query_async(&self, stmt: Box<dyn Readable + Send>) -> Result<StatementResult> {
-        let (reply, receive_response) = oneshot::channel::<Result<StatementResult>>();
+    pub async fn query_async(&self, stmt: Box<dyn Readable + Send>) -> Result<QueryResult> {
+        let (reply, receive_response) = oneshot::channel::<Result<QueryResult>>();
         let query = ReadQuery { stmt, reply };
         self.sender
             .send_async(query)
@@ -318,8 +310,8 @@ impl DatabaseReader {
         receive_response.await.map_err(Error::from)?
     }
 
-    pub fn query_blocking(&self, stmt: Box<dyn Readable + Send>) -> Result<StatementResult> {
-        let (reply, receive_response) = oneshot::channel::<Result<StatementResult>>();
+    pub fn query_blocking(&self, stmt: Box<dyn Readable + Send>) -> Result<QueryResult> {
+        let (reply, receive_response) = oneshot::channel::<Result<QueryResult>>();
         let query = ReadQuery { stmt, reply };
         self.sender
             .send(query)
@@ -331,9 +323,9 @@ impl DatabaseReader {
 
 struct Optimize {}
 impl Writeable for Optimize {
-    fn write(&self, conn: &Connection) -> std::result::Result<StatementResult, rusqlite::Error> {
+    fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error> {
         conn.execute("PRAGMA OPTIMIZE", [])?;
-        Ok(StatementResult::None)
+        Ok(QueryResult::None)
     }
 }
 
@@ -343,27 +335,27 @@ pub fn set_pragma(pragma: &str, value: &str, conn: &rusqlite::Connection) -> Res
     Ok(())
 }
 
-// Main entry point to insert data in the database
-//
-// Thread Safe: Clone it to safely perform queries across different thread
-//
-// Write queries are buffered while the database thread is working.
-// When the database thread is ready, the buffer is sent and is processed in one single transaction
-// This greatly increase insertion and update rate, compared to autocommit.
-//      To get an idea of the perforance difference,
-//      a very simple benchmak on a laptop with 100 000 insertions gives:
-//      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
-//      Buffer size: 10     Insert/seconds: 500
-//      Buffer size: 100    Insert/seconds: 3000
-//      Buffer size: 1000   Insert/seconds: 32000
-//
-// If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
-// This should not be an issue as INSERT query are not expected to fail.
-// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
-// And in both case, it is ok to fail the last insertions batch.
-//
-// Only one writer should be used per database
-//
+/// Main entry point to insert data in the database
+///
+/// Thread Safe: Clone it to safely perform queries across different thread
+/// Only one writer should be used per database
+///
+/// Write queries are buffered while the database thread is working.
+/// When the database thread is ready, the buffer is sent and is processed in one single transaction
+/// This greatly increase insertion and update rate, compared to autocommit.
+///      To get an idea of the perforance difference,
+///      a very simple benchmak on a laptop with 100 000 insertions gives:
+///      Buffer size: 1      Insert/seconds: 55  <- this is equivalent to autocommit
+///      Buffer size: 10     Insert/seconds: 500
+///      Buffer size: 100    Insert/seconds: 3000
+///      Buffer size: 1000   Insert/seconds: 32000
+///
+/// If one a buffered query fails, the transaction will be rolled back and every other queries in the buffer will fail too.
+/// This should not be an issue as INSERT query are not expected to fail.
+/// The only reasons to fail an insertion are a bugs or a system failure (like no more space available on disk),
+/// And in both case, it is ok to fail the last insertions batch.
+///
+///
 #[derive(Clone)]
 pub struct BufferedDatabaseWriter {
     sender: mpsc::Sender<WriteQuery>,
@@ -480,14 +472,14 @@ impl BufferedDatabaseWriter {
         receive_buffer.blocking_recv()
     }
 
-    pub async fn write_async(&self, stmt: Box<dyn Writeable + Send>) -> Result<StatementResult> {
-        let (reply, reciev) = oneshot::channel::<Result<StatementResult>>();
+    pub async fn write_async(&self, stmt: Box<dyn Writeable + Send>) -> Result<QueryResult> {
+        let (reply, reciev) = oneshot::channel::<Result<QueryResult>>();
         let _ = self.sender.send(WriteQuery { stmt, reply }).await;
         reciev.await.map_err(Error::from)?
     }
 
-    pub fn write_blocking(&self, stmt: Box<dyn Writeable + Send>) -> Result<StatementResult> {
-        let (reply, reciev) = oneshot::channel::<Result<StatementResult>>();
+    pub fn write_blocking(&self, stmt: Box<dyn Writeable + Send>) -> Result<QueryResult> {
+        let (reply, reciev) = oneshot::channel::<Result<QueryResult>>();
         let _ = self.sender.blocking_send(WriteQuery { stmt, reply });
         reciev.blocking_recv().map_err(Error::from)?
     }
@@ -505,18 +497,18 @@ impl BufferedDatabaseWriter {
             .map_err(|e| Error::TokioSendError(e.to_string()))
     }
 
-    pub async fn optimize_async(&self) -> Result<StatementResult> {
+    pub async fn optimize_async(&self) -> Result<QueryResult> {
         self.write_async(Box::new(Optimize {})).await
     }
 
-    pub fn optimize_blocking(&self) -> Result<StatementResult> {
+    pub fn optimize_blocking(&self) -> Result<QueryResult> {
         self.write_blocking(Box::new(Optimize {}))
     }
 
     fn process_batch_write(
         buffer: &Vec<WriteQuery>,
         conn: &Connection,
-    ) -> Result<Vec<StatementResult>> {
+    ) -> Result<Vec<QueryResult>> {
         conn.execute("BEGIN TRANSACTION", [])?;
         let mut result = Vec::new();
         for query in buffer {
@@ -535,18 +527,23 @@ impl BufferedDatabaseWriter {
     }
 }
 
-//Maximum allowed size for a row
+///
+/// Maximum allowed size for a row
+/// set to a relatively low value to avoid large rows that would eats lots of ram and bandwith during synchronisation
+///
 pub const MAX_ROW_LENTGH: usize = 1024 * 1024; //1MB
 
 //min numbers of char in an id //policy
 pub const DB_ID_MIN_SIZE: usize = 16;
 
-//allows for storing a public key in the id
+/// set to 33 to be able to store a public key in the id
 pub const DB_ID_MAX_SIZE: usize = 33;
 
-pub const DB_ID_SIZE: usize = 16;
+const DB_ID_SIZE: usize = 16;
 
+///
 /// id with time on first to improve index locality
+///
 pub fn new_id(time: i64) -> Vec<u8> {
     const TIME_BYTES: usize = 4;
 
@@ -561,11 +558,17 @@ pub fn new_id(time: i64) -> Vec<u8> {
     whole.to_vec()
 }
 
-pub fn valid_id_len(id: &Vec<u8>) -> bool {
+///
+/// control the validity of the id
+///
+pub fn is_valid_id_len(id: &Vec<u8>) -> bool {
     let v = id.len();
     (DB_ID_MIN_SIZE..=DB_ID_MAX_SIZE).contains(&v)
 }
 
+///
+/// current time in milliseconds since unix epoch
+///
 pub fn now() -> i64 {
     SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -637,21 +640,18 @@ mod tests {
         surname: String,
     }
     impl Writeable for InsertPerson {
-        fn write(
-            &self,
-            conn: &Connection,
-        ) -> std::result::Result<StatementResult, rusqlite::Error> {
+        fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error> {
             let mut stmt =
                 conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 
             stmt.execute((&self.name, &self.surname))?;
-            Ok(StatementResult::None)
+            Ok(QueryResult::None)
         }
     }
     use std::str;
     struct SelectAll {}
     impl Readable for SelectAll {
-        fn read(&self, conn: &Connection) -> Result<StatementResult, Error> {
+        fn read(&self, conn: &Connection) -> Result<QueryResult, Error> {
             let mut stmt = conn.prepare_cached(
                 "
             SELECT 	
@@ -666,7 +666,7 @@ mod tests {
             while let Some(row) = rows.next()? {
                 result.push(row.get(0)?);
             }
-            Ok(StatementResult::Strings(result))
+            Ok(QueryResult::Strings(result))
         }
     }
 
@@ -798,7 +798,7 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<StatementResult, Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<QueryResult, Error>>();
 
             let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
@@ -841,7 +841,7 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<StatementResult, Error>>();
+            let (reply, reciev) = oneshot::channel::<Result<QueryResult, Error>>();
 
             let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
@@ -893,12 +893,12 @@ mod tests {
             surname: String,
         }
         impl Readable for BadPerson {
-            fn read(&self, conn: &Connection) -> Result<StatementResult, Error> {
+            fn read(&self, conn: &Connection) -> Result<QueryResult, Error> {
                 let mut stmt =
                     conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 
                 stmt.execute((&self.name, &self.surname))?;
-                Ok(StatementResult::None)
+                Ok(QueryResult::None)
             }
         }
 

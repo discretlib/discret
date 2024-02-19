@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod graph_database;
+pub mod mutation_query;
 pub mod node;
-pub mod query_builder;
 pub mod query_language;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -21,9 +21,6 @@ pub enum Error {
 
     #[error("Invalid JSON Object {0}")]
     InvalidJsonObject(String),
-
-    #[error("{0}")]
-    PolicyError(String),
 
     #[error("{0}")]
     DatabaseWriteError(String),
@@ -58,6 +55,13 @@ pub enum Error {
 
     #[error("entity {0} with id {1} could not be found and cannot be updated")]
     InvalidMutationId(String, String),
+
     #[error("unknown entity {0} with id {1} and cannot be inserted in field {2}.{3}")]
-    UnknownEntity(String, String, String, String),
+    UnknownFieldEntity(String, String, String, String),
+
+    #[error("unknown entity {0} with id {1}")]
+    UnknownEntity(String, String),
+
+    #[error("{0}")]
+    QueryError(String),
 }

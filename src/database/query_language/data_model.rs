@@ -30,6 +30,7 @@ lazy_static::lazy_static! {
             ID_FIELD.to_string(),
             Field {
                 name: ID_FIELD.to_string(),
+                short_name: ID_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
@@ -42,6 +43,7 @@ lazy_static::lazy_static! {
             CREATION_DATE_FIELD.to_string(),
             Field {
                 name: CREATION_DATE_FIELD.to_string(),
+                short_name: CREATION_DATE_FIELD.to_string(),
                 field_type: FieldType::Integer,
                 default_value: None,
                 nullable: false,
@@ -54,6 +56,7 @@ lazy_static::lazy_static! {
             MODIFICATION_DATE_FIELD.to_string(),
             Field {
                 name: MODIFICATION_DATE_FIELD.to_string(),
+                short_name: MODIFICATION_DATE_FIELD.to_string(),
                 field_type: FieldType::Integer,
                 default_value: None,
                 nullable: false,
@@ -66,6 +69,7 @@ lazy_static::lazy_static! {
             AUTHORS_FIELD.to_string(),
             Field {
                 name: AUTHORS_FIELD.to_string(),
+                short_name: AUTHORS_FIELD.to_string(),
                 field_type: FieldType::Array(AUTHOR_TABLE.to_string()),
                 default_value: None,
                 nullable: false,
@@ -78,6 +82,7 @@ lazy_static::lazy_static! {
             ENTITY_FIELD.to_string(),
             Field {
                 name: ENTITY_FIELD.to_string(),
+                short_name: ENTITY_FIELD.to_string(),
                 field_type: FieldType::String,
                 default_value: None,
                 nullable: false,
@@ -90,6 +95,7 @@ lazy_static::lazy_static! {
             BINARY_FIELD.to_string(),
             Field {
                 name: BINARY_FIELD.to_string(),
+                short_name: BINARY_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
@@ -102,6 +108,7 @@ lazy_static::lazy_static! {
             JSON_FIELD.to_string(),
             Field {
                 name: JSON_FIELD.to_string(),
+                short_name: JSON_FIELD.to_string(),
                 field_type: FieldType::String,
                 default_value: None,
                 nullable: false,
@@ -114,6 +121,7 @@ lazy_static::lazy_static! {
             PUB_KEY_FIELD.to_string(),
             Field {
                 name: PUB_KEY_FIELD.to_string(),
+                short_name: PUB_KEY_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
@@ -126,6 +134,7 @@ lazy_static::lazy_static! {
             SIGNATURE_FIELD.to_string(),
             Field {
                 name: SIGNATURE_FIELD.to_string(),
+                short_name: SIGNATURE_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
@@ -136,6 +145,11 @@ lazy_static::lazy_static! {
         fields
     };
 }
+
+/// Reserve the first 64 short_id for system usage.
+/// This is an arbitrary value wich should be plenty enought
+/// applies to entity and field
+const RESERVED_SHORT_NAMES: usize = 32;
 
 #[derive(Debug)]
 pub struct DataModel {
@@ -148,20 +162,25 @@ impl Default for DataModel {
 }
 impl DataModel {
     pub fn new() -> Self {
-        let mut dm = Self {
+        Self {
             entities: HashMap::new(),
-        };
-        let mut sys_author = Entity::new();
-        sys_author.name = AUTHOR_TABLE.to_string();
-        dm.entities.insert(AUTHOR_TABLE.to_string(), sys_author);
-        dm
+        }
     }
 
     pub fn add_entity(&mut self, entity: Entity) -> Result<(), Error> {
         if self.entities.contains_key(&entity.name) {
             return Err(Error::DuplicatedEntity(entity.name.clone()));
         }
-        self.entities.insert(entity.name.clone(), entity);
+        self.insert(entity.name.clone(), entity)?;
+        Ok(())
+    }
+
+    fn insert(&mut self, name: String, mut entity: Entity) -> Result<(), Error> {
+        entity.short_name = (RESERVED_SHORT_NAMES + self.entities.len()).to_string();
+        let old = self.entities.insert(name, entity);
+        if old.is_some() {
+            panic!("Cannot insert an existing entity in the datamodel")
+        }
         Ok(())
     }
 
@@ -174,6 +193,21 @@ impl DataModel {
                 name
             )))
         }
+    }
+
+    pub fn update(&mut self, query: &str) -> Result<(), Error> {
+        let mut new_data_model = Self::parse(query)?;
+        for entity in &mut self.entities {
+            let new_entity_op = new_data_model.entities.remove(entity.0);
+            match new_entity_op {
+                Some(new_entity) => entity.1.update(new_entity)?,
+                None => return Err(Error::MissingEntity(String::from(entity.0))),
+            }
+        }
+        for entity in new_data_model.entities {
+            self.insert(entity.0, entity.1)?;
+        }
+        Ok(())
     }
 
     pub fn parse(query: &str) -> Result<DataModel, Error> {
@@ -218,7 +252,12 @@ impl DataModel {
                     for i in entity_pair.into_inner() {
                         match i.as_rule() {
                             Rule::deprecated => entity.deprecated = true,
-                            Rule::identifier => entity.name = i.as_str().to_string(),
+                            Rule::identifier => {
+                                entity.name = i.as_str().to_string();
+                                if entity.name.starts_with('_') {
+                                    return Err(Error::InvalidName(entity.name.to_string()));
+                                }
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -231,13 +270,10 @@ impl DataModel {
                                 entity.add_field(field)?;
                             }
                             Rule::index => {
-                                let index = Self::parse_index(i, false)?;
+                                let index = Self::parse_index(i)?;
                                 entity.add_index(index)?;
                             }
-                            Rule::unique_index => {
-                                let index = Self::parse_index(i, true)?;
-                                entity.add_index(index)?;
-                            }
+
                             _ => unreachable!(),
                         }
                     }
@@ -250,8 +286,8 @@ impl DataModel {
         Ok(entity)
     }
 
-    fn parse_index(entity_pair: Pair<'_, Rule>, unique: bool) -> Result<Index, Error> {
-        let mut index = Index::new(unique);
+    fn parse_index(entity_pair: Pair<'_, Rule>) -> Result<Index, Error> {
+        let mut index = Index::new();
 
         for field in entity_pair.into_inner() {
             index.add_field(field.as_str().to_string())?;
@@ -269,7 +305,12 @@ impl DataModel {
         for i in name_pair.into_inner() {
             match i.as_rule() {
                 Rule::deprecated => field.deprecated = true,
-                Rule::identifier => field.name = i.as_str().to_string(),
+                Rule::identifier => {
+                    field.name = i.as_str().to_string();
+                    if field.name.starts_with('_') {
+                        return Err(Error::InvalidName(field.name.clone()));
+                    }
+                }
                 _ => unreachable!(),
             }
         }
@@ -394,7 +435,10 @@ impl DataModel {
                     "Boolean" | "Float" | "Integer" | "String" => {
                         return Err(Error::ParserError(format! ("{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
                     }
-                    _ => field.field_type = FieldType::Array(name.to_string()),
+                    _ => {
+                        field.field_type = FieldType::Array(name.to_string());
+                        field.nullable = true;
+                    }
                 }
             }
 
@@ -436,15 +480,11 @@ impl DataModel {
 #[derive(Debug)]
 pub struct Index {
     fields: Vec<String>,
-    unique: bool,
 }
 
 impl Index {
-    pub fn new(unique: bool) -> Self {
-        Self {
-            fields: Vec::new(),
-            unique,
-        }
+    pub fn new() -> Self {
+        Self { fields: Vec::new() }
     }
     pub fn add_field(&mut self, name: String) -> Result<(), Error> {
         if self.fields.contains(&name) {
@@ -467,11 +507,26 @@ impl Index {
     }
 }
 
+///
+/// The entity data structure
+///
+/// An existing entity can be updated with a new entity.
+/// The new entity must contains the complete entity definition along with the modification.
+/// The following rules are enforced to ensure backward compatibility:
+/// - fields cannot be removed
+/// - existing fields can be deprecated and 'undeprecated'
+/// - exiting field types cannot be changed
+/// - existing fields can be changed from not nullable to nullable
+/// - existing fields can be changed from nullable to not nullable only if a default value is provided
+/// - new fields must provide a default value if not nullable
+///
 #[derive(Debug)]
 pub struct Entity {
     pub name: String,
+    pub short_name: String,
     pub fields: HashMap<String, Field>,
     pub indexes: HashMap<String, Index>,
+    pub indexes_to_remove: HashMap<String, Index>,
     pub deprecated: bool,
 }
 impl Default for Entity {
@@ -483,10 +538,71 @@ impl Entity {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
+            short_name: "".to_string(),
             fields: HashMap::new(),
             indexes: HashMap::new(),
+            indexes_to_remove: HashMap::new(),
             deprecated: false,
         }
+    }
+
+    ///
+    /// update an existing entity
+    ///
+    pub fn update(&mut self, mut new_entity: Entity) -> Result<(), Error> {
+        self.deprecated = new_entity.deprecated;
+        for field in &mut self.fields {
+            let new_field_opt = new_entity.fields.remove(field.0);
+            match new_field_opt {
+                Some(new_field) => {
+                    let field = field.1;
+
+                    if !field.field_type.eq(&new_field.field_type) {
+                        return Err(Error::CannotUpdateFieldType(
+                            String::from(&self.name),
+                            String::from(&field.name),
+                            field.field_type.to_string(),
+                            new_field.field_type.to_string(),
+                        ));
+                    }
+                    if field.nullable && !new_field.nullable && new_field.default_value.is_none() {
+                        return Err(Error::MissingDefaultValue(
+                            String::from(&self.name),
+                            String::from(&field.name),
+                        ));
+                    }
+                    field.nullable = new_field.nullable;
+                    field.default_value = new_field.default_value;
+                    field.deprecated = new_field.deprecated;
+                }
+                None => {
+                    return Err(Error::MissingField(
+                        String::from(&self.name),
+                        String::from(field.0),
+                    ))
+                }
+            }
+        }
+        for field in new_entity.fields {
+            if !field.1.nullable && field.1.default_value.is_none() {
+                return Err(Error::MissingDefaultValue(
+                    String::from(&self.name),
+                    String::from(&field.1.name),
+                ));
+            }
+            self.insert_field(field.0, field.1);
+        }
+
+        let mut index_map = HashMap::new();
+        for new_index in new_entity.indexes {
+            self.indexes.remove(&new_index.0);
+            index_map.insert(new_index.0, new_index.1);
+        }
+        for to_remove in self.indexes.drain() {
+            self.indexes_to_remove.insert(to_remove.0, to_remove.1);
+        }
+        self.indexes = index_map;
+        Ok(())
     }
 
     pub fn add_field(&mut self, field: Field) -> Result<(), Error> {
@@ -496,8 +612,16 @@ impl Entity {
         if SYSTEM_FIELDS.contains_key(&field.name) {
             return Err(Error::SystemFieldConflict(field.name.clone()));
         }
-        self.fields.insert(field.name.clone(), field);
+        self.insert_field(field.name.clone(), field);
         Ok(())
+    }
+
+    fn insert_field(&mut self, name: String, mut field: Field) {
+        field.short_name = (RESERVED_SHORT_NAMES + self.fields.len()).to_string();
+        let old = self.fields.insert(name, field);
+        if old.is_some() {
+            panic!("Cannot insert an existing field into an entity");
+        }
     }
 
     pub fn add_index(&mut self, index: Index) -> Result<(), Error> {
@@ -512,6 +636,9 @@ impl Entity {
         Ok(())
     }
 
+    ///
+    /// retrieve an entity field definition
+    ///
     pub fn get_field(&self, name: &str) -> Result<&Field, Error> {
         if let Some(field) = self.fields.get(name) {
             Ok(field)
@@ -525,7 +652,7 @@ impl Entity {
         }
     }
 
-    pub fn check_consistency(&self) -> Result<(), Error> {
+    fn check_consistency(&self) -> Result<(), Error> {
         for index in self.indexes.values() {
             for field in &index.fields {
                 if let Some(e) = self.fields.get(field) {
@@ -553,6 +680,7 @@ impl Entity {
 #[derive(Debug)]
 pub struct Field {
     pub name: String,
+    pub short_name: String,
     pub field_type: FieldType,
     pub default_value: Option<Value>,
     pub nullable: bool,
@@ -568,6 +696,7 @@ impl Field {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
+            short_name: "".to_string(),
             field_type: FieldType::Boolean,
             default_value: None,
             nullable: false,
@@ -606,7 +735,7 @@ mod tests {
                     child : [Person],
                     mother : Person ,
                     father : Person NULLABLE, 
-                    unique_index(name, surname),
+                    index(name, surname),
                      
                 }
 
@@ -646,7 +775,7 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(false, owner.nullable);
+        assert_eq!(true, owner.nullable);
 
         let index = &pet.indexes;
         assert_eq!(1, index.len());
@@ -680,7 +809,7 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(false, child.nullable);
+        assert_eq!(true, child.nullable);
 
         let mother = person.fields.get("mother").unwrap();
         match &mother.field_type {
@@ -705,9 +834,7 @@ mod tests {
             "
                 Person {
                     child : [InvalidEntity],
-                }
-            
-          ",
+                }",
         )
         .expect_err("InvalidEntity is not defined in the datamodel");
 
@@ -715,9 +842,7 @@ mod tests {
             "
                 Person {
                     child : [Person],
-                }
-            
-          ",
+                }",
         )
         .expect("Person a valid entity");
 
@@ -725,9 +850,7 @@ mod tests {
             "
                 Person {
                     mother : InvalidEntity,
-                }
-            
-          ",
+                }",
         )
         .expect_err("InvalidEntity is not defined in the datamodel");
 
@@ -735,11 +858,36 @@ mod tests {
             "
                 Person {
                     mother : Person,
-                }
-            
-          ",
+                }",
         )
         .expect("Person is a valid entity");
+    }
+
+    #[test]
+    fn start_with_underscore() {
+        let _datamodel = DataModel::parse(
+            "
+                _Person {
+                    name : String,
+                }",
+        )
+        .expect_err("entity name cannot start with a _");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    _name : String,
+                }",
+        )
+        .expect_err("entity field name cannot start with a _");
+
+        let _datamodel = DataModel::parse(
+            "
+                Per_son_ {
+                    na_me_ : String,
+                }",
+        )
+        .expect("entity and field name can contain _");
     }
 
     #[test]
@@ -752,9 +900,7 @@ mod tests {
 
                 Person {
                     name : String,
-                }
-            
-          ",
+                }",
         )
         .expect_err("Person is duplicated");
 
@@ -762,10 +908,7 @@ mod tests {
             "
                 Person {
                     child : [Person],
-                }
-
-            
-          ",
+                }",
         )
         .expect("Person is not duplicated anymore");
 
@@ -774,8 +917,7 @@ mod tests {
                 Person {
                     child : String,
                     child : [Person],
-                }            
-          ",
+                } ",
         )
         .expect_err("child is duplicated");
 
@@ -784,8 +926,7 @@ mod tests {
                 Person {
                     name : String,
                     child : [Person],
-                }            
-          ",
+                }",
         )
         .expect("child is not duplicated anymore");
     }
@@ -796,9 +937,7 @@ mod tests {
             "
                 Person {
                     child : Person],
-                }
-            
-          ",
+                }",
         )
         .expect_err("missing [ before person");
 
@@ -806,11 +945,17 @@ mod tests {
             "
                 Person @deprecated {
                     mother : Person,
-                }
-            
-          ",
+                }",
         )
         .expect_err("@deprecated must be before the entity name");
+
+        let _datamodel = DataModel::parse(
+            "
+                @deprecated Person  {
+                    mother : Person,
+                }",
+        )
+        .expect("@deprecated must be before the entity name");
     }
 
     #[test]
@@ -819,9 +964,7 @@ mod tests {
             r#"
                 Person {
                     is_vaccinated : Boolean default "true" ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect_err("default must be a boolean not a string");
 
@@ -829,9 +972,7 @@ mod tests {
             r#"
                 Person {
                     is_vaccinated : Boolean default false ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect("default is a boolean");
 
@@ -839,9 +980,7 @@ mod tests {
             r#"
                 Person {
                     weight : Float default true ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect_err("default must be a Float not a boolean");
 
@@ -849,9 +988,7 @@ mod tests {
             r#"
                 Person {
                     weight : Float default 12 ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect("default is an Integer which will be parsed to a Float");
 
@@ -859,9 +996,7 @@ mod tests {
             r#"
                 Person {
                     weight : Float default 12.5 ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect("default is an Float");
 
@@ -869,9 +1004,7 @@ mod tests {
             r#"
                 Person {
                     age : Integer default 12.5 ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect_err("default must be a Integer not a Float");
 
@@ -879,9 +1012,7 @@ mod tests {
             r#"
                 Person {
                     age : Integer default 12 ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect("default is an Integer");
 
@@ -889,9 +1020,7 @@ mod tests {
             "
                 Person {
                     name : String default 12.2 ,
-                }
-            
-          ",
+                }",
         )
         .expect_err("default must be a string not a float");
 
@@ -899,9 +1028,7 @@ mod tests {
             r#"
                 Person {
                     name : String default "test" ,
-                }
-            
-          "#,
+                }"#,
         )
         .expect("default is a string");
     }
@@ -980,8 +1107,7 @@ mod tests {
                     child : [Person],
                     father: Person,
                     index(invalid_field)
-                }            
-          ",
+                }",
         )
         .expect_err("index has an invalid field name");
 
@@ -992,8 +1118,7 @@ mod tests {
                     child : [Person],
                     father: Person,
                     index(child)
-                }            
-          ",
+                }",
         )
         .expect_err("child cannot be indexed because it is not a scalar type");
 
@@ -1004,8 +1129,7 @@ mod tests {
                     child : [Person],
                     father: Person,
                     index(father)
-                }            
-          ",
+                }",
         )
         .expect_err("father cannot be indexed because it is not a scalar type");
 
@@ -1016,8 +1140,7 @@ mod tests {
                     child : [Person],
                     father: Person,
                     index(name, name)
-                }            
-          ",
+                }",
         )
         .expect_err("name is repeated twice");
 
@@ -1029,8 +1152,7 @@ mod tests {
                     father: Person,
                     index(name),
                     index(name)
-                }            
-          ",
+                }",
         )
         .expect_err("index(name) is defined twice");
 
@@ -1041,9 +1163,177 @@ mod tests {
                     child : [Person],
                     father: Person,
                     index(name)
-                }            
-          ",
+                }",
         )
         .expect("index is valid");
+    }
+
+    #[test]
+    fn entity_update() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+                Person {
+                    name : String,
+                }",
+            )
+            .unwrap();
+
+        let person = datamodel.entities.get("Person").unwrap();
+        assert_eq!(RESERVED_SHORT_NAMES.to_string(), person.short_name);
+
+        datamodel
+            .update(
+                "
+                Pesrson {
+                    name : String,
+                }",
+            )
+            .expect_err("missing Person");
+
+        datamodel
+            .update(
+                "
+                @deprecated Pet {
+                    name : String,
+                }
+
+                Person {
+                    name : String,
+                } ",
+            )
+            .unwrap();
+        //entity order in the updated datamodel does not change the existing short names
+        let person = datamodel.entities.get("Person").unwrap();
+        assert_eq!(RESERVED_SHORT_NAMES.to_string(), person.short_name);
+        let pet = datamodel.entities.get("Pet").unwrap();
+        assert_eq!((RESERVED_SHORT_NAMES + 1).to_string(), pet.short_name);
+        assert!(pet.deprecated);
+
+        datamodel
+            .update(
+                "
+            Pet {
+                name : String,
+            }
+
+            @deprecated Person {
+                name : String,
+            } ",
+            )
+            .unwrap();
+
+        let person = datamodel.entities.get("Person").unwrap();
+        assert!(person.deprecated);
+        let pet = datamodel.entities.get("Pet").unwrap();
+        assert!(!pet.deprecated);
+    }
+
+    #[test]
+    fn field_update() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "Person {
+                    name : String,
+                }",
+            )
+            .unwrap();
+
+        let person = datamodel.entities.get("Person").unwrap();
+        let name = person.get_field("name").unwrap();
+        assert_eq!(RESERVED_SHORT_NAMES.to_string(), name.short_name);
+
+        datamodel
+            .update(
+                "Person {
+                name : Integer,
+            }",
+            )
+            .expect_err("Cannot change a field type");
+
+        datamodel
+            .update(
+                "Person {
+                name : String nullable,
+            }",
+            )
+            .expect("Field can be changed to nullable");
+
+        datamodel
+            .update(
+                "Person {
+                name : String,
+            }",
+            )
+            .expect_err("Field cannot be changed to not nullable without a default value");
+
+        datamodel
+            .update(
+                r#"Person {
+                name : String default "",
+            }"#,
+            )
+            .expect(
+                "Field can be changed to not nullable with a default value, even an empty string",
+            );
+
+        datamodel
+            .update(
+                r#"Person {
+                name : String default "",
+                age : Integer
+            }"#,
+            )
+            .expect_err("New Field that are not nullable must have a default value");
+
+        datamodel
+            .update(
+                r#"Person {
+                age : Integer default 0,
+                name : String default "",
+            }"#,
+            )
+            .expect("New Field that are not nullable must have a default value");
+
+        let person = datamodel.entities.get("Person").unwrap();
+        let name = person.get_field("name").unwrap();
+        assert_eq!(RESERVED_SHORT_NAMES.to_string(), name.short_name);
+        let age = person.get_field("age").unwrap();
+        assert_eq!((RESERVED_SHORT_NAMES + 1).to_string(), age.short_name);
+    }
+
+    #[test]
+    fn index_update() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "Person {
+                    name : String,
+                    index(name)
+                }",
+            )
+            .unwrap();
+
+        datamodel
+            .update(
+                "Person {
+                    name : String,
+                    index(name)
+                }",
+            )
+            .unwrap();
+
+        datamodel
+            .update(
+                "Person {
+                    name : String,
+                }",
+            )
+            .unwrap();
+        let person = datamodel.get_entity("Person").unwrap();
+        assert_eq!(0, person.indexes.len());
+        assert_eq!(1, person.indexes_to_remove.len());
     }
 }

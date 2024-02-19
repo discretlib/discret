@@ -13,14 +13,6 @@ use std::{
 
 use cryptography::*;
 
-use database::{
-    graph_database::GraphDatabase,
-    query_language::{
-        data_model::DataModel, deletion::Deletion, mutation::Mutation, parameter::Parameters,
-        query::Query,
-    },
-};
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -76,7 +68,7 @@ fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<Pat
 }
 
 pub struct Account {
-    sign_key: Ed2519SigningKey,
+    sign_key: Ed25519SigningKey,
     secret: [u8; 32],
 }
 impl Account {
@@ -92,7 +84,7 @@ impl Account {
             return Err(Error::AccountExists);
         }
         File::create(account_path)?;
-        let sign_key = Ed2519SigningKey::create_from(&secret);
+        let sign_key = Ed25519SigningKey::create_from(&secret);
 
         Ok(Self {
             sign_key,
@@ -111,7 +103,7 @@ impl Account {
         if !account_path.exists() {
             return Err(Error::InvalidAccount);
         }
-        let sign_key = Ed2519SigningKey::create_from(&secret);
+        let sign_key = Ed25519SigningKey::create_from(&secret);
 
         Ok(Self {
             sign_key,
@@ -212,21 +204,20 @@ impl Account {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     const DATA_PATH: &str = "test/data/database/";
 
     #[tokio::test(flavor = "multi_thread")]
     async fn connect() {
-        let secret = hash(b"not so secret");
-        let data_model = "   
-        Person {
-            name : String,
-            surname : String,
-            parents : [Person],
-            age : Integer,
-            weight : Float,
-            is_human : Boolean
-        }";
+        // let secret = hash(b"not so secret");
+        // let data_model = "
+        // Person {
+        //     name : String,
+        //     surname : String,
+        //     parents : [Person],
+        //     age : Integer,
+        //     weight : Float,
+        //     is_human : Boolean
+        // }";
         //    let _app = Application::new("my_new_app", &secret, DATA_PATH.into(), data_model).unwrap();
 
         // app.query("query", None).unwrap();

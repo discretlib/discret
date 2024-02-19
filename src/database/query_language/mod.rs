@@ -15,7 +15,7 @@ pub enum FieldValue {
     Value(Value),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Boolean(bool),
     Integer(i64),
@@ -183,6 +183,18 @@ pub enum Error {
     #[error("field {0} is conflicting with a system field, you have to change its name")]
     SystemFieldConflict(String),
 
+    #[error("Entity {0} is missing in the new data model")]
+    MissingEntity(String),
+
+    #[error("Field {0}.{1} is missing in the new data model")]
+    MissingField(String, String),
+
+    #[error("New field definition {0}.{1} is not nullable and needs a default value to ensure backward compatibility")]
+    MissingDefaultValue(String, String),
+
+    #[error("New field definition {0}.{1} is is tring to change the field type. old type:{2} new type:{3}")]
+    CannotUpdateFieldType(String, String, String, String),
+
     #[error(transparent)]
     BoolParsingError(#[from] std::str::ParseBoolError),
 
@@ -206,4 +218,12 @@ pub enum Error {
 
     #[error("float {0} is not a valid JSON float")]
     InvalidFloat(f64),
+
+    #[error("name {0} cannot start with '_'. Names starting with '_' are reserved for the system")]
+    InvalidName(String),
+
+    #[error(
+        "{0}.{1} is required to create the entity. It is not nullable and has no default value"
+    )]
+    MissingUpdateField(String, String),
 }

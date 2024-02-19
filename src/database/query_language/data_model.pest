@@ -21,9 +21,8 @@ entity_array  = { "[" ~ identifier ~ "]" }
 entity_field  = { identifier ~ nullable? }
 field         = { deprecable_identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
 
-index        = { ^"index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
-unique_index = { ^"unique_index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
-entry        = { index | unique_index | field }
+index = { ^"index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
+entry = { index | field }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }

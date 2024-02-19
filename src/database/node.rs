@@ -1,13 +1,29 @@
 use super::{
-    graph_database::{new_id, now, valid_id_len, FromRow, MAX_ROW_LENTGH},
+    graph_database::{is_valid_id_len, new_id, now, FromRow, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
-    base64_encode, Ed2519PublicKey, Ed2519SigningKey, PublicKey, SigningKey,
+    base64_encode, Ed2519PublicKey, Ed25519SigningKey, PublicKey, SigningKey,
 };
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+impl Default for Node {
+    fn default() -> Self {
+        let date = now();
+        Self {
+            id: new_id(date),
+            cdate: date,
+            mdate: date,
+            _entity: "".to_string(),
+            _json_data: None,
+            _binary_data: None,
+            _pub_key: vec![],
+            _signature: vec![],
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
@@ -21,6 +37,13 @@ pub struct Node {
     pub _signature: Vec<u8>,
 }
 impl Node {
+    ///
+    /// Creates the required tables and indexes
+    ///
+    /// _node_fts is the table that provides the full text search functionality
+    ///
+    /// _nodes keeps its rowid because it is required for the full text seach.
+    ///
     pub fn create_table(conn: &Connection) -> Result<()> {
         //system table stores compressed text and json
         conn.execute(
@@ -74,7 +97,6 @@ impl Node {
 
     fn hash(&self) -> Result<blake3::Hash> {
         let mut hasher = blake3::Hasher::new();
-
         hasher.update(&self.id);
         hasher.update(&self.cdate.to_le_bytes());
         hasher.update(&self.mdate.to_le_bytes());
@@ -93,8 +115,11 @@ impl Node {
         Ok(hasher.finalize())
     }
 
+    ///
+    /// check the node's signature
+    ///
     pub fn verify(&self) -> Result<()> {
-        if !valid_id_len(&self.id) {
+        if !is_valid_id_len(&self.id) {
             return Err(Error::InvalidId());
         }
 
@@ -125,10 +150,13 @@ impl Node {
         Ok(())
     }
 
-    pub fn sign(&mut self, keypair: &Ed2519SigningKey) -> Result<()> {
-        self._pub_key = keypair.export_public();
+    ///
+    /// sign the node after performing some checks
+    ///
+    pub fn sign(&mut self, signing_key: &Ed25519SigningKey) -> Result<()> {
+        self._pub_key = signing_key.export_public();
 
-        if !valid_id_len(&self.id) {
+        if !is_valid_id_len(&self.id) {
             return Err(Error::InvalidId());
         }
 
@@ -153,22 +181,55 @@ impl Node {
         }
 
         let hash = self.hash()?;
-        let signature = keypair.sign(hash.as_bytes());
+        let signature = signing_key.sign(hash.as_bytes());
         self._signature = signature;
 
         Ok(())
     }
 
+    ///
+    /// Retrieve a node by id and entity name
+    ///
     pub fn get(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<Option<Box<Node>>> {
-        let mut get_stmt = conn.prepare_cached(
-            "SELECT id , cdate, mdate, _entity,_json_data, _binary_data, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?",
-        )?;
+        let mut get_stmt = conn.prepare_cached(NODE_FROM_ROW_QUERY)?;
         let node = get_stmt
             .query_row((id, entity), Node::from_row())
             .optional()?;
         Ok(node)
     }
 
+    pub const DELETED_FIRST_CHAR: char = '$';
+
+    ///
+    /// Low level method to delete a node
+    /// This method is intended to be used in the write thread wich perform operations in larges batches.
+    /// This method does not check for data integrity to avoid any errors that would cause the rollback of a potentially large number of write queries
+    ///
+    /// Nodes are soft deleted first. Upon deletion they are updated by prepending '$' to the _entity field field value.
+    ///
+    /// deleteting an allready deleted node wil result in an hard deletion
+    /// hard deletions are not synchronized
+    ///
+    pub fn delete(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<()> {
+        if entity.starts_with(Self::DELETED_FIRST_CHAR) {
+            let mut delete_stmt =
+                conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
+            delete_stmt.execute((id, entity))?;
+        } else {
+            let mut deleted_entity = String::new();
+            deleted_entity.push(Self::DELETED_FIRST_CHAR);
+            deleted_entity.push_str(entity);
+
+            let mut update_stmt =
+                conn.prepare_cached("UPDATE _node SET _entity=? WHERE id=? AND _entity=?")?;
+            update_stmt.execute((deleted_entity, id, entity))?;
+        }
+        Ok(())
+    }
+
+    ///
+    /// Verify the existence of a specific Node
+    ///
     pub fn exist(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<bool> {
         let mut exists_stmt =
             conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
@@ -180,16 +241,17 @@ impl Node {
     }
 
     ///
-    /// intended to be used in the GraphDatase insert thread
-    /// only insert statement are done to avoid any overhead on in the thread
+    /// Intended to be used in the GraphDatase insert thread.
+    /// There is only one insert thread, so we only do the minimal amount of query to avoid any overhead.
+    /// The parameters: rowid, previous_fts are retrieved in a select thread
     ///
     pub fn write(
         &self,
         conn: &Connection,
         index: bool,
-        rowid: Option<i64>,
-        previous_fts: Option<String>,
-        current_fts: Option<String>,
+        rowid: &Option<i64>,
+        previous_fts: &Option<String>,
+        current_fts: &Option<String>,
     ) -> std::result::Result<(), rusqlite::Error> {
         const UPDATE_FTS_QUERY: &'static str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
         if let Some(id) = rowid {
@@ -269,6 +331,8 @@ impl Node {
     }
 }
 
+///query used in conjunction with the from_row() method to easily retrieve a node
+const NODE_FROM_ROW_QUERY: &'static str = "SELECT id , cdate, mdate, _entity,_json_data, _binary_data, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?";
 impl FromRow for Node {
     fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
@@ -286,22 +350,6 @@ impl FromRow for Node {
     }
 }
 
-impl Default for Node {
-    fn default() -> Self {
-        let date = now();
-        Self {
-            id: new_id(date),
-            cdate: date,
-            mdate: date,
-            _entity: "".to_string(),
-            _json_data: None,
-            _binary_data: None,
-            _pub_key: vec![],
-            _signature: vec![],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -309,7 +357,7 @@ mod tests {
 
     #[test]
     fn node_signature() {
-        let keypair = Ed2519SigningKey::new();
+        let keypair = Ed25519SigningKey::new();
         let mut node = Node {
             _entity: "TEST".to_string(),
             ..Default::default()
@@ -377,7 +425,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         Node::create_table(&conn).unwrap();
 
-        let keypair = Ed2519SigningKey::new();
+        let keypair = Ed25519SigningKey::new();
 
         let good_json = r#"{
             "randomtext": "Lorem ipsum dolor sit amet"
@@ -394,9 +442,9 @@ mod tests {
         node.write(
             &conn,
             true,
-            None,
-            None,
-            Some(String::from("Lorem ipsum dolor sit amet")),
+            &None,
+            &None,
+            &Some(String::from("Lorem ipsum dolor sit amet")),
         )
         .unwrap();
 
@@ -429,9 +477,9 @@ mod tests {
         node.write(
             &conn,
             true,
-            Some(row_id),
-            Some(String::from("Lorem ipsum dolor sit amet")),
-            Some(String::from("ipsum dolor sit amet Conjectur")),
+            &Some(row_id),
+            &Some(String::from("Lorem ipsum dolor sit amet")),
+            &Some(String::from("ipsum dolor sit amet Conjectur")),
         )
         .unwrap();
 
@@ -447,9 +495,9 @@ mod tests {
         node.write(
             &conn,
             false,
-            Some(row_id),
-            Some(String::from("ipsum dolor sit amet Conjectur")),
-            Some(String::from("will not be inserted")),
+            &Some(row_id),
+            &Some(String::from("ipsum dolor sit amet Conjectur")),
+            &Some(String::from("will not be inserted")),
         )
         .unwrap();
 
@@ -458,5 +506,40 @@ mod tests {
 
         let results = stmt.query_map(["inserted"], Node::from_row()).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
+    }
+
+    #[test]
+    fn node_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        Node::create_table(&conn).unwrap();
+
+        let signing_key = Ed25519SigningKey::new();
+        let entity = "Pet";
+
+        let mut node = Node {
+            _entity: String::from(entity),
+            ..Default::default()
+        };
+        node.sign(&signing_key).unwrap();
+        node.write(&conn, false, &None, &None, &None).unwrap();
+
+        let new_node = Node::get(&node.id, entity, &conn).unwrap();
+        assert!(new_node.is_some());
+
+        Node::delete(&node.id, entity, &conn).unwrap();
+        let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
+        assert!(!node_exists);
+
+        let del_entity = format!("{}{}", Node::DELETED_FIRST_CHAR, entity);
+
+        let node_exists = Node::exist(&node.id, &del_entity, &conn).unwrap();
+        assert!(node_exists);
+
+        //deleting an entity results in a hard delete
+        Node::delete(&node.id, &del_entity, &conn).unwrap();
+
+        let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
+        let num_nodes: i64 = exists_stmt.query_row([], |row| Ok(row.get(0)?)).unwrap();
+        assert_eq!(0, num_nodes);
     }
 }
