@@ -35,14 +35,20 @@ before       = { "before " ~ before_value }
 after        = { "after " ~ before_value }
 before_value = { variable | string }
 
-filter       = { identifier ~ (gtOrEq | ltOrEq | eq | gt | lt) ~ filter_value }
+filter       = {
+    identifier ~ (((is_not | is) ~ is_value) | ((gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value))
+}
 filter_value = { variable | float | string | integer | boolean | null }
+is_value     = { null }
 
 eq     = { "=" }
+neq    = { "!=" }
 gt     = { ">" }
-gtOrEq = { ">=" }
+gt_eq  = { ">=" }
 lt     = { "<" }
-ltOrEq = { "<=" }
+lt_eq  = { "<=" }
+is_not = { ^"is " ~ ^"not" }
+is     = { ^"is " }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }

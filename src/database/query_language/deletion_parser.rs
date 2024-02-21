@@ -9,7 +9,7 @@ use pest_derive::Parser;
 struct PestParser;
 
 #[derive(Debug)]
-pub struct Deletion {
+pub struct DeletionParser {
     name: String,
     variables: Variables,
     deletions: Vec<EntityDeletion>,
@@ -41,12 +41,12 @@ struct ReferenceDeletion {
     name: String,
     id_param: Option<String>,
 }
-impl Default for Deletion {
+impl Default for DeletionParser {
     fn default() -> Self {
-        Deletion::new()
+        DeletionParser::new()
     }
 }
-impl Deletion {
+impl DeletionParser {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
@@ -55,7 +55,7 @@ impl Deletion {
         }
     }
 
-    pub fn parse(query: &str, data_model: &DataModel) -> Result<Deletion, Error> {
+    pub fn parse(query: &str, data_model: &DataModel) -> Result<DeletionParser, Error> {
         let parse = match PestParser::parse(Rule::deletion, query) {
             Err(e) => {
                 let message = format!("{}", e);
@@ -66,7 +66,7 @@ impl Deletion {
         .next()
         .unwrap();
 
-        let mut deletion = Deletion::new();
+        let mut deletion = DeletionParser::new();
 
         match parse.as_rule() {
             Rule::deletion => {
@@ -179,7 +179,7 @@ mod tests {
         )
         .unwrap();
 
-        let deletion = Deletion::parse(
+        let deletion = DeletionParser::parse(
             "
             deletion delete_person {
   
@@ -243,7 +243,7 @@ mod tests {
         )
         .unwrap();
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet {
                 pet {
@@ -256,7 +256,7 @@ mod tests {
         )
         .expect_err("Entity name is case sensitives. 'pet' is not a valid entity but 'Pet' is");
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet {
                 Pet {
@@ -269,7 +269,7 @@ mod tests {
         )
         .expect("'Pet' is corectly defined");
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet{
                 Person {
@@ -286,7 +286,7 @@ mod tests {
             "Entity field is case sensitives. 'Parent' is not a valid entity but 'parent' is",
         );
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet{
                 Person {
@@ -301,7 +301,7 @@ mod tests {
         )
         .expect("'Parent' is defined correctly");
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet{
                 Person {
@@ -316,7 +316,7 @@ mod tests {
         )
         .expect_err("'pe' field does not exists");
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_pet{
                 Person {
@@ -348,7 +348,7 @@ mod tests {
         )
         .unwrap();
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_person{
                 Person {
@@ -360,7 +360,7 @@ mod tests {
         )
         .expect_err("'surname' type is not defined as an array");
 
-        let _ = Deletion::parse(
+        let _ = DeletionParser::parse(
             "
             deletion delete_person{
                 Person {

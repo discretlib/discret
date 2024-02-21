@@ -8,7 +8,7 @@ use super::{
     node::Node,
     query_language::{
         data_model::ID_FIELD,
-        mutation::{EntityMutation, Mutation, MutationFieldValue},
+        mutation_parser::{EntityMutation, MutationFieldValue, MutationParser},
         parameter::Parameters,
         FieldType,
     },
@@ -102,7 +102,7 @@ impl Writeable for MutationQuery {
     }
 }
 impl MutationQuery {
-    pub fn to_json(&self, mutation: &Mutation) -> Result<serde_json::Value> {
+    pub fn to_json(&self, mutation: &MutationParser) -> Result<serde_json::Value> {
         let mutas = &mutation.mutations;
         let inserts = &self.insert_enties;
 
@@ -120,6 +120,13 @@ impl MutationQuery {
         }
 
         Ok(serde_json::Value::Array(vec))
+    }
+
+    pub fn sign_all(&mut self, signing_key: &Ed25519SigningKey) -> Result<()> {
+        for insert in &mut self.insert_enties {
+            insert.sign_all(signing_key)?;
+        }
+        Ok(())
     }
 }
 
@@ -282,8 +289,8 @@ fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
 }
 
 pub struct PrepareMutation {
-    parameters: Parameters,
-    mutation: Arc<Mutation>,
+    pub parameters: Parameters,
+    pub mutation: Arc<MutationParser>,
 }
 impl Readable for PrepareMutation {
     fn read(&self, conn: &rusqlite::Connection) -> Result<QueryResult> {
@@ -305,7 +312,7 @@ impl Readable for PrepareMutation {
 impl PrepareMutation {
     fn retrieve_id(
         &self,
-        id_field: &super::query_language::mutation::MutationField,
+        id_field: &super::query_language::mutation_parser::MutationField,
     ) -> Result<Option<Vec<u8>>> {
         Ok(match &id_field.field_value {
             MutationFieldValue::Variable(var) => {
@@ -355,8 +362,8 @@ impl PrepareMutation {
                 let field = field_entry.1;
                 if !field.name.eq(ID_FIELD) {
                     match &field.field_type {
-                        FieldType::Array(_) => {
-                            if let MutationFieldValue::Array(mutations) = &field.field_value {
+                        FieldType::Array(_) => match &field.field_value {
+                            MutationFieldValue::Array(mutations) => {
                                 let mut insert_queries = vec![];
                                 for mutation in mutations {
                                     let insert_query = self.get_insert_query(mutation, conn)?;
@@ -384,9 +391,18 @@ impl PrepareMutation {
                                     .sub_nodes
                                     .insert(String::from(&field.name), insert_queries);
                             }
-                        }
-                        FieldType::Entity(_) => {
-                            if let MutationFieldValue::Entity(mutation) = &field.field_value {
+                            MutationFieldValue::Value(_) => {
+                                //always a null value
+                                let edges =
+                                    Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
+                                for e in edges {
+                                    query.edge_deletions.push(*e);
+                                }
+                            }
+                            _ => unreachable!(),
+                        },
+                        FieldType::Entity(_) => match &field.field_value {
+                            MutationFieldValue::Entity(mutation) => {
                                 let edges =
                                     Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
                                 for e in edges {
@@ -407,7 +423,16 @@ impl PrepareMutation {
                                     .sub_nodes
                                     .insert(String::from(&field.name), vec![insert_query]);
                             }
-                        }
+                            MutationFieldValue::Value(_) => {
+                                //always a null value
+                                let edges =
+                                    Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
+                                for e in edges {
+                                    query.edge_deletions.push(*e);
+                                }
+                            }
+                            _ => unreachable!(),
+                        },
                         FieldType::Boolean
                         | FieldType::Float
                         | FieldType::Base64
@@ -507,7 +532,7 @@ mod tests {
 
     use super::*;
 
-    const DATA_PATH: &str = "test/data/database/query_builder";
+    const DATA_PATH: &str = "test/data/database/mutation_query";
     fn init_database_path(file: &str) -> Result<PathBuf> {
         let mut path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path)?;
@@ -534,7 +559,7 @@ mod tests {
         )
         .unwrap();
 
-        let mutation = Mutation::parse(
+        let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -593,7 +618,7 @@ mod tests {
         )
         .unwrap();
 
-        let mutation = Mutation::parse(
+        let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -639,9 +664,9 @@ mod tests {
             "
             Person {
                 name : String ,
-                parents : [Person],
+                parents : [Person] nullable,
                 pet: Pet nullable,
-                siblings : [Person]
+                siblings : [Person] nullable
             }
 
             Pet {
@@ -651,7 +676,7 @@ mod tests {
         )
         .unwrap();
 
-        let mutation = Mutation::parse(
+        let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {

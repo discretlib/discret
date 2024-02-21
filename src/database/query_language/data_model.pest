@@ -17,7 +17,7 @@ default       = { ^"default" ~ default_value }
 default_value = { float | integer | boolean | string }
 scalar_type   = { ^"Integer" | ^"Float" | ^"Boolean" | ^"String" }
 scalar_field  = { scalar_type ~ (nullable | default)? }
-entity_array  = { "[" ~ identifier ~ "]" }
+entity_array  = { "[" ~ identifier ~ "]" ~ nullable? }
 entity_field  = { identifier ~ nullable? }
 field         = { deprecable_identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
 

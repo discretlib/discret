@@ -92,17 +92,17 @@ impl MutationField {
 }
 
 #[derive(Debug)]
-pub struct Mutation {
+pub struct MutationParser {
     pub name: String,
     pub variables: Variables,
     pub mutations: Vec<EntityMutation>,
 }
-impl Default for Mutation {
+impl Default for MutationParser {
     fn default() -> Self {
-        Mutation::new()
+        MutationParser::new()
     }
 }
-impl Mutation {
+impl MutationParser {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
@@ -112,7 +112,7 @@ impl Mutation {
     }
 
     pub fn parse(p: &str, data_model: &DataModel) -> Result<Self, Error> {
-        let mut mutation = Mutation::new();
+        let mut mutation = MutationParser::new();
 
         let parse = match PestParser::parse(Rule::mutation, p) {
             Err(e) => {
@@ -258,7 +258,7 @@ impl Mutation {
                     let content_pair = field_pairs.next().unwrap().into_inner().next().unwrap();
                     match content_pair.as_rule() {
                         Rule::entity_ref => {
-                            let adepth = Mutation::parse_entity_type(
+                            let adepth = MutationParser::parse_entity_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -270,7 +270,7 @@ impl Mutation {
                             }
                         }
                         Rule::entity_array => {
-                            let adepth = Mutation::parse_array_type(
+                            let adepth = MutationParser::parse_array_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -282,7 +282,7 @@ impl Mutation {
                             }
                         }
                         Rule::boolean => {
-                            Mutation::parse_boolean_type(
+                            MutationParser::parse_boolean_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -290,7 +290,7 @@ impl Mutation {
                         }
 
                         Rule::float => {
-                            Mutation::parse_float_type(
+                            MutationParser::parse_float_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -298,7 +298,7 @@ impl Mutation {
                         }
                         Rule::integer => {
                             // println!("{:#?}", content_pair);
-                            Mutation::parse_int_type(
+                            MutationParser::parse_int_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -307,7 +307,7 @@ impl Mutation {
 
                         Rule::string => {
                             // println!("{:#?}", content_pair);
-                            Mutation::parse_string_type(
+                            MutationParser::parse_string_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -316,11 +316,11 @@ impl Mutation {
 
                         Rule::null => {
                             // println!("{:#?}", content_pair);
-                            Mutation::parse_null_type(field_model, &mut mutation_field)?;
+                            MutationParser::parse_null_type(field_model, &mut mutation_field)?;
                         }
 
                         Rule::variable => {
-                            Mutation::parse_variable_type(
+                            MutationParser::parse_variable_type(
                                 field_model,
                                 &mut mutation_field,
                                 content_pair,
@@ -515,7 +515,7 @@ impl Mutation {
                     MutationFieldValue::Value(Value::String(value.to_string()));
             }
             FieldType::Base64 => {
-                Mutation::validate_base64(value, &field.name)?;
+                MutationParser::validate_base64(value, &field.name)?;
                 mutation_field.field_value =
                     MutationFieldValue::Value(Value::String(value.to_string()));
             }
@@ -603,7 +603,7 @@ mod tests {
         )
         .unwrap();
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -650,7 +650,7 @@ mod tests {
         )
         .unwrap();
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -663,7 +663,7 @@ mod tests {
         )
         .expect_err("scalar field cannot use the syntax name : [{$name}]");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -676,7 +676,7 @@ mod tests {
         )
         .expect_err("scalar field cannot use the syntax name : {$name}");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -690,7 +690,7 @@ mod tests {
         )
         .expect_err("weight is not a string");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -703,7 +703,7 @@ mod tests {
         )
         .expect_err("weight is not a boolean");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -716,7 +716,7 @@ mod tests {
         )
         .expect("weight is a float compatible with integer");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -729,7 +729,7 @@ mod tests {
         )
         .expect("weight is a float ");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -742,7 +742,7 @@ mod tests {
         )
         .expect_err("id requires a valid base64 string");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -768,7 +768,7 @@ mod tests {
         )
         .unwrap();
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -794,7 +794,7 @@ mod tests {
         )
         .unwrap();
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -809,7 +809,7 @@ mod tests {
         )
         .expect_err("duplicated entity");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -824,7 +824,7 @@ mod tests {
         )
         .expect_err("duplicated alias");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -842,7 +842,7 @@ mod tests {
         )
         .expect_err("duplicated alias");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -868,14 +868,16 @@ mod tests {
             Person {
                 name : String ,
                 surname : String nullable,
-                is_human : Boolean default true
+                is_human : Boolean default true,
+                some_person : Person nullable,
+                parents : [Person] nullable
             }
         
         ",
         )
         .unwrap();
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -887,7 +889,7 @@ mod tests {
         )
         .expect_err("missing name");
 
-        let _mutation = Mutation::parse(
+        let _mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -898,6 +900,32 @@ mod tests {
             &data_model,
         )
         .expect("is_human is missing but will be defaulted to true");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                    some_person : null
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("some_person is nullable");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                    parents : null
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("some_person is nullable");
     }
 
     #[test]
@@ -906,7 +934,7 @@ mod tests {
             "
             Person {
                 name: String,
-                parents : [Person],
+                parents : [Person] nullable,
                 someone : Person nullable,
             }
         
@@ -914,7 +942,7 @@ mod tests {
         )
         .unwrap();
 
-        let mutation = Mutation::parse(
+        let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {
@@ -952,7 +980,7 @@ mod tests {
             "
             Person {
                 name: String,
-                parents : [Person],
+                parents : [Person] nullable,
                 someone : Person nullable,
             }
         
@@ -960,7 +988,7 @@ mod tests {
         )
         .unwrap();
 
-        let mutation = Mutation::parse(
+        let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
                 Person {

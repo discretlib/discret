@@ -2,6 +2,7 @@ pub mod edge;
 pub mod graph_database;
 pub mod mutation_query;
 pub mod node;
+pub mod query;
 pub mod query_language;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -64,4 +65,7 @@ pub enum Error {
 
     #[error("{0}")]
     QueryError(String),
+
+    #[error("Missing parameter: '{0}', Cannot build SQL query parameters")]
+    MissingParameter(String),
 }

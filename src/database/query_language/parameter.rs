@@ -6,7 +6,6 @@ use super::{Error, Value, VariableType};
 
 use pest::Parser;
 use pest_derive::Parser;
-use rusqlite::ToSql;
 
 #[derive(Parser)]
 #[grammar = "database/query_language/parameter.pest"]
@@ -137,10 +136,7 @@ impl Variables {
                     },
                 }
             } else {
-                return Err(Error::MissingParameter(format!(
-                    "Parameter: '{}' is missing",
-                    var.0
-                )));
+                return Err(Error::MissingParameter(String::from(var.0)));
             }
         }
         Ok(())
@@ -224,56 +220,6 @@ impl Parameters {
         }
 
         Ok(parameters)
-    }
-}
-
-pub struct SQLVariables {
-    vars: Vec<String>,
-}
-impl Default for SQLVariables {
-    fn default() -> Self {
-        SQLVariables::new()
-    }
-}
-impl SQLVariables {
-    pub fn new() -> Self {
-        Self { vars: Vec::new() }
-    }
-
-    pub fn build_query_params(
-        &self,
-        params: Parameters,
-    ) -> Result<Vec<Box<dyn ToSql + Sync + Send>>, Error> {
-        let mut v: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-        for var in &self.vars {
-            let para = params.params.get(var);
-            if let Some(val) = para {
-                match val {
-                    Value::Boolean(e) => {
-                        v.push(Box::new(*e));
-                    }
-                    Value::Float(e) => {
-                        v.push(Box::new(*e));
-                    }
-                    Value::Integer(e) => {
-                        v.push(Box::new(*e));
-                    }
-                    Value::Null => {
-                        let null: Option<String> = None;
-                        v.push(Box::new(null));
-                    }
-                    Value::String(e) => {
-                        v.push(Box::new(e.clone()));
-                    }
-                }
-            } else {
-                return Err(Error::MissingParameter(format!(
-                    "Missing parameter: '{}', Cannot build SQL query parameters",
-                    var
-                )));
-            }
-        }
-        Ok(v)
     }
 }
 

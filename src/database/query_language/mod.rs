@@ -1,8 +1,8 @@
 pub mod data_model;
-pub mod deletion;
-pub mod mutation;
+pub mod deletion_parser;
+pub mod mutation_parser;
 pub mod parameter;
-pub mod query;
+pub mod query_parser;
 
 use std::fmt;
 
@@ -204,7 +204,10 @@ pub enum Error {
     #[error(transparent)]
     FloatParsingError(#[from] std::num::ParseFloatError),
 
-    #[error("{0}")]
+    #[error("filter on entity {0} can only use operations 'is null' of 'is not null' ")]
+    InvalidEntityFilter(String),
+
+    #[error("Parameter: '{0}' is missing")]
     MissingParameter(String),
 
     #[error("'{0}' is not a base64 value")]

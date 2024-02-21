@@ -37,42 +37,14 @@ pub struct WriteQuery {
 
 #[derive(Debug)]
 pub enum QueryResult {
-    Edge(Edge),
-    Edges(Vec<Edge>),
-    Node(Node),
-    Nodes(Vec<Node>),
     MutationQuery(MutationQuery),
     String(String),
     Strings(Vec<String>),
     None,
 }
 impl QueryResult {
-    pub fn as_edge(&self) -> Option<&Edge> {
-        if let Self::Edge(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_edges(&self) -> Option<&Vec<Edge>> {
-        if let Self::Edges(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_node(&self) -> Option<&Node> {
-        if let Self::Node(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_nodes(&self) -> Option<&Vec<Node>> {
-        if let Self::Nodes(e) = self {
+    pub fn as_strings(&self) -> Option<&Vec<String>> {
+        if let Self::Strings(e) = self {
             Some(e)
         } else {
             None
@@ -87,8 +59,8 @@ impl QueryResult {
         }
     }
 
-    pub fn as_strings(&self) -> Option<&Vec<String>> {
-        if let Self::Strings(e) = self {
+    pub fn as_mutation_query(&mut self) -> Option<&mut MutationQuery> {
+        if let Self::MutationQuery(e) = self {
             Some(e)
         } else {
             None

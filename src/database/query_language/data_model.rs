@@ -36,6 +36,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: true,
+                is_system: true,
             },
         );
 
@@ -49,6 +50,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -62,6 +64,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -75,6 +78,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -88,6 +92,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -101,6 +106,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: true,
+                is_system: true,
             },
         );
 
@@ -114,6 +120,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -127,6 +134,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
 
@@ -140,6 +148,7 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
+                is_system: true,
             },
         );
         fields
@@ -422,22 +431,33 @@ impl DataModel {
             Rule::entity_field => {
                 let mut entity_field = field_type.into_inner();
 
-                let name = entity_field.next().unwrap().as_str().to_string();
-                field.field_type = FieldType::Entity(name);
+                let name = entity_field.next().unwrap().as_str();
+                match name {
+                    "Boolean" | "Float" | "Integer" | "String" => {
+                        return Err(Error::ParserError(format! ("{} [{}] only Entity is supported. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
+                    }
+                    _ => {
+                        field.field_type = FieldType::Entity(String::from(name));
 
-                if let Some(_next) = entity_field.next() {
-                    field.nullable = true;
+                        if let Some(_next) = entity_field.next() {
+                            field.nullable = true;
+                        }
+                    }
                 }
             }
             Rule::entity_array => {
-                let name = field_type.into_inner().next().unwrap().as_str();
+                let mut entity_field = field_type.into_inner();
+                let name = entity_field.next().unwrap().as_str();
                 match name {
                     "Boolean" | "Float" | "Integer" | "String" => {
                         return Err(Error::ParserError(format! ("{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
                     }
                     _ => {
-                        field.field_type = FieldType::Array(name.to_string());
-                        field.nullable = true;
+                        field.field_type = FieldType::Array(String::from(name));
+
+                        if let Some(_next) = entity_field.next() {
+                            field.nullable = true;
+                        }
                     }
                 }
             }
@@ -677,7 +697,7 @@ impl Entity {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
     pub short_name: String,
@@ -686,6 +706,7 @@ pub struct Field {
     pub nullable: bool,
     pub deprecated: bool,
     pub mutable: bool,
+    pub is_system: bool,
 }
 impl Default for Field {
     fn default() -> Self {
@@ -702,6 +723,7 @@ impl Field {
             nullable: false,
             deprecated: false,
             mutable: true,
+            is_system: false,
         }
     }
 
@@ -732,7 +754,7 @@ mod tests {
                 @deprecated Person {
                     name : String ,
                     surname : String nullable,
-                    child : [Person],
+                    child : [Person] nullable,
                     mother : Person ,
                     father : Person NULLABLE, 
                     index(name, surname),
@@ -775,7 +797,7 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(true, owner.nullable);
+        assert_eq!(false, owner.nullable);
 
         let index = &pet.indexes;
         assert_eq!(1, index.len());

@@ -1,15 +1,14 @@
-use std::collections::HashMap;
-
 use crate::{base64_decode, database::query_language::VariableType};
 
 use super::{
-    data_model::{DataModel, Entity},
+    data_model::{DataModel, Entity, Field},
     parameter::Variables,
     Error, FieldType, FieldValue, Value,
 };
 
 use pest::{iterators::{Pair, Pairs}, Parser};
 use pest_derive::Parser;
+
 
 #[derive(Parser)]
 #[grammar = "database/query_language/query.pest"]
@@ -19,16 +18,28 @@ struct PestParser;
 #[derive(Debug)]
 pub enum QueryFieldType {
     Function(Function),
+    Aggregate(Function),
     NamedField,
-    EntityQuery(Box<EntityQuery>)
+    BinaryField,
+    EntityQuery(Box<EntityQuery>,bool),
+    EntityArrayQuery(Box<EntityQuery>, bool), 
 }
+
 
 
 #[derive(Debug)]
 pub struct QueryField{
-    name: String,
-    alias: Option<String>,
-    field_type:QueryFieldType
+    pub field: Field,
+    pub alias: Option<String>,
+    pub field_type:QueryFieldType
+} impl QueryField{
+    pub fn name(&self) -> String{
+        if self.alias.is_some(){
+            self.alias.clone().unwrap()
+        } else{
+            self.field.name.clone()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,13 +61,13 @@ pub enum QueryType {
 const DEFAULT_LIMIT: i64 = 100;
 #[derive(Debug)]
 pub struct EntityParams {
-    after: Option<FieldValue>,
-    before: Option<FieldValue>,
-    filters: Vec<FilterParam>,
-    fulltext_search: Option<FieldValue>,
-    limit: FieldValue,
-    order_by: Vec<(String, String)>,
-    skip: Option<FieldValue>,
+   pub after: Option<FieldValue>,
+   pub before: Option<FieldValue>,
+   pub filters: Vec<FilterParam>,
+   pub fulltext_search: Option<FieldValue>,
+   pub limit: FieldValue,
+   pub order_by: Vec<(String, String)>,
+   pub skip: Option<FieldValue>,
 }
 impl Default for EntityParams{
     fn default() -> Self {
@@ -75,31 +86,51 @@ impl EntityParams {
             skip: None,
         }
     }
-
-    pub fn add_filter(&mut self, name: String, operation: String, value: FieldValue) {
-        self.filters.push(FilterParam {
-            name,
-            operation,
-            value,
-        })
-    }
 }
 
 #[derive(Debug)]
 pub struct FilterParam {
-    name: String,
-    operation: String,
-    value: FieldValue,
+    pub name: String, 
+    pub short_name: String, 
+    pub operation: String,
+    pub value: FieldValue,
+    pub filter_type: FilterType
+}
+
+#[derive(Debug)]
+struct ParsedFilter{
+    pub name: String, 
+    pub operation: String,
+    pub value: String,
+    pub parsed_type: ParsedType
+}
+#[derive(Debug)]
+enum ParsedType{
+    Boolean,
+    Float,
+    Integer,
+    Null,
+    String,
+    Variable
+}
+
+#[derive(Debug)]
+pub enum FilterType{
+    Field,
+    SystemField,
+    EntityField
 }
 
 #[derive(Debug)]
 pub struct EntityQuery {
-    name: String,
-    alias: Option<String>,
-    depth: usize,
-    complexity: usize,
-    params: Option<EntityParams>,
-    fields: HashMap<String, QueryField>,
+    pub name: String,
+    pub alias: Option<String>,
+    pub short_name: String,
+    pub depth: usize,
+    pub complexity: usize,
+    pub is_aggregate: bool,
+    pub params: Option<EntityParams>,
+    pub fields: Vec<QueryField>,
 }
 impl Default for EntityQuery{
     fn default() -> Self {
@@ -109,29 +140,25 @@ impl Default for EntityQuery{
 impl EntityQuery {
     pub fn new() -> Self {
         Self {
-            name: "".to_string(),
+            name: String::from(""),
             alias: None,
+            short_name: String::from(""),
             depth: 0,
             complexity: 0,
+            is_aggregate:false,
             params: None,
-            fields: HashMap::new(),
+            fields: Vec::new(),
         }
     }
 
     #[allow(clippy::map_entry)]
     pub fn add_field(&mut self, field:QueryField) -> Result<(),Error> {
-        let key =
-        if field.alias.is_some(){
-            field.alias.clone().unwrap()
-        } else{
-            field.name.clone()
-        };
-
-        
-        if self.fields.contains_key(&key){
+        let key =field.name();
+        let exist: bool = self.fields.iter().any(|row| row.name().eq(&key));
+        if exist{
             return Err(Error::DuplicatedField(key))
         } else {
-            self.fields.insert(key, field);
+            self.fields.push(field);
         }
         
         Ok(())
@@ -158,18 +185,21 @@ impl EntityQuery {
         let mut has_aggregate_function = false;
 
         for field in  &self.fields  {
-            let ftype = &field.1.field_type;
+            let ftype = &field.field_type;
             match ftype {
-                QueryFieldType::EntityQuery(_)=>{has_entity_field = true}
+                QueryFieldType::EntityQuery(_,_)| QueryFieldType::EntityArrayQuery(_,_)=>{
+                    has_entity_field = true
+                }
+                QueryFieldType::Aggregate(_)=>{
+                    has_aggregate_function = true;
+                }
                 QueryFieldType::Function(f)=>{
                     match f {
                       Function::RefBy(_,_ ) => has_entity_field = true,
-                      _=>  has_aggregate_function = true
+                      _=> {} 
                     }
-
                 }
-                QueryFieldType::NamedField=>{}
-                
+                QueryFieldType::NamedField| QueryFieldType::BinaryField=>{}
             }
         }
         
@@ -184,18 +214,18 @@ impl EntityQuery {
 }
 
 #[derive(Debug)]
-pub struct Query {
-    name: String,
-    query_type: QueryType,
-    variables: Variables,
-    queries: Vec<EntityQuery>,
+pub struct QueryParser {
+    pub name: String,
+    pub query_type: QueryType,
+    pub variables: Variables,
+    pub queries: Vec<EntityQuery>,
 }
-impl Default for Query{
+impl Default for QueryParser{
     fn default() -> Self {
-        Query::new()
+        QueryParser::new()
     }
 }
-impl Query {
+impl QueryParser {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
@@ -206,7 +236,7 @@ impl Query {
     }
 
     pub fn parse(p: &str, data_model: &DataModel) -> Result<Self, Error> {
-        let mut query = Query::new();
+        let mut query = QueryParser::new();
 
         let parse = match PestParser::parse(Rule::query, p) {
             Err(e) => {
@@ -272,19 +302,22 @@ impl Query {
         variables: &mut Variables,
     ) -> Result<(), Error> {
         let depth = entity.depth;
+        let model_entity = data_model.get_entity(&entity.name)?;
+        let mut parsed_filters = None;
+
+        let mut parameters = None;
         for entity_pair in pairs {
             match entity_pair.as_rule() {
                 Rule::entity_param => {
-                    let model_entity = data_model.get_entity(&entity.name)?;
                     let params = Self::parse_params(model_entity, entity_pair, variables)?;
-                    entity.params = Some(params);
+                    parameters = Some(params.0);
+                    parsed_filters = Some(params.1);
                 }
 
                 Rule::field => {
                     let field_pair = entity_pair.into_inner().next().unwrap();
                     match field_pair.as_rule() {
                         Rule::named_field => {
-                            let model_entity = data_model.get_entity(&entity.name)?;
                             let mut name_pair = field_pair.into_inner();
                             let name;
                             let alias;
@@ -309,27 +342,31 @@ impl Query {
 
                             let model_field = model_entity.get_field(&name)?;
 
-                            match model_field.field_type {
+                            let field_type = match model_field.field_type {
                                 FieldType::Array(_) | FieldType::Entity(_) => {
+                                   
+
                                     return Err(Error::InvalidQuery(format!(
                                         "Invalid syntax for non scalar field. please use {}{{ .. }}",
                                         &name
                                     )))
                                 }
-                                _=>{}   
-                            }
+                                FieldType::Base64 => QueryFieldType::BinaryField,
+                                
+                                _=>QueryFieldType::NamedField  
+                            };
+                            
+
                             let named = QueryField{
-                                name,
+                                field:model_field.clone(),
                                 alias,
-                                field_type: QueryFieldType::NamedField
+                                field_type
                             };
                             entity.add_field(named)?;
 
                         }
                        
                         Rule::entity => { 
-                            let model_entity = data_model.get_entity(&entity.name)?;
-
                             let mut entity_pairs =  field_pair.into_inner();
                             let mut  name_pair = entity_pairs.next().unwrap().into_inner();
                             let name;
@@ -351,9 +388,10 @@ impl Query {
                                 alias = None;
                                 name = name_pair.next().unwrap().as_str().to_string();
                             }
-                            let entity_field = model_entity.get_field(&name)?;
-                            let taget_entity_name = match &entity_field.field_type {
+                            let model_field = model_entity.get_field(&name)?;
 
+
+                            let taget_entity_name = match &model_field.field_type {
                                 FieldType::Array(e) => e,
                                 FieldType::Entity(e) => e,  
                                 _=>  return Err(Error::InvalidQuery(format!(
@@ -363,6 +401,9 @@ impl Query {
                             };
                             let mut target_entity =  EntityQuery::new();
                             target_entity.name = taget_entity_name.clone();
+
+                            let target_model_field = data_model.get_entity(&taget_entity_name)?;
+                            target_entity.short_name = target_model_field.short_name.clone();
                             target_entity.depth = depth + 1;
 
                             Self::parse_entity_internals(&mut target_entity, data_model, entity_pairs, variables)?;
@@ -373,10 +414,17 @@ impl Query {
                                 entity.depth = target_entity.depth
                             }
                             
+                            let field_type =
+                                match &model_field.field_type {
+                                    FieldType::Array(_) => QueryFieldType::EntityArrayQuery(Box::new(target_entity), model_field.nullable),
+                                    FieldType::Entity(_) => QueryFieldType::EntityQuery(Box::new(target_entity), model_field.nullable),  
+                                    _=> unreachable!()
+                            };
+
                             let named = QueryField{
-                                name,
+                                field:model_field.clone(),
                                 alias,
-                                field_type: QueryFieldType::EntityQuery(Box::new(target_entity))
+                                field_type: field_type
                             };
                             entity.add_field(named)?;
                         }
@@ -390,6 +438,21 @@ impl Query {
                 _ => unreachable!()
             }
         }
+
+        if let Some(filters) = parsed_filters{
+            if let Some(par) = &mut parameters{
+                for parse in filters{
+                    let param = Self::build_filter(
+                        entity,
+                        model_entity,
+                        variables,
+                        parse
+                    )?;
+                    par.filters.push(param);
+                }
+            }
+        }
+        entity.params = parameters;
         entity.check_consistency()?;
         Ok(())
 
@@ -409,16 +472,24 @@ impl Query {
         let function_pair =  function_pairs.next().unwrap().into_inner().next().unwrap();
 
         let model_entity = data_model.get_entity(&entity.name)?;
-       
+        
         let query_field =  match function_pair.as_rule() {
             Rule::count_fn => {
-                QueryField{
+                entity.is_aggregate = true;
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::Count)
+                    field_type: QueryFieldType::Aggregate(Function::Count)
                 }
             }
             Rule::avg_fn => {
+                entity.is_aggregate = true;
                 let param = function_pair.into_inner().next().unwrap().as_str();
                 let model_field = model_entity.get_field(param)?;
                 match model_field.field_type{
@@ -429,13 +500,20 @@ impl Query {
                     ))) 
                     }
                 }
-               QueryField{
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::Avg(param.to_string()))
+                    field_type: QueryFieldType::Aggregate(Function::Avg(String::from(&model_field.short_name)))
                 }
             }
             Rule::max_fn => {
+                entity.is_aggregate = true;
                 let param = function_pair.into_inner().next().unwrap().as_str();
                 let model_field = model_entity.get_field(param)?;
                 match model_field.field_type{
@@ -447,13 +525,20 @@ impl Query {
                     }
                     _=> {}
                 }
-               QueryField{
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::Max(param.to_string()))
+                    field_type: QueryFieldType::Aggregate(Function::Max(String::from(&model_field.short_name)))
                 }
             }
             Rule::min_fn => {
+                entity.is_aggregate = true;
                 let param = function_pair.into_inner().next().unwrap().as_str();
                 let model_field = model_entity.get_field(param)?;
                 match model_field.field_type{
@@ -465,13 +550,20 @@ impl Query {
                     _=> {}
                 }
 
-                QueryField{
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::Min(param.to_string()))
+                    field_type: QueryFieldType::Aggregate(Function::Min(String::from(&model_field.short_name)))
                 }
             }
             Rule::sum_fn => {
+                entity.is_aggregate = true;
                 let param = function_pair.into_inner().next().unwrap().as_str();
                 let model_field = model_entity.get_field(param)?;
                 match model_field.field_type{
@@ -482,10 +574,16 @@ impl Query {
                         &param, &param, model_field.field_type
                     ))) }
                 }
-                QueryField{
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::Sum(param.to_string()))
+                    field_type: QueryFieldType::Aggregate(Function::Sum(String::from(&model_field.short_name)))
                 }
 
             }
@@ -525,10 +623,16 @@ impl Query {
                     entity.depth = target_entity.depth
                 }
 
-                QueryField{
+                let field = Field {
                     name,
+                    is_system: false,
+                    field_type: FieldType::String,
+                    ..Default::default()
+                };
+                QueryField{
+                    field,
                     alias:None,
-                    field_type: QueryFieldType::Function(Function::RefBy(ref_field.to_string(), Box::new(target_entity)))
+                    field_type: QueryFieldType::Function(Function::RefBy(model_field.short_name.to_string(), Box::new(target_entity)))
                 }
             }
            
@@ -560,8 +664,9 @@ impl Query {
         } else {
             name = name_pair.next().unwrap().as_str().to_string();
         }
-        data_model.get_entity(&name)?;
+        let model_entity = data_model.get_entity(&name)?;
         entity.name = name;
+        entity.short_name = String::from(&model_entity.short_name);
 
         Self::parse_entity_internals(&mut entity,data_model, entity_pairs,variables)?;
 
@@ -572,16 +677,16 @@ impl Query {
         entity: &Entity,
         pair: Pair<'_, Rule>,
         variables: &mut Variables,
-    ) -> Result<EntityParams, Error> {
+    ) -> Result<(EntityParams, Vec<ParsedFilter>), Error> {
         let mut parameters = EntityParams::new();
         let param_pairs = pair.into_inner();
-       
+        let mut parsed_filter = Vec::new();
         for param_pair in param_pairs {
             let pair = param_pair.into_inner().next().unwrap();
             match pair.as_rule() {
                 Rule::filter => {
-                    let filter = Self::parse_filter(pair, entity, variables)?;
-                    parameters.filters.push(filter)
+                    let filter = Self::parse_filter(pair);
+                    parsed_filter.push(filter);
                 }
                 Rule::order_by => {
                     let order_pairs = pair.into_inner();
@@ -697,114 +802,220 @@ impl Query {
             }
         }
 
-        Ok(parameters)
+        Ok((parameters, parsed_filter))
     }
 
     fn parse_filter(
         pair: Pair<'_, Rule>,
-        entity: &Entity,
-        variables: &mut Variables,
-    ) -> Result<FilterParam, Error> {
+    ) -> ParsedFilter {
         let mut filter_pairs = pair.into_inner();
 
         let name = filter_pairs.next().unwrap().as_str().to_string();
 
-        let field = entity.get_field(&name)?;
-
-        match field.field_type {
-            FieldType::Array(_) | FieldType::Entity(_) => {
-                return Err(Error::InvalidQuery(format!(
-                    "Only scalar fields are allowed in filters. '{}' is a '{}'",
-                    &name, &field.field_type
-                )))
-            }
-            _ => {}
-        }
-        let operation = filter_pairs.next().unwrap().as_str().to_string();
-
+        let operation_pair =  filter_pairs.next().unwrap();
+        let mut operation = operation_pair.as_str().to_string();
+        
+        match operation_pair.as_rule(){
+            Rule::is => operation = String::from("is"),
+            Rule::is_not => operation = String::from("is not"),
+           _=> {}
+        };
         let value_pair = filter_pairs.next().unwrap().into_inner().next().unwrap();
-        let value = match value_pair.as_rule() {
-            Rule::boolean => match field.field_type {
-                FieldType::Boolean => {
-                    let value_str = value_pair.as_str();
-                    FieldValue::Value(Value::Boolean(value_str.parse()?))
-                }
-                _ => {
-                    return Err(Error::InvalidFieldType(
-                        name.to_string(),
-                        field.field_type.to_string(),
-                        "Boolean".to_string(),
-                    ))
-                }
-            },
-            Rule::float => match field.field_type {
-                FieldType::Float => {
-                    let value_str = value_pair.as_str();
-                    FieldValue::Value(Value::Float(value_str.parse()?))
-                }
-                _ => {
-                    return Err(Error::InvalidFieldType(
-                        name.to_string(),
-                        field.field_type.to_string(),
-                        "Float".to_string(),
-                    ))
-                }
-            },
-            Rule::integer => match field.field_type {
-                FieldType::Float => {
-                    let value_str = value_pair.as_str();
-                    FieldValue::Value(Value::Float(value_str.parse()?))
-                }
-                FieldType::Integer => {
-                    let value_str = value_pair.as_str();
-                    FieldValue::Value(Value::Integer(value_str.parse()?))
-                }
-                _ => {
-                    return Err(Error::InvalidFieldType(
-                        name.to_string(),
-                        field.field_type.to_string(),
-                        "Integer".to_string(),
-                    ))
-                }
-            },
+
+         match value_pair.as_rule(){
+            Rule::boolean => {
+                let value = value_pair.as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Boolean}
+            }
+            Rule::float => {
+                let value = value_pair.as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Float}
+            }
+            Rule::integer => {
+                let value = value_pair.as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Integer}
+            }
             Rule::null => {
-                if field.nullable {
-                    FieldValue::Value(Value::Null)
-                } else {
-                    return Err(Error::NotNullable(name.clone()));
-                }
+                let value = value_pair.as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Null}
             }
             Rule::string => {
-                let value_str = value_pair.into_inner().next().unwrap().as_str();
+                let value = value_pair.into_inner().next().unwrap().as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::String}
+            }
+            Rule::variable => {
+                let value = value_pair.as_str().to_string();
+                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Variable}
+            }
+            _=>unreachable!()
+        }
+    }
+
+
+    fn build_filter(
+        entity: &EntityQuery,
+        entity_model: &Entity,
+        variables: &mut Variables,
+        parsed_filters: ParsedFilter
+    ) -> Result<FilterParam, Error> {
+        
+        let is_entity_and_field = match entity_model.get_field(&parsed_filters.name) {
+            Ok(field) => {
                 match field.field_type {
-                    FieldType::String => FieldValue::Value(Value::String(value_str.to_string())),
-                    FieldType::Base64 => {
-                        Self::validate_base64(value_str, &name)?;
-                        FieldValue::Value(Value::String(value_str.to_string()))
+                    FieldType::Array(_)|FieldType::Entity(_)  => (true, field, String::from(&field.name)),
+                    _ => (false, field, String::from(&field.name)),
+                }
+
+            },
+            Err(_) => {
+                let e = entity.fields.iter().find(|entry| entry.name().eq(&parsed_filters.name));
+                match e {
+                    Some(query_field) => {
+                        match query_field.field.field_type {
+                            FieldType::Array(_)|FieldType::Entity(_)  => (true, &query_field.field, query_field.name()),
+                            _ => (false, &query_field.field, query_field.name()),
+                        }
+                    },
+                    None => return Err(Error::InvalidQuery(format!("filter field '{}' does not exists", &parsed_filters.name))),
+                }
+            },
+        };
+        let is_entity_field = is_entity_and_field.0;
+        if is_entity_field{
+            match parsed_filters.operation.as_str(){
+                "is" | "is not" => {}
+                _ => 
+                return Err(Error::InvalidEntityFilter(
+                    String::from(&parsed_filters.name)
+                ))
+            }
+        }
+       
+        let parsed_value = &parsed_filters.value;
+        let field =  is_entity_and_field.1;
+        let name = is_entity_and_field.2;
+
+        let value = match parsed_filters.parsed_type {
+            ParsedType::Boolean => {
+                if is_entity_field{
+                    return Err(Error::InvalidEntityFilter(
+                        name
+                    ))
+                }
+                
+                match field.field_type {
+                    FieldType::Boolean => {
+                
+                        FieldValue::Value(Value::Boolean(parsed_value.parse()?))
                     }
                     _ => {
                         return Err(Error::InvalidFieldType(
-                            name.to_string(),
+                            name,
+                            field.field_type.to_string(),
+                            "Boolean".to_string(),
+                        ))
+                    }
+                }
+            },
+            ParsedType::Float =>{
+                    if is_entity_field{
+                        return Err(Error::InvalidEntityFilter(
+                            name,
+                        ))
+                    } 
+                    
+                    match field.field_type {
+                    FieldType::Float => {
+                        FieldValue::Value(Value::Float(parsed_value.parse()?))
+                    }
+                    _ => {
+                        return Err(Error::InvalidFieldType(
+                            name,
+                            field.field_type.to_string(),
+                            "Float".to_string(),
+                        ))
+                    }
+                }
+            },
+            ParsedType::Integer => {
+                    if is_entity_field{
+                        return Err(Error::InvalidEntityFilter(
+                            name,
+                        ))
+                    }
+                    
+                    match field.field_type {
+                        FieldType::Float => {
+                            FieldValue::Value(Value::Float(parsed_value.parse()?))
+                        }
+                        FieldType::Integer => {
+                            FieldValue::Value(Value::Integer(parsed_value.parse()?))
+                        }
+                        _ => {
+                            return Err(Error::InvalidFieldType(
+                                name,
+                                field.field_type.to_string(),
+                                "Integer".to_string(),
+                            ))
+                    }
+                }
+            },
+            ParsedType::Null => {
+                if field.nullable {
+                    FieldValue::Value(Value::Null)
+                } else {
+                    return Err(Error::NotNullable(name));
+                }
+            }
+            ParsedType::String => {
+                if is_entity_field{
+                    return Err(Error::InvalidEntityFilter(
+                        name
+                    ))
+                }
+               
+                match field.field_type {
+                    FieldType::String => FieldValue::Value(Value::String(parsed_value.to_string())),
+                    FieldType::Base64 => {
+                        Self::validate_base64(parsed_value, &name)?;
+                        FieldValue::Value(Value::String(parsed_value.to_string()))
+                    }
+                    _ => {
+                        return Err(Error::InvalidFieldType(
+                            name,
                             field.field_type.to_string(),
                             "String".to_string(),
                         ))
                     }
                 }
             }
-            Rule::variable => {
-                let var = &value_pair.as_str()[1..];
+            ParsedType::Variable => {
+                if is_entity_field{
+                    return Err(Error::InvalidEntityFilter(
+                        String::from(name)
+                    ))
+                }
+                let var = &parsed_value.as_str()[1..];
                 let var_type = field.get_variable_type();
                 variables.add(var.to_string(), var_type)?;
                 FieldValue::Variable(var.to_string())
             }
-
-            _ => unreachable!(), 
         };
-
+        let filter_type = {
+            if is_entity_field{
+                FilterType::EntityField
+            } else if field.is_system {
+                FilterType::SystemField
+            }else {
+                FilterType::Field
+            }
+        };
         Ok(FilterParam {
-            name,
-            operation,
+            name: name,
+            short_name:String::from(&field.short_name),
+            operation: String::from(&parsed_filters.operation),
             value,
+            filter_type
         })
     }
 
@@ -847,7 +1058,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person(
@@ -943,7 +1154,7 @@ mod tests {
         )
         .unwrap();
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -956,7 +1167,7 @@ mod tests {
         .unwrap();
         assert_eq!(0, query.queries[0].depth);
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -972,7 +1183,7 @@ mod tests {
         assert_eq!(1, query.queries[0].depth);
         
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -994,7 +1205,7 @@ mod tests {
         assert_eq!(2, query.queries[0].depth);
 
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1029,7 +1240,7 @@ mod tests {
         )
         .unwrap();
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1041,7 +1252,7 @@ mod tests {
         .unwrap();
         assert_eq!(0, query.queries[0].complexity);
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1057,7 +1268,7 @@ mod tests {
         assert_eq!(1, query.queries[0].complexity);
         
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1078,7 +1289,7 @@ mod tests {
         .unwrap();
         assert_eq!(3, query.queries[0].complexity);
 
-        let query = Query::parse(
+        let query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1121,7 +1332,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1133,7 +1344,7 @@ mod tests {
         )
         .expect_err("name is defined twice ");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1146,7 +1357,7 @@ mod tests {
         .expect_err("aname is defined twice ");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1159,7 +1370,7 @@ mod tests {
         .expect("name is correctly aliased ");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1173,7 +1384,7 @@ mod tests {
         )
         .expect_err("Person is defined twice ");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1203,7 +1414,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1216,7 +1427,7 @@ mod tests {
         .expect_err("avg can only be done on Integer or float ");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1230,7 +1441,7 @@ mod tests {
 
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1243,7 +1454,7 @@ mod tests {
         .expect_err("sum can only be done on Integer or float ");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1256,7 +1467,7 @@ mod tests {
         .expect("sum is valid");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1270,7 +1481,7 @@ mod tests {
         .expect_err("min can only be done on scalar field");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1284,7 +1495,7 @@ mod tests {
        
 
         
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1297,7 +1508,7 @@ mod tests {
         .expect_err("min can only be done on scalar field");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1310,7 +1521,7 @@ mod tests {
         .expect("strange but valid");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1323,7 +1534,7 @@ mod tests {
         .expect_err("field does not exists");
 
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1337,7 +1548,7 @@ mod tests {
         )
         .expect_err("when a function is used, 'entity' sub query is not allowed");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1350,7 +1561,7 @@ mod tests {
         .expect("count wil be grouped by age");
        
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1364,7 +1575,7 @@ mod tests {
         )
         .expect_err("when an aggregate function is used, 'entity' sub query is not allowed and ref_by(..) is a sub_query ");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1401,7 +1612,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1414,7 +1625,7 @@ mod tests {
         )
         .expect_err("ref_by(..) is not referencing an entity");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1427,7 +1638,7 @@ mod tests {
         )
         .expect_err("ref_by(..) field pets is not referencing a Person");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1465,7 +1676,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1481,7 +1692,7 @@ mod tests {
         )
         .expect_err("alias cannot starts with an _");
     
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1497,7 +1708,7 @@ mod tests {
         )
         .expect_err("alias cannot starts with an _");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1534,7 +1745,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1550,7 +1761,7 @@ mod tests {
         )
         .expect_err("alias is conflicting with the Pet entity");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1564,7 +1775,7 @@ mod tests {
         .expect_err("alias is conflicting with the someone field");
 
         
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1576,7 +1787,7 @@ mod tests {
         )
         .expect_err("alias is conflicting with the name field");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1603,7 +1814,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1614,7 +1825,7 @@ mod tests {
         )
         .expect_err("parents must be used with syntax parents{..}");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1625,7 +1836,7 @@ mod tests {
         )
         .expect_err("someone must be used with syntax someone{..}");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person {
@@ -1649,7 +1860,7 @@ mod tests {
                 name : String,
                 age : Integer,
                 weight : Float,
-                parents : [Person],
+                parents : [Person] nullable,
                 someone : Person
             } 
 
@@ -1657,7 +1868,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (parents > 0) {
@@ -1668,7 +1879,53 @@ mod tests {
         )
         .expect_err("non scalar field cannot be used in filters");
 
-        let _query = Query::parse(
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (parents is null) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("nullable non scalar fields can check for the null value");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (parents is not null) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("nullable non scalar fields can check for the null value");
+
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (someone = null) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("non nullable non scalar fields cannot check for the null value");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (someone != null) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("non nullable non scalar fields cannot check for the null value");
+
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (someone > 0) {
@@ -1679,7 +1936,7 @@ mod tests {
         )
         .expect_err("non scalar field cannot be used in filters");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (aage > 10) {
@@ -1690,7 +1947,7 @@ mod tests {
         )
         .expect_err("aage does not exists");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (age > 10.5) {
@@ -1701,7 +1958,7 @@ mod tests {
         )
         .expect_err("age is not a float");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (weight > 10) {
@@ -1712,7 +1969,7 @@ mod tests {
         )
         .expect("weight is a float and integer value will be cast as float");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (age > 10) {
@@ -1722,9 +1979,6 @@ mod tests {
             &data_model,
         )
         .expect("age is an integer");
-
-
-
     }
     #[test]
     fn before_after() {
@@ -1738,7 +1992,7 @@ mod tests {
         )
         .unwrap();
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (before $id, after $id) {
@@ -1749,7 +2003,7 @@ mod tests {
         )
         .expect_err("'after' and 'before' filters cannot be used at the same time");
 
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (before $id) {
@@ -1761,7 +2015,7 @@ mod tests {
         .expect("valid query");
 
         
-        let _query = Query::parse(
+        let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person (after $id) {
