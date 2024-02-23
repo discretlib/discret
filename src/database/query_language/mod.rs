@@ -3,13 +3,14 @@ pub mod deletion_parser;
 pub mod mutation_parser;
 pub mod parameter;
 pub mod query_parser;
+pub mod query_parser_test;
 
 use std::fmt;
 
 use serde_json::Number;
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FieldValue {
     Variable(String),
     Value(Value),
@@ -229,4 +230,10 @@ pub enum Error {
         "{0}.{1} is required to create the entity. It is not nullable and has no default value"
     )]
     MissingUpdateField(String, String),
+
+    #[error("'after' and 'before' parameter number '{0}' must have the '{1}' type to match the order by fields")]
+    InvalidPagingValue(usize, String),
+
+    #[error("'after' and 'before' parameters cannot be used on aggregate queries")]
+    InvalidPagingQuery(),
 }

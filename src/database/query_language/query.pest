@@ -18,7 +18,7 @@ entity_param = {
   | "(" ~ param ~ (comma ~ param)* ~ comma? ~ ")"
 }
 
-param = { search | order_by | limit | skip | before | after | filter }
+param = { search | order_by | first | skip | before | after | filter }
 
 search       = { "search" ~ "(" ~ search_value ~ ")" }
 search_value = { variable | string }
@@ -27,28 +27,25 @@ order_by        = { "order_by" ~ "(" ~ order_param ~ (comma ~ order_param)* ~ co
 order_param     = { identifier ~ order_direction }
 order_direction = { ^"asc" | ^"desc" }
 
-limit       = { "limit " ~ limit_value }
+first       = { "first " ~ limit_value }
 skip        = { "skip " ~ limit_value }
 limit_value = { unsigned_int | variable }
 
-before       = { "before " ~ before_value }
-after        = { "after " ~ before_value }
-before_value = { variable | string }
+before       = { "before" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ ")" }
+after        = { "after" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ ")" }
+before_value = { variable | float | string | integer | boolean }
 
 filter       = {
-    identifier ~ (((is_not | is) ~ is_value) | ((gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value))
+    identifier ~ (gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value
 }
 filter_value = { variable | float | string | integer | boolean | null }
-is_value     = { null }
 
-eq     = { "=" }
-neq    = { "!=" }
-gt     = { ">" }
-gt_eq  = { ">=" }
-lt     = { "<" }
-lt_eq  = { "<=" }
-is_not = { ^"is " ~ ^"not" }
-is     = { ^"is " }
+eq    = { "=" }
+neq   = { "!=" }
+gt    = { ">" }
+gt_eq = { ">=" }
+lt    = { "<" }
+lt_eq = { "<=" }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }
@@ -67,7 +64,7 @@ integer = @{
 }
 boolean =  { ^"true" | ^"false" }
 
-unsigned_int = { ASCII_DIGIT+ }
+unsigned_int = @{ ASCII_DIGIT+ }
 
 null = { ^"null" }
 

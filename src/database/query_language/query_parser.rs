@@ -10,6 +10,7 @@ use pest::{iterators::{Pair, Pairs}, Parser};
 use pest_derive::Parser;
 
 
+
 #[derive(Parser)]
 #[grammar = "database/query_language/query.pest"]
 struct PestParser;
@@ -61,12 +62,13 @@ pub enum QueryType {
 const DEFAULT_LIMIT: i64 = 100;
 #[derive(Debug)]
 pub struct EntityParams {
-   pub after: Option<FieldValue>,
-   pub before: Option<FieldValue>,
    pub filters: Vec<FilterParam>,
+   pub aggregate_filters: Vec<FilterParam>,
    pub fulltext_search: Option<FieldValue>,
-   pub limit: FieldValue,
-   pub order_by: Vec<(String, String)>,
+   pub after: Vec<FieldValue>,
+   pub before: Vec<FieldValue>,
+   pub order_by: Vec<OrderBy>,
+   pub first: FieldValue,
    pub skip: Option<FieldValue>,
 }
 impl Default for EntityParams{
@@ -77,48 +79,55 @@ impl Default for EntityParams{
 impl EntityParams {
     pub fn new() -> Self {
         Self {
-            after: None,
-            before: None,
+            after: Vec::new(),
+            before: Vec::new(),
             filters: Vec::new(),
+            aggregate_filters: Vec::new(),
             fulltext_search: None,
-            limit: FieldValue::Value(Value::Integer(DEFAULT_LIMIT)),
+            first: FieldValue::Value(Value::Integer(DEFAULT_LIMIT)),
             order_by: Vec::new(),
             skip: None,
         }
     }
 }
 
-#[derive(Debug)]
-pub struct FilterParam {
-    pub name: String, 
-    pub short_name: String, 
-    pub operation: String,
-    pub value: FieldValue,
-    pub filter_type: FilterType
-}
 
 #[derive(Debug)]
 struct ParsedFilter{
     pub name: String, 
     pub operation: String,
-    pub value: String,
-    pub parsed_type: ParsedType
+    pub value: FieldValue,
+
 }
 #[derive(Debug)]
-enum ParsedType{
-    Boolean,
-    Float,
-    Integer,
-    Null,
-    String,
-    Variable
+pub struct FilterParam {
+    pub name: String, 
+    pub operation: String,
+    pub value: FieldValue,
+    pub is_aggregate: bool,
+    pub is_selected: bool,
+    pub field: Field
 }
 
 #[derive(Debug)]
-pub enum FilterType{
-    Field,
-    SystemField,
-    EntityField
+pub struct ParsedOrderBy{
+    pub name: String, 
+    pub direction: Direction
+}
+
+#[derive(Debug)]
+pub struct OrderBy {
+    pub name: String,
+    pub direction: Direction, 
+    pub is_aggregate: bool,
+    pub is_selected: bool,
+    pub field: Field
+}
+
+#[derive(Debug)]
+pub enum Direction{
+    Asc,
+    Desc
 }
 
 #[derive(Debug)]
@@ -129,7 +138,7 @@ pub struct EntityQuery {
     pub depth: usize,
     pub complexity: usize,
     pub is_aggregate: bool,
-    pub params: Option<EntityParams>,
+    pub params: EntityParams,
     pub fields: Vec<QueryField>,
 }
 impl Default for EntityQuery{
@@ -146,7 +155,7 @@ impl EntityQuery {
             depth: 0,
             complexity: 0,
             is_aggregate:false,
-            params: None,
+            params: EntityParams::new(),
             fields: Vec::new(),
         }
     }
@@ -172,13 +181,77 @@ impl EntityQuery {
         }
     }
 
-    pub fn check_consistency(&self) -> Result<(), Error>{
-        if let Some(par) = &self.params{
-            if par.after.is_some() && par.before.is_some(){
+    pub fn finalize(&self, variables: &mut Variables) -> Result<(), Error>{
+        let par =&self.params;
+        if !par.after.is_empty() && !par.before.is_empty(){
+            return Err(Error::InvalidQuery(format!(
+                "'after' and 'before' filters cannot be used at the same time in query '{}'",
+                self.aliased_name()
+            )))
+        }
+        let paging = if !par.after.is_empty(){
+            &par.after
+        }else{
+            &par.before
+        };
+
+        if !paging.is_empty(){
+            if paging.len() > par.order_by.len() {
                 return Err(Error::InvalidQuery(format!(
-                    "'after' and 'before' filters cannot be used at the same time in query '{}'",
-                    self.aliased_name()
+                    "'after' and 'before' must have a number of parameters lower or equal to the Order By clause. Order by size: '{}'",
+                    par.order_by.len()
                 )))
+            }
+
+            for i in 0..paging.len(){
+                let val = &paging[i];
+                let order_field = &par.order_by[i];
+
+                if self.is_aggregate{
+                    return Err(Error::InvalidPagingQuery())
+                }
+  
+                let field_type = &order_field.field.field_type;
+                match val{
+                    FieldValue::Variable(var) => {
+                        //we couln't know the variable type until now 
+                        let variable_type = order_field.field.get_variable_type_non_nullable();
+                        variables.add(var.clone(), variable_type)?;
+
+                    },
+                    FieldValue::Value(val) => match val{
+                        Value::Boolean(_) => {
+                            match field_type{
+                                FieldType::Boolean => {},
+                                _ => { return Err(Error::InvalidPagingValue(i, String::from("Boolean")))},
+                            }
+                        }
+                        
+                        Value::Integer(_) => {
+                            match field_type{
+                                FieldType::Integer => {},
+                                FieldType::Float => {},
+                                _ => { return Err(Error::InvalidPagingValue(i, String::from("Integer")))},
+                            }
+                        }
+                        Value::Float(_) => {
+                            match field_type{
+                                FieldType::Float => {},
+                                _ => { return Err(Error::InvalidPagingValue(i, String::from("Float")))},
+                            }
+                        }
+                        Value::String(s) => {
+                            match field_type{
+                                FieldType::String => {},
+                                FieldType::Base64 => {
+                                    validate_base64(s, &format!( "'after' or 'before' field position {} ",i))?;
+                                },
+                                _ => { return Err(Error::InvalidPagingValue(i, String::from("String")))},
+                            }
+                        }
+                        _=> unreachable!(),
+                    },
+                }
             }
         }
         let mut has_entity_field = false;
@@ -302,16 +375,17 @@ impl QueryParser {
         variables: &mut Variables,
     ) -> Result<(), Error> {
         let depth = entity.depth;
-        let model_entity = data_model.get_entity(&entity.name)?;
+        let entity_model = data_model.get_entity(&entity.name)?;
         let mut parsed_filters = None;
-
-        let mut parameters = None;
+        let mut parsed_order_by = None;
+        let mut parameters = EntityParams::new();
         for entity_pair in pairs {
             match entity_pair.as_rule() {
                 Rule::entity_param => {
-                    let params = Self::parse_params(model_entity, entity_pair, variables)?;
-                    parameters = Some(params.0);
+                    let params = Self::parse_params( entity_pair, variables)?;
+                    parameters = params.0;
                     parsed_filters = Some(params.1);
+                    parsed_order_by = Some(params.2)
                 }
 
                 Rule::field => {
@@ -327,7 +401,7 @@ impl QueryParser {
                                     return Err(Error::InvalidName(alias_name.to_string()));
                                 }
                                 
-                                if model_entity.get_field(alias_name).is_ok(){
+                                if entity_model.get_field(alias_name).is_ok(){
                                     return Err(Error::InvalidQuery(format!(
                                         "alias: '{}' is conflicting with a field name in entity:'{}'",
                                         &alias_name, &entity.name
@@ -340,7 +414,7 @@ impl QueryParser {
                                 alias = None;
                             }
 
-                            let model_field = model_entity.get_field(&name)?;
+                            let model_field = entity_model.get_field(&name)?;
 
                             let field_type = match model_field.field_type {
                                 FieldType::Array(_) | FieldType::Entity(_) => {
@@ -376,7 +450,7 @@ impl QueryParser {
                                 if alias_name.starts_with('_') {
                                     return Err(Error::InvalidName(alias_name.to_string()));
                                 }
-                                if model_entity.get_field(alias_name).is_ok(){
+                                if entity_model.get_field(alias_name).is_ok(){
                                     return Err(Error::InvalidQuery(format!(
                                         "alias: '{}' is conflicting with a field name in entity:'{}'",
                                         &alias_name, &entity.name
@@ -388,7 +462,7 @@ impl QueryParser {
                                 alias = None;
                                 name = name_pair.next().unwrap().as_str().to_string();
                             }
-                            let model_field = model_entity.get_field(&name)?;
+                            let model_field = entity_model.get_field(&name)?;
 
 
                             let taget_entity_name = match &model_field.field_type {
@@ -440,20 +514,33 @@ impl QueryParser {
         }
 
         if let Some(filters) = parsed_filters{
-            if let Some(par) = &mut parameters{
-                for parse in filters{
-                    let param = Self::build_filter(
-                        entity,
-                        model_entity,
-                        variables,
-                        parse
-                    )?;
-                    par.filters.push(param);
+            for parse in filters{
+                let param = Self::build_filter(
+                    entity,
+                    entity_model,
+                    variables,
+                    parse
+                )?;
+                if param.is_aggregate {
+                    parameters.aggregate_filters.push(param);
+                } else {
+                    parameters.filters.push(param);
                 }
+                
             }
         }
+    
+
+        if let Some(order_by) = parsed_order_by{
+            for parsed_order in order_by{
+                let ord = Self::build_order_by(entity, entity_model,parsed_order)?;
+                parameters.order_by.push(ord);
+            }
+        }
+      
         entity.params = parameters;
-        entity.check_consistency()?;
+        
+        entity.finalize(variables)?;
         Ok(())
 
     }
@@ -477,14 +564,14 @@ impl QueryParser {
             Rule::count_fn => {
                 entity.is_aggregate = true;
                 let field = Field {
-                    name,
+                    name : name.clone(),
                     is_system: false,
-                    field_type: FieldType::String,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
                     field,
-                    alias:None,
+                    alias:Some(name),
                     field_type: QueryFieldType::Aggregate(Function::Count)
                 }
             }
@@ -501,14 +588,14 @@ impl QueryParser {
                     }
                 }
                 let field = Field {
-                    name,
-                    is_system: false,
-                    field_type: FieldType::String,
+                    name : model_field.name.clone(),
+                    is_system: model_field.is_system,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
                     field,
-                    alias:None,
+                    alias:Some(name),
                     field_type: QueryFieldType::Aggregate(Function::Avg(String::from(&model_field.short_name)))
                 }
             }
@@ -526,14 +613,14 @@ impl QueryParser {
                     _=> {}
                 }
                 let field = Field {
-                    name,
-                    is_system: false,
-                    field_type: FieldType::String,
+                    name : model_field.name.clone(),
+                    is_system: model_field.is_system,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
                     field,
-                    alias:None,
+                    alias:Some(name),
                     field_type: QueryFieldType::Aggregate(Function::Max(String::from(&model_field.short_name)))
                 }
             }
@@ -551,14 +638,14 @@ impl QueryParser {
                 }
 
                 let field = Field {
-                    name,
-                    is_system: false,
-                    field_type: FieldType::String,
+                    name : model_field.name.clone(),
+                    is_system: model_field.is_system,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
                     field,
-                    alias:None,
+                    alias:Some(name),
                     field_type: QueryFieldType::Aggregate(Function::Min(String::from(&model_field.short_name)))
                 }
             }
@@ -575,14 +662,14 @@ impl QueryParser {
                     ))) }
                 }
                 let field = Field {
-                    name,
-                    is_system: false,
-                    field_type: FieldType::String,
+                    name : model_field.name.clone(),
+                    is_system: model_field.is_system,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
                     field,
-                    alias:None,
+                    alias:Some(name),
                     field_type: QueryFieldType::Aggregate(Function::Sum(String::from(&model_field.short_name)))
                 }
 
@@ -626,7 +713,7 @@ impl QueryParser {
                 let field = Field {
                     name,
                     is_system: false,
-                    field_type: FieldType::String,
+                    field_type: FieldType::Float,
                     ..Default::default()
                 };
                 QueryField{
@@ -674,52 +761,49 @@ impl QueryParser {
     }
 
     fn parse_params(
-        entity: &Entity,
         pair: Pair<'_, Rule>,
         variables: &mut Variables,
-    ) -> Result<(EntityParams, Vec<ParsedFilter>), Error> {
+    ) -> Result<(EntityParams, Vec<ParsedFilter>, Vec<ParsedOrderBy>), Error> {
         let mut parameters = EntityParams::new();
+        let mut parsed_filter = Vec::new(); 
+        let mut parsed_order_by = Vec::new();
+
         let param_pairs = pair.into_inner();
-        let mut parsed_filter = Vec::new();
         for param_pair in param_pairs {
             let pair = param_pair.into_inner().next().unwrap();
             match pair.as_rule() {
                 Rule::filter => {
-                    let filter = Self::parse_filter(pair);
+                    let filter = Self::parse_filter(pair)?;
                     parsed_filter.push(filter);
                 }
                 Rule::order_by => {
                     let order_pairs = pair.into_inner();
+                    
                     for order_pair in order_pairs {
                         let mut order_p = order_pair.into_inner();
-                        let name = order_p.next().unwrap().as_str();
-                        let field = entity.get_field(name)?;
-                        match field.field_type{
-                            FieldType::Array(_) | FieldType::Entity(_) => {
-                                return Err(Error::InvalidQuery(format!(
-                                    "Only scalar fields are allowed in order by clause. '{}' is a '{}'",
-                                    &name, &field.field_type
-                                )))
-                            }
-                            _ => {} 
-                        }
+                        let name = order_p.next().unwrap().as_str().to_string();
 
-                        let direction = order_p.next().unwrap().as_str();
-                        parameters.order_by.push((name.to_string(), direction.to_string()));
+                        let direction_str = order_p.next().unwrap().as_str().to_lowercase();
+                        let direction = match direction_str.as_str() {
+                            "asc" => Direction::Asc,
+                            "desc" => Direction::Desc,
+                            _=> unreachable!()
+                        };
+                        parsed_order_by.push(ParsedOrderBy{ name, direction })
                     }
                 }
-                Rule::limit => {
+                Rule::first => {
                     let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
                     match val.as_rule(){
                         Rule::variable => {
                             let var = &val.as_str()[1..];
                             variables.add(var.to_string(), VariableType::Integer(false))?;
-                            parameters.limit = FieldValue::Variable(var.to_string());
+                            parameters.first = FieldValue::Variable(var.to_string());
 
                         }
                         Rule::unsigned_int => {
                             let value = val.as_str();
-                            parameters.limit = FieldValue::Value(Value::Integer(value.parse()?));
+                            parameters.first = FieldValue::Value(Value::Integer(value.parse()?));
                         }
                         _=> unreachable!()
                     }
@@ -761,96 +845,40 @@ impl QueryParser {
                 }
 
                 Rule::before => {
-                    let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
-                    match val.as_rule(){
-                        Rule::variable => {
-                            let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Base64(true))?;
-                            parameters.before = Some(FieldValue::Variable(var.to_string()));
-
-                        }
-                        Rule::string => {
-                            let value = val.into_inner().next().unwrap().as_str();
-                            Self::validate_base64(value, "Before")?;
-                            parameters.before = Some(FieldValue::Value(Value::String(value.to_string())));
-                        }
-                        _=> unreachable!()
-                    }
+                  let values = pair.into_inner();
+                  let before = Self::parse_paging_params(values)?;
+                  parameters.before = before;
                 }
 
                 Rule::after => {
-                    let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
-                    match val.as_rule(){
-                        Rule::variable => {
-                            let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Base64(true))?;
-                            parameters.after = Some(FieldValue::Variable(var.to_string()));
-
-                        }
-                        Rule::string => {
-                            let value = val.into_inner().next().unwrap().as_str();
-                            Self::validate_base64(value, "After")?;
-                            parameters.after = Some(FieldValue::Value(Value::String(value.to_string())));
-                        }
-                        _=> unreachable!()
-                    }
+                    let values = pair.into_inner();
+                    let after = Self::parse_paging_params(values)?;
+                    parameters.after = after;
                 }
-
-
                 _ => unreachable!(),
                 
             }
         }
 
-        Ok((parameters, parsed_filter))
+        Ok((parameters, parsed_filter, parsed_order_by))
     }
+
 
     fn parse_filter(
         pair: Pair<'_, Rule>,
-    ) -> ParsedFilter {
+    ) -> Result<ParsedFilter, Error> {
         let mut filter_pairs = pair.into_inner();
 
         let name = filter_pairs.next().unwrap().as_str().to_string();
 
         let operation_pair =  filter_pairs.next().unwrap();
-        let mut operation = operation_pair.as_str().to_string();
-        
-        match operation_pair.as_rule(){
-            Rule::is => operation = String::from("is"),
-            Rule::is_not => operation = String::from("is not"),
-           _=> {}
-        };
+        let operation = operation_pair.as_str().to_string();
+    
         let value_pair = filter_pairs.next().unwrap().into_inner().next().unwrap();
+        let value = Self::parse_field_value(value_pair)?;
+        Ok(ParsedFilter{ name, operation, value })
 
-         match value_pair.as_rule(){
-            Rule::boolean => {
-                let value = value_pair.as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Boolean}
-            }
-            Rule::float => {
-                let value = value_pair.as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Float}
-            }
-            Rule::integer => {
-                let value = value_pair.as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Integer}
-            }
-            Rule::null => {
-                let value = value_pair.as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Null}
-            }
-            Rule::string => {
-                let value = value_pair.into_inner().next().unwrap().as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::String}
-            }
-            Rule::variable => {
-                let value = value_pair.as_str().to_string();
-                ParsedFilter{ name, operation, value ,parsed_type: ParsedType::Variable}
-            }
-            _=>unreachable!()
-        }
     }
-
 
     fn build_filter(
         entity: &EntityQuery,
@@ -858,32 +886,41 @@ impl QueryParser {
         variables: &mut Variables,
         parsed_filters: ParsedFilter
     ) -> Result<FilterParam, Error> {
-        
-        let is_entity_and_field = match entity_model.get_field(&parsed_filters.name) {
+
+        let mut is_aggregate = false;
+        let mut is_entity_field = false;
+        let mut is_selected = false;
+
+        let field_res = entity_model.get_field(&parsed_filters.name);       
+        let field =  match field_res {
             Ok(field) => {
                 match field.field_type {
-                    FieldType::Array(_)|FieldType::Entity(_)  => (true, field, String::from(&field.name)),
-                    _ => (false, field, String::from(&field.name)),
+                    FieldType::Array(_) | FieldType::Entity(_) =>  is_entity_field = true,
+                    _ => {},
                 }
-
+                field
             },
             Err(_) => {
-                let e = entity.fields.iter().find(|entry| entry.name().eq(&parsed_filters.name));
-                match e {
-                    Some(query_field) => {
-                        match query_field.field.field_type {
-                            FieldType::Array(_)|FieldType::Entity(_)  => (true, &query_field.field, query_field.name()),
-                            _ => (false, &query_field.field, query_field.name()),
-                        }
-                    },
-                    None => return Err(Error::InvalidQuery(format!("filter field '{}' does not exists", &parsed_filters.name))),
-                }
+                let query_field = entity.fields.iter().find(|entry| entry.name().eq(&parsed_filters.name));
+                let field = match &query_field {
+                        Some(e) => {
+                            is_selected = true;
+                            match e.field_type {
+                                QueryFieldType::Function(_) | QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
+                                QueryFieldType::Aggregate(_) => is_aggregate = true,
+                                QueryFieldType::NamedField | QueryFieldType::BinaryField => {},
+                            }
+                            &e.field
+                        },
+                        None => return Err(Error::InvalidQuery(format!("filter field '{}' does not exists", &parsed_filters.name))),
+                };
+                field
             },
         };
-        let is_entity_field = is_entity_and_field.0;
+
         if is_entity_field{
             match parsed_filters.operation.as_str(){
-                "is" | "is not" => {}
+                "=" | "!=" => {}
                 _ => 
                 return Err(Error::InvalidEntityFilter(
                     String::from(&parsed_filters.name)
@@ -891,1139 +928,222 @@ impl QueryParser {
             }
         }
        
-        let parsed_value = &parsed_filters.value;
-        let field =  is_entity_and_field.1;
-        let name = is_entity_and_field.2;
-
-        let value = match parsed_filters.parsed_type {
-            ParsedType::Boolean => {
-                if is_entity_field{
-                    return Err(Error::InvalidEntityFilter(
-                        name
-                    ))
-                }
-                
-                match field.field_type {
-                    FieldType::Boolean => {
-                
-                        FieldValue::Value(Value::Boolean(parsed_value.parse()?))
-                    }
-                    _ => {
-                        return Err(Error::InvalidFieldType(
-                            name,
-                            field.field_type.to_string(),
-                            "Boolean".to_string(),
-                        ))
-                    }
-                }
-            },
-            ParsedType::Float =>{
-                    if is_entity_field{
-                        return Err(Error::InvalidEntityFilter(
-                            name,
-                        ))
-                    } 
-                    
-                    match field.field_type {
-                    FieldType::Float => {
-                        FieldValue::Value(Value::Float(parsed_value.parse()?))
-                    }
-                    _ => {
-                        return Err(Error::InvalidFieldType(
-                            name,
-                            field.field_type.to_string(),
-                            "Float".to_string(),
-                        ))
-                    }
-                }
-            },
-            ParsedType::Integer => {
-                    if is_entity_field{
-                        return Err(Error::InvalidEntityFilter(
-                            name,
-                        ))
-                    }
-                    
-                    match field.field_type {
-                        FieldType::Float => {
-                            FieldValue::Value(Value::Float(parsed_value.parse()?))
-                        }
-                        FieldType::Integer => {
-                            FieldValue::Value(Value::Integer(parsed_value.parse()?))
-                        }
-                        _ => {
-                            return Err(Error::InvalidFieldType(
-                                name,
-                                field.field_type.to_string(),
-                                "Integer".to_string(),
-                            ))
-                    }
-                }
-            },
-            ParsedType::Null => {
-                if field.nullable {
-                    FieldValue::Value(Value::Null)
-                } else {
-                    return Err(Error::NotNullable(name));
-                }
-            }
-            ParsedType::String => {
-                if is_entity_field{
-                    return Err(Error::InvalidEntityFilter(
-                        name
-                    ))
-                }
-               
-                match field.field_type {
-                    FieldType::String => FieldValue::Value(Value::String(parsed_value.to_string())),
-                    FieldType::Base64 => {
-                        Self::validate_base64(parsed_value, &name)?;
-                        FieldValue::Value(Value::String(parsed_value.to_string()))
-                    }
-                    _ => {
-                        return Err(Error::InvalidFieldType(
-                            name,
-                            field.field_type.to_string(),
-                            "String".to_string(),
-                        ))
-                    }
-                }
-            }
-            ParsedType::Variable => {
+       
+        let name = parsed_filters.name;
+        let value = match &parsed_filters.value {
+            FieldValue::Variable(var) => {
                 if is_entity_field{
                     return Err(Error::InvalidEntityFilter(
                         String::from(name)
                     ))
                 }
-                let var = &parsed_value.as_str()[1..];
                 let var_type = field.get_variable_type();
                 variables.add(var.to_string(), var_type)?;
-                FieldValue::Variable(var.to_string())
-            }
+                parsed_filters.value
+            },
+            FieldValue::Value(val) => {
+                match val{
+                    Value::Null => {
+                        if field.nullable {
+                            parsed_filters.value
+                        } else {
+                            return Err(Error::NotNullable(name));
+                        }
+                    },
+
+                    Value::Boolean(_) => {
+                        if is_entity_field{
+                            return Err(Error::InvalidEntityFilter(
+                                name
+                            ))
+                        }
+                        match field.field_type {
+                            FieldType::Boolean => {
+                                parsed_filters.value
+                            }
+                            _ => {
+                                return Err(Error::InvalidFieldType(
+                                    name,
+                                    field.field_type.to_string(),
+                                    "Boolean".to_string(),
+                                ))
+                            }
+                        }
+                    },
+                    Value::Integer(i) => {
+                        if is_entity_field{
+                            return Err(Error::InvalidEntityFilter(
+                                name,
+                            ))
+                        } 
+                        match field.field_type {
+                            FieldType::Float =>  FieldValue::Value(Value::Float(*i as f64)),  
+                            FieldType::Integer =>  parsed_filters.value,  
+                            _ => {
+                                return Err(Error::InvalidFieldType(
+                                    name,
+                                    field.field_type.to_string(),
+                                    "Float".to_string(),
+                                ))
+                            }
+                        }
+                    },
+                    Value::Float(_) => {
+                        if is_entity_field{
+                            return Err(Error::InvalidEntityFilter(
+                                name,
+                            ))
+                        } 
+                        match field.field_type {
+                             FieldType::Float =>  parsed_filters.value,  
+                            _ => {
+                                return Err(Error::InvalidFieldType(
+                                    name,
+                                    field.field_type.to_string(),
+                                    "Float".to_string(),
+                                ))
+                            }
+                        }
+                    },
+                    Value::String(s) => {
+                        if is_entity_field{
+                            return Err(Error::InvalidEntityFilter(
+                                name
+                            ))
+                        }
+                       
+                        match field.field_type {
+                            FieldType::String => parsed_filters.value,
+                            FieldType::Base64 => {
+                                validate_base64(s, &name)?;
+                                parsed_filters.value
+                            }
+                            _ => {
+                                return Err(Error::InvalidFieldType(
+                                    name,
+                                    field.field_type.to_string(),
+                                    "String".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    
+                }
+            },
         };
-        let filter_type = {
-            if is_entity_field{
-                FilterType::EntityField
-            } else if field.is_system {
-                FilterType::SystemField
-            }else {
-                FilterType::Field
-            }
-        };
+
+       
         Ok(FilterParam {
             name: name,
-            short_name:String::from(&field.short_name),
             operation: String::from(&parsed_filters.operation),
             value,
-            filter_type
+            is_aggregate,
+            is_selected,
+            field:field.clone()
         })
     }
 
-    fn validate_base64(var: &str, name: &str) -> Result<(), Error> {
-        if base64_decode(var.as_bytes()).is_err() {
-            return Err(Error::InvalidQuery(format!(
-                "'{}' value '{}' is not a valid base64 string ",
-                &name, var
-            )));
+    fn build_order_by(
+        entity: &EntityQuery,
+        entity_model: &Entity,
+        parsed_order: ParsedOrderBy
+    ) -> Result<OrderBy, Error> {
+        
+        let mut is_aggregate = false;
+        let mut is_entity_field = false;
+        let mut is_selected = false;
+
+        let field_res = entity_model.get_field(&parsed_order.name);       
+        let field =  match field_res {
+            Ok(field) => {
+                match field.field_type {
+                    FieldType::Array(_) | FieldType::Entity(_) =>  is_entity_field = true,
+                    _ => {},
+                }
+                field
+            },
+            Err(_) => {
+                let query_field = entity.fields.iter().find(|entry| entry.name().eq(&parsed_order.name));
+                let field = match &query_field {
+                        Some(e) => {
+                            is_selected = true;
+                            match e.field_type {
+                                QueryFieldType::Function(_) | QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
+                                QueryFieldType::Aggregate(_) => is_aggregate = true,
+                                QueryFieldType::NamedField | QueryFieldType::BinaryField => {},
+                            }
+                            &e.field
+                        },
+                        None => return Err(Error::InvalidQuery(format!("Order by field '{}' does not exists", &parsed_order.name))),
+                };
+                field
+            },
+        };
+
+
+
+        Ok(OrderBy { 
+            name: parsed_order.name,
+            direction:parsed_order.direction,
+            is_aggregate,
+            is_selected,
+            field: field.clone()
+        })       
+    }
+
+    fn parse_field_value(value_pair: Pair<'_, Rule>) -> Result<FieldValue, Error> {
+        let field = match value_pair.as_rule(){
+            Rule::boolean => {
+                let value = value_pair.as_str();
+                FieldValue::Value(Value::Boolean(value.parse()?))
+            }
+            Rule::float => {
+                let value = value_pair.as_str();
+                FieldValue::Value(Value::Float(value.parse()?))
+            }
+            Rule::integer => {
+                let value = value_pair.as_str();
+                FieldValue::Value(Value::Integer(value.parse()?))
+            }
+            Rule::null => {
+                FieldValue::Value(Value::Null)
+            }
+            Rule::string => {
+                let value = value_pair.into_inner().next().unwrap().as_str().to_string();
+                FieldValue::Value(Value::String(value))
+            }
+            Rule::variable => {
+                let value = &value_pair.as_str()[1..];
+                FieldValue::Variable(String::from(value))
+            }
+            _=>unreachable!()
+        };
+        Ok(field)
+    }
+    
+
+    fn parse_paging_params(values: Pairs<'_, Rule>) -> Result<Vec<FieldValue>, Error> {
+        let mut before = Vec::new();
+        for value in values {
+            let value_pair = value.into_inner().next().unwrap();
+            let field = Self::parse_field_value(value_pair)?;
+            before.push(field);
         }
-        Ok(())
+        Ok(before)
     }
+
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::database::query_language::data_model::DataModel;
-
-    use super::*;
-    #[test]
-    fn parse_valid_query() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                surname : String,
-                parents : [Person],
-                pet : Pet,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean
-            }
-
-            Pet {
-                name : String ,
-                age : Integer
-            }
-        
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person(
-                    search("a search string"),
-                    name = "someone",
-                    is_human = true, 
-                    age >= 1,
-                    weight <= 200,
-                    order_by(surname asc, name desc ),
-                    limit 30,
-                    skip 2,
-                    before "emV0emV0",
-                ){
-                    a_name:name 
-                    surname 
-                    parents {
-                       age
-                       pet {
-                            name
-                       }
-                    }
-                    age
-                    weight
-                    pet {
-                        name
-                    }
-                }
-
-                Parametrized : Person (
-                    search($search),
-                    name = $name,
-                    is_human = $human, 
-                    age >= $age,
-                    weight <= $weight,
-                    order_by(surname asc, name desc ),
-                    limit $limit,
-                    skip $skip,
-                    after $after_id,
-                ){
-                    a_name:name 
-                    surname 
-                    parents {
-                       age
-                       pet {
-                            name
-                       }
-                    }
-                    age
-                    weight
-                    pet {
-                        name
-                    }
-                }
-
-                Pet () {
-                    name 
-                    asum: sum( age )
-                    avg: avg(age)
-                    min: min(age)
-                    max : max(age)
-                    count: count()
-                }
-
-                PetAndOwner : Pet (id=$id) {
-                    name 
-                    owner: ref_by(
-                        pet, 
-                        Person{
-                            name
-                            surname
-                        }
-                    )
-                }
-
-            }
-        "#,
-            &data_model,
-        )
-        .unwrap();
-
-       // println!("{:#?}", _query);
+fn validate_base64(var: &str, name: &str) -> Result<(), Error> {
+    if base64_decode(var.as_bytes()).is_err() {
+        return Err(Error::InvalidQuery(format!(
+            "'{}' value '{}' is not a valid base64 string ",
+            &name, var
+        )));
     }
-
-    #[test]
-    fn query_depth() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                parents : [Person],
-            }        
-        ",
-        )
-        .unwrap();
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                   
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(0, query.queries[0].depth);
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    parents{
-                        name
-                    }
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(1, query.queries[0].depth);
-        
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    aliased : parents {
-                        name
-                        parents {
-                            name
-                        }
-                    }
-                    parents {
-                        name
-                    }
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(2, query.queries[0].depth);
-
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    parents {
-                        name
-                    }
-                    children : ref_by(parents, Person {
-                        name
-                        parents {
-                            name
-                        }
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(2, query.queries[0].depth);
-        
-    }
-
-    #[test]
-    fn query_complexity() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                parents : [Person],
-            }        
-        ",
-        )
-        .unwrap();
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(0, query.queries[0].complexity);
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    parents{
-                        name
-                    }
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(1, query.queries[0].complexity);
-        
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    aliased : parents {
-                        name
-                        parents {
-                            name
-                        }
-                    }
-                    parents {
-                        name
-                    }
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(3, query.queries[0].complexity);
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    aliased : parents {
-                        name
-                        parents {
-                            name
-                        }
-                    }
-                    parents {
-                        name
-                    }
-                    children : ref_by(parents, Person {
-                        name
-                        parents {
-                            name
-                        }
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(5, query.queries[0].complexity);
-        
-    }
-
-
-    #[test]
-    fn duplicated_field() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-            }        
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("name is defined twice ");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    aname : name 
-                    aname : name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("aname is defined twice ");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    aname : name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("name is correctly aliased ");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                }
-                Person {
-                    name 
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("Person is defined twice ");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                }
-                Aperson: Person {
-                    name 
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("Person is correctly aliased ");
-        
-    }
-
-    
-    #[test]
-    fn function() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-            }        
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    fn : avg(name)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("avg can only be done on Integer or float ");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    fn : avg(age)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("avg is valid");
-
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    fn : sum(name)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("sum can only be done on Integer or float ");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    fn : sum(age)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("sum is valid");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-
-                    name 
-                    fn : min(parents)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("min can only be done on scalar field");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    age 
-                    fn : min(name)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("strange but valid");
-       
-
-        
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    fn : max(parents)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("min can only be done on scalar field");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    age 
-                    fn : max(name)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("strange but valid");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    age 
-                    fn : max(not_exist)
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("field does not exists");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    parents{
-                        name
-                    } 
-                    fn : count()
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("when a function is used, 'entity' sub query is not allowed");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    age 
-                    fn : count()
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("count wil be grouped by age");
-       
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    fn : count()
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("when an aggregate function is used, 'entity' sub query is not allowed and ref_by(..) is a sub_query ");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    parents{
-                        name
-                    } 
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("ref_by(..) is not an aggregate function and accepts others sub queries");
-        
-    }
-
-    #[test]
-    fn ref_by() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
-
-            Pet {
-                name: String
-            }
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    children : ref_by(age, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("ref_by(..) is not referencing an entity");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    children : ref_by(pets, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("ref_by(..) field pets is not referencing a Person");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    some : ref_by(someone, Person{
-                        name
-                    })
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("ref_by(..) is correct ");
-
-
-    }
-
-    #[test]
-    fn start_with_underscore() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
-
-            Pet {
-                name: String
-            }
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name
-                }
-
-                _pet: Person {
-                    name
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect_err("alias cannot starts with an _");
-    
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name
-                }
-
-                pet: Person {
-                   _name : name
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect_err("alias cannot starts with an _");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name
-                }
-
-                pet: Person {
-                    _pub_key
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect("_pub_key is a valid system field");
-
-    }
-
-    #[test]
-    fn aliases() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
-
-            Pet {
-                name: String
-            }
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name
-                }
-
-                Pet: Person {
-                    name
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect_err("alias is conflicting with the Pet entity");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name
-                    someone : name
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect_err("alias is conflicting with the someone field");
-
-        
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name : someone{name}
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect_err("alias is conflicting with the name field");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    aname : someone{name}
-                }
-
-            } "#,
-            &data_model,
-        )
-        .expect("alias is not conflicting");
-
-    }
-
-    #[test]
-    fn entity_field() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                parents : [Person],
-                someone : Person
-            } 
-
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    parents
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("parents must be used with syntax parents{..}");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    someone
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("someone must be used with syntax someone{..}");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    parents{id}
-                    someone{id}
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("good syntax");
-
-
-    }
-
-
-    #[test]
-    fn filters() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                weight : Float,
-                parents : [Person] nullable,
-                someone : Person
-            } 
-
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (parents > 0) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non scalar field cannot be used in filters");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (parents is null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("nullable non scalar fields can check for the null value");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (parents is not null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("nullable non scalar fields can check for the null value");
-
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (someone = null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non nullable non scalar fields cannot check for the null value");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (someone != null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non nullable non scalar fields cannot check for the null value");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (someone > 0) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non scalar field cannot be used in filters");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (aage > 10) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("aage does not exists");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (age > 10.5) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("age is not a float");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (weight > 10) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("weight is a float and integer value will be cast as float");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (age > 10) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("age is an integer");
-    }
-    #[test]
-    fn before_after() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-            } 
-
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (before $id, after $id) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("'after' and 'before' filters cannot be used at the same time");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (before $id) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("valid query");
-
-        
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (after $id) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("valid query");        
-    }
+    Ok(())
 }
+
+
+
+

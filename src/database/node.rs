@@ -17,8 +17,8 @@ impl Default for Node {
             cdate: date,
             mdate: date,
             _entity: "".to_string(),
-            _json_data: None,
-            _binary_data: None,
+            _json: None,
+            _binary: None,
             _pub_key: vec![],
             _signature: vec![],
         }
@@ -31,8 +31,8 @@ pub struct Node {
     pub cdate: i64,
     pub mdate: i64,
     pub _entity: String,
-    pub _json_data: Option<String>,
-    pub _binary_data: Option<Vec<u8>>,
+    pub _json: Option<String>,
+    pub _binary: Option<Vec<u8>>,
     pub _pub_key: Vec<u8>,
     pub _signature: Vec<u8>,
 }
@@ -53,8 +53,8 @@ impl Node {
             cdate INTEGER  NOT NULL,
             mdate INTEGER  NOT NULL,
             _entity TEXT  NOT NULL,
-            _json_data TEXT,
-            _binary_data BLOB,
+            _json TEXT,
+            _binary BLOB,
             _pub_key BLOB NOT NULL,
             _signature BLOB NOT NULL
         ) STRICT",
@@ -81,12 +81,12 @@ impl Node {
         len += 8; //cdate
         len += self._entity.as_bytes().len();
 
-        if let Some(v) = &self._json_data {
+        if let Some(v) = &self._json {
             let serialized = serde_json::to_string(v)?;
             len += serialized.as_bytes().len();
         }
 
-        if let Some(v) = &self._binary_data {
+        if let Some(v) = &self._binary {
             len += v.len();
         }
 
@@ -102,12 +102,12 @@ impl Node {
         hasher.update(&self.mdate.to_le_bytes());
         hasher.update(self._entity.as_bytes());
 
-        if let Some(v) = &self._json_data {
+        if let Some(v) = &self._json {
             let serialized = serde_json::to_string(v)?;
             hasher.update(serialized.as_bytes());
         }
 
-        if let Some(v) = &self._binary_data {
+        if let Some(v) = &self._binary {
             hasher.update(v);
         }
 
@@ -134,7 +134,7 @@ impl Node {
         }
 
         //ensure that the Json field is an Object field
-        if let Some(v) = &self._json_data {
+        if let Some(v) = &self._json {
             let value: Value = serde_json::from_str(v)?;
             if value.as_object().is_none() {
                 return Err(Error::InvalidNode(String::from(
@@ -161,7 +161,7 @@ impl Node {
         }
 
         //ensure that the Json field is an Object field
-        if let Some(v) = &self._json_data {
+        if let Some(v) = &self._json {
             let value: Value = serde_json::from_str(v)?;
             if value.as_object().is_none() {
                 return Err(Error::InvalidNode(String::from(
@@ -276,8 +276,8 @@ impl Node {
                 cdate = ?,
                 mdate = ?,
                 _entity = ?,
-                _json_data = ?,
-                _binary_data = ?,
+                _json = ?,
+                _binary = ?,
                 _pub_key = ?,
                 _signature = ?
             WHERE
@@ -289,8 +289,8 @@ impl Node {
                 &self.cdate,
                 &self.mdate,
                 &self._entity,
-                &self._json_data,
-                &self._binary_data,
+                &self._json,
+                &self._binary,
                 &self._pub_key,
                 &self._signature,
                 id,
@@ -302,8 +302,8 @@ impl Node {
                     cdate,
                     mdate,
                     _entity,
-                    _json_data,
-                    _binary_data,
+                    _json,
+                    _binary,
                     _pub_key,
                     _signature
                 ) VALUES (
@@ -315,8 +315,8 @@ impl Node {
                 &self.cdate,
                 &self.mdate,
                 &self._entity,
-                &self._json_data,
-                &self._binary_data,
+                &self._json,
+                &self._binary,
                 &self._pub_key,
                 &self._signature,
             ))?;
@@ -332,7 +332,7 @@ impl Node {
 }
 
 ///query used in conjunction with the from_row() method to easily retrieve a node
-const NODE_FROM_ROW_QUERY: &'static str = "SELECT id , cdate, mdate, _entity,_json_data, _binary_data, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?";
+const NODE_FROM_ROW_QUERY: &'static str = "SELECT id , cdate, mdate, _entity,_json, _binary, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?";
 impl FromRow for Node {
     fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
         |row| {
@@ -341,8 +341,8 @@ impl FromRow for Node {
                 cdate: row.get(1)?,
                 mdate: row.get(2)?,
                 _entity: row.get(3)?,
-                _json_data: row.get(4)?,
-                _binary_data: row.get(5)?,
+                _json: row.get(4)?,
+                _binary: row.get(5)?,
                 _pub_key: row.get(6)?,
                 _signature: row.get(7)?,
             }))
@@ -387,22 +387,22 @@ mod tests {
         node.verify().unwrap();
 
         let bad_json = r#"["expecting an object, not an array"]"#.to_string();
-        node._json_data = Some(bad_json);
+        node._json = Some(bad_json);
         node.verify().expect_err("Invalid json");
         node.sign(&keypair).expect_err("Invalid json");
         let good_json = r#"{
             "randomtext": "Lorem ipsum dolor sit amet"
         }"#
         .to_string();
-        node._json_data = Some(good_json);
+        node._json = Some(good_json);
         node.verify()
-            .expect_err("_json_data has changed, verification fails");
+            .expect_err("_json has changed, verification fails");
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node._binary_data = Some(vec![1, 2, 3]);
+        node._binary = Some(vec![1, 2, 3]);
         node.verify()
-            .expect_err("_json_data changed, the verification fails");
+            .expect_err("_json changed, the verification fails");
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
@@ -435,7 +435,7 @@ mod tests {
         let mut node = Node {
             _entity: "TEST".to_string(),
             cdate: now(),
-            _json_data: Some(good_json),
+            _json: Some(good_json),
             ..Default::default()
         };
         node.sign(&keypair).unwrap();
@@ -467,7 +467,7 @@ mod tests {
             .unwrap();
         let row_id: i64 = rowid_stmt.query_row([id], |row| Ok(row.get(0)?)).unwrap();
 
-        node._json_data = Some(
+        node._json = Some(
             r#"{
             "randomtext": "ipsum dolor sit amet Conjectur"
         }"#

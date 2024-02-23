@@ -15,8 +15,8 @@ pub const ID_FIELD: &str = "id";
 const CREATION_DATE_FIELD: &str = "cdate";
 const MODIFICATION_DATE_FIELD: &str = "mdate";
 const ENTITY_FIELD: &str = "_entity";
-const JSON_FIELD: &str = "_json_data";
-const BINARY_FIELD: &str = "_binary_data";
+const JSON_FIELD: &str = "_json";
+const BINARY_FIELD: &str = "_binary";
 const PUB_KEY_FIELD: &str = "_pub_key";
 const SIGNATURE_FIELD: &str = "_signature";
 
@@ -736,6 +736,18 @@ impl Field {
             FieldType::Integer => VariableType::Integer(self.nullable),
             FieldType::Float => VariableType::Float(self.nullable),
             FieldType::String => VariableType::String(self.nullable),
+        }
+    }
+
+    pub fn get_variable_type_non_nullable(&self) -> VariableType {
+        match self.field_type {
+            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Base64 => {
+                VariableType::Base64(false)
+            }
+            FieldType::Boolean => VariableType::Boolean(false),
+            FieldType::Integer => VariableType::Integer(false),
+            FieldType::Float => VariableType::Float(false),
+            FieldType::String => VariableType::String(false),
         }
     }
 }

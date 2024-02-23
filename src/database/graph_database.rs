@@ -51,7 +51,7 @@ impl QueryResult {
         }
     }
 
-    pub fn as_string(&self) -> Option<&String> {
+    pub fn as_str(&self) -> Option<&str> {
         if let Self::String(e) = self {
             Some(e)
         } else {

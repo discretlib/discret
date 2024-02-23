@@ -4,24 +4,24 @@ use rusqlite::{OptionalExtension, ToSql};
 
 use super::graph_database::{QueryResult, Readable};
 use super::query_language::query_parser::{
-    EntityQuery, FilterParam, FilterType, Function, QueryField, QueryFieldType,
+    Direction, EntityParams, EntityQuery, Function, QueryField, QueryFieldType,
 };
 use super::query_language::{parameter::Parameters, query_parser::QueryParser};
-use super::query_language::{FieldValue, Value};
+use super::query_language::{FieldType, FieldValue, Value};
 use super::Error;
 use super::Result;
 pub struct QueryVariable {}
 #[derive(Debug)]
-struct Param {
+pub struct Param {
     internal: bool,
     value: String,
 }
 
 #[derive(Debug)]
 pub struct PreparedQuery {
-    name: String,
-    var_order: Vec<Param>,
-    sql_query: String,
+    pub name: String,
+    pub var_order: Vec<Param>,
+    pub sql_query: String,
 }
 impl Default for PreparedQuery {
     fn default() -> Self {
@@ -56,103 +56,14 @@ impl PreparedQuery {
         };
         let mut query = String::new();
         query.push_str("SELECT \n");
-        query.push_str("    json_group_array(");
-        if entity.is_aggregate {
-            query.push_str(&build_aggregate_fields(
-                &entity.fields,
-                &aggregate_tbl(&entity.aliased_name()),
-            ));
-        } else {
-            query.push_str(&build_default_fields(&entity.fields));
-        }
-        query.push_str(")");
-        query.push_str(" FROM _node\n");
-
-        for field in &entity.fields {
-            match &field.field_type {
-                QueryFieldType::EntityQuery(e, nullable) => {
-                    if *nullable {
-                        query.push_str(" LEFT");
-                    }
-                    query.push_str(" JOIN ");
-                    query.push_str(&build_entity_table(
-                        &*e,
-                        &field.name(),
-                        &field.field.short_name,
-                    ));
-                    query.push_str(&format!(" ON  _node.id = {}.src \n", &field.name()));
-                }
-                QueryFieldType::EntityArrayQuery(e, nullable) => {
-                    if *nullable {
-                        query.push_str(" LEFT ");
-                    }
-                    query.push_str(" JOIN ");
-                    query.push_str(&build_entity_table(
-                        &*e,
-                        &field.name(),
-                        &field.field.short_name,
-                    ));
-                    query.push_str(&format!(" ON  _node.id = {}.src \n", &field.name()));
-                }
-                _ => {}
-            }
-        }
-
-        query.push_str(" WHERE \n");
-        query.push_str(&format!(" _node._entity='{}' ", &entity.short_name));
-        if let Some(params) = &entity.params {
-            query.push_str(" AND \n");
-            if params.filters.len() > 0 {
-                query.push_str(&prepared_query.build_filters(&params.filters));
-            }
-        }
+        query.push_str("json_group_array(value->'$') \n");
+        query.push_str("FROM (\n");
+        let sub = get_entity_query(entity, &mut prepared_query, 1);
+        query.push_str(&sub);
+        query.push_str("\n )");
 
         prepared_query.sql_query = query;
         Ok(prepared_query)
-    }
-
-    fn build_filters(&mut self, filters: &Vec<FilterParam>) -> String {
-        let mut sql = String::new();
-        let it = &mut filters.iter().peekable();
-        while let Some(filter) = it.next() {
-            let value = match &filter.value {
-                FieldValue::Variable(var) => self.add_param(String::from(var), false),
-                FieldValue::Value(val) => match val {
-                    Value::Boolean(bool) => bool.to_string(),
-                    Value::Integer(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::String(s) => self.add_param(String::from(s), true),
-                    Value::Null => String::from("null"),
-                },
-            };
-            match filter.filter_type {
-                FilterType::Field => {
-                    sql.push_str(&format!(
-                        " {} {} {} ",
-                        &format!("_json_data->>'$.{}'", &filter.short_name),
-                        &filter.operation,
-                        &value
-                    ));
-                }
-                FilterType::SystemField => {
-                    sql.push_str(&format!(
-                        " {} {} {} ",
-                        &filter.name, &filter.operation, &value
-                    ));
-                }
-                FilterType::EntityField => {
-                    sql.push_str(&format!(
-                        " {}._value->>'$' {} {} ",
-                        &filter.name, &filter.operation, &value
-                    ));
-                }
-            }
-
-            if !it.peek().is_none() {
-                sql.push_str(" AND \n");
-            }
-        }
-        sql
     }
 
     pub fn build_query_params(
@@ -194,10 +105,560 @@ impl PreparedQuery {
     }
 }
 
+pub fn get_entity_query(
+    entity: &EntityQuery,
+    prepared_query: &mut PreparedQuery,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+    tab(&mut q, t);
+    q.push_str("SELECT \n");
+    let selection = get_fields(&entity, prepared_query, &entity.aliased_name(), t);
+    tab(&mut q, t);
+    q.push_str(&selection);
+    q.push_str(" as value\n");
+    tab(&mut q, t);
+    q.push_str(&format!("FROM _node {}", entity.aliased_name()));
+
+    q.push('\n');
+    tab(&mut q, t);
+    q.push_str("WHERE \n");
+    tab(&mut q, t);
+    q.push_str(&format!(
+        "{}._entity='{}' ",
+        entity.aliased_name(),
+        &entity.short_name
+    ));
+    let paging = get_paging(&entity.params, prepared_query, t);
+    q.push_str(&paging);
+
+    let filters = get_where_filters(&entity.params, prepared_query, t);
+    q.push_str(&filters);
+    if entity.is_aggregate {
+        let group_by = get_group_by(&entity.fields, t);
+        q.push_str(&group_by);
+    }
+
+    if entity.params.order_by.len() > 0 {
+        q.push('\n');
+        tab(&mut q, t);
+        let order_by = get_order(&entity.params);
+        q.push_str(&order_by);
+    }
+
+    q.push('\n');
+    tab(&mut q, t);
+    let limit = get_limit(&entity.params, prepared_query);
+    q.push_str(&limit);
+
+    q
+}
+
+pub fn get_sub_group_array(
+    entity: &EntityQuery,
+    prepared_query: &mut PreparedQuery,
+    parent_table: &str,
+    field_name: &str,
+    field_short: &str,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+
+    tab(&mut q, t);
+    q.push_str("SELECT \n");
+    tab(&mut q, t);
+    q.push_str("json_group_array(value->'$') as value \n");
+    tab(&mut q, t);
+    q.push_str("FROM (\n");
+    let sub = get_sub_entity_query(
+        entity,
+        prepared_query,
+        parent_table,
+        field_name,
+        field_short,
+        t + 1,
+        false,
+    );
+    q.push_str(&sub);
+    q.push('\n');
+    tab(&mut q, t);
+    q.push_str(")");
+    q.push('\n');
+    tab(&mut q, t);
+    q
+}
+
+pub fn get_sub_entity_query(
+    entity: &EntityQuery,
+    prepared_query: &mut PreparedQuery,
+    parent_table: &str,
+    field_name: &str,
+    field_short: &str,
+    t: usize,
+    is_unique_value: bool,
+) -> String {
+    let mut q = String::new();
+    tab(&mut q, t);
+    q.push_str("SELECT \n");
+    let selection = get_fields(&entity, prepared_query, field_name, t);
+    tab(&mut q, t);
+    q.push_str(&selection);
+    q.push_str(" as value \n");
+    tab(&mut q, t);
+
+    q.push_str(&format!(
+        "FROM _edge JOIN _node {0} on _edge.dest={0}.id AND _edge.label='{1}'",
+        field_name, field_short
+    ));
+
+    q.push('\n');
+    tab(&mut q, t);
+    q.push_str("WHERE \n");
+    tab(&mut q, t);
+    q.push_str(&format!(
+        "{}._entity='{}' AND \n",
+        field_name, &entity.short_name
+    ));
+    tab(&mut q, t);
+    q.push_str(&format!("_edge.src={}.id ", &parent_table));
+
+    let paging = get_paging(&entity.params, prepared_query, t);
+    q.push_str(&paging);
+
+    let filters = get_where_filters(&entity.params, prepared_query, t);
+    q.push_str(&filters);
+
+    if entity.is_aggregate {
+        let group_by = get_group_by(&entity.fields, t);
+        q.push_str(&group_by);
+    }
+
+    if entity.params.order_by.len() > 0 {
+        q.push('\n');
+        tab(&mut q, t);
+        let order_by = get_order(&entity.params);
+        q.push_str(&order_by);
+    }
+
+    q.push('\n');
+    tab(&mut q, t);
+    if !is_unique_value {
+        let limit = get_limit(&entity.params, prepared_query);
+        q.push_str(&limit);
+    } else {
+        q.push_str("LIMIT 1 ");
+    }
+    q
+}
+
+pub fn tab(q: &mut String, t: usize) {
+    for _ in 0..t {
+        q.push_str("    ");
+    }
+}
+
+fn js_field(field: &str) -> String {
+    format!("_json->'$.{}'", field)
+}
+
+fn get_fields(
+    entity: &EntityQuery,
+    prepared_query: &mut PreparedQuery,
+    parent_table: &str,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+    q.push_str("json_object(");
+    let it = &mut entity.fields.iter().peekable();
+    while let Some(field) = it.next() {
+        q.push('\n');
+        tab(&mut q, t);
+
+        match &field.field_type {
+            QueryFieldType::BinaryField => {
+                q.push_str(&format!(
+                    "'{}', base64_encode({})",
+                    &field.name(),
+                    &field.field.short_name,
+                ));
+            }
+
+            QueryFieldType::NamedField => {
+                if field.field.is_system {
+                    q.push_str(&format!("'{}', {}", &field.name(), &field.field.short_name,));
+                } else {
+                    q.push_str(&format!(
+                        "'{}',{}",
+                        &field.name(),
+                        js_field(&field.field.short_name,)
+                    ))
+                }
+            }
+
+            QueryFieldType::EntityQuery(field_entity, _) => {
+                q.push_str(&format!("'{}', (\n", &field.name()));
+                let query = get_sub_entity_query(
+                    &field_entity,
+                    prepared_query,
+                    parent_table,
+                    &field.name(),
+                    &field.field.short_name,
+                    t + 1,
+                    true,
+                );
+                q.push_str(&query);
+                q.push('\n');
+                tab(&mut q, t);
+                q.push_str(")->'$'");
+            }
+
+            QueryFieldType::EntityArrayQuery(field_entity, _) => {
+                q.push_str(&format!("'{}', (\n", &field.name()));
+                let query = get_sub_group_array(
+                    &field_entity,
+                    prepared_query,
+                    parent_table,
+                    &field.name(),
+                    &field.field.short_name,
+                    t + 1,
+                );
+                q.push_str(&query);
+                q.push('\n');
+                tab(&mut q, t);
+                q.push(')');
+            }
+
+            QueryFieldType::Aggregate(funx) => {
+                let func = match &funx {
+                    Function::Avg(f) => {
+                        let agg_field = if field.field.is_system {
+                            field.field.name.clone()
+                        } else {
+                            js_field(f)
+                        };
+                        format!("'{}', avg({}) ", &field.name(), agg_field)
+                    }
+                    Function::Count => format!("'{}',count(1) ", &field.name()),
+                    Function::Max(f) => {
+                        let agg_field = if field.field.is_system {
+                            field.field.name.clone()
+                        } else {
+                            js_field(f)
+                        };
+                        format!("'{}', max({}) ", &field.name(), agg_field)
+                    }
+                    Function::Min(f) => {
+                        let agg_field = if field.field.is_system {
+                            field.field.name.clone()
+                        } else {
+                            js_field(f)
+                        };
+                        format!("'{}', min({}) ", &field.name(), agg_field)
+                    }
+                    Function::Sum(f) => {
+                        let agg_field = if field.field.is_system {
+                            field.field.name.clone()
+                        } else {
+                            js_field(f)
+                        };
+                        format!("'{}', total({}) ", &field.name(), agg_field)
+                    }
+                    Function::RefBy(_, _) => unreachable!(),
+                };
+                q.push_str(&func);
+            }
+
+            QueryFieldType::Function(_) => todo!(),
+        }
+
+        if !it.peek().is_none() {
+            q.push(',');
+        }
+    }
+    q.push(')');
+    q
+}
+
+fn get_where_filters(
+    params: &EntityParams,
+    prepared_query: &mut PreparedQuery,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+
+    if params.filters.len() > 0 {
+        q.push_str("AND ");
+        q.push('\n');
+        tab(&mut q, t);
+        let it = &mut params.filters.iter().peekable();
+        while let Some(filter) = it.next() {
+            let mut operation = filter.operation.clone();
+
+            let value = match &filter.value {
+                FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+                FieldValue::Value(val) => match val {
+                    Value::Boolean(bool) => bool.to_string(),
+                    Value::Integer(i) => i.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::String(s) => prepared_query.add_param(String::from(s), true),
+                    Value::Null => {
+                        match filter.operation.as_str() {
+                            "=" => operation = String::from("is"),
+                            "!=" => operation = String::from("is not"),
+                            _ => {}
+                        }
+                        String::from("null")
+                    }
+                },
+            };
+
+            if filter.field.is_system {
+                q.push_str(&format!("{} {} {}", &filter.name, operation, &value));
+            } else {
+                match filter.field.field_type {
+                    FieldType::Array(_) => {
+                        q.push_str(&format!(
+                            "value->>'$.{}[0]' {} {}",
+                            &filter.name, operation, &value
+                        ));
+                    }
+
+                    FieldType::Entity(_) => {
+                        q.push_str(&format!(
+                            "value->>'$.{}' {} {}",
+                            &filter.name, operation, &value
+                        ));
+                    }
+                    _ => {
+                        if filter.is_selected {
+                            q.push_str(&format!(
+                                "value->>'$.{}' {} {}",
+                                &filter.name, operation, &value
+                            ));
+                        } else {
+                            q.push_str(&format!(
+                                "_json->>'$.{}' {} {}",
+                                &filter.field.short_name, operation, &value
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if !it.peek().is_none() {
+                q.push_str(" AND\n");
+                tab(&mut q, t);
+            }
+        }
+    }
+    q
+}
+pub fn get_order(params: &EntityParams) -> String {
+    let mut query = String::new();
+
+    if !params.order_by.is_empty() {
+        query.push_str("ORDER BY ");
+
+        let it = &mut params.order_by.iter().peekable();
+        while let Some(ord) = it.next() {
+            let direction = match ord.direction {
+                Direction::Asc => String::from("asc"),
+                Direction::Desc => String::from("desc"),
+            };
+            if ord.is_selected {
+                query.push_str(&format!("value->>'$.{}' {} ", &ord.name, direction));
+            } else if ord.field.is_system {
+                query.push_str(&format!("{} {} ", &ord.name, direction));
+            } else {
+                query.push_str(&format!(
+                    "_json->>'$.{}' {} ",
+                    &ord.field.short_name, direction
+                ));
+            }
+
+            if !it.peek().is_none() {
+                query.push_str(", ");
+            }
+        }
+    }
+
+    query
+}
+
+pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery, t: usize) -> String {
+    let mut q = String::new();
+
+    let mut before = true;
+    let paging = if !params.before.is_empty() {
+        &params.before
+    } else {
+        before = false;
+        &params.after
+    };
+
+    if paging.len() > 0 {
+        q.push_str(" AND \n");
+        tab(&mut q, t);
+        q.push('(');
+    }
+    for i in 0..paging.len() {
+        if paging.len() > 1 {
+            q.push('(');
+        }
+
+        for j in 0..i {
+            let ord = &params.order_by[j];
+            let value = &paging[j];
+            let value = match value {
+                FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+                FieldValue::Value(val) => match val {
+                    Value::Boolean(bool) => bool.to_string(),
+                    Value::Integer(i) => i.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::String(s) => prepared_query.add_param(String::from(s), true),
+                    Value::Null => String::from("null"),
+                },
+            };
+
+            if ord.is_selected {
+                q.push_str(&format!("value->>'$.{}' = {}", &ord.name, value));
+            } else if ord.field.is_system {
+                q.push_str(&format!("{} = {}", &ord.name, value));
+            } else {
+                q.push_str(&format!(
+                    "_json->>'$.{}' = {}",
+                    &ord.field.short_name, value
+                ));
+            }
+
+            q.push_str(" AND ");
+        }
+
+        let ord = &params.order_by[i];
+        let value = &paging[i];
+        let value = match value {
+            FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+            FieldValue::Value(val) => match val {
+                Value::Boolean(bool) => bool.to_string(),
+                Value::Integer(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::String(s) => prepared_query.add_param(String::from(s), true),
+                Value::Null => String::from("null"),
+            },
+        };
+
+        // asc 12345  before <
+        // asc 12345  after >
+        // desc 54321  before >
+        // asc 12345  after <
+        let ope = match ord.direction {
+            Direction::Asc => {
+                if before {
+                    '<'
+                } else {
+                    '>'
+                }
+            }
+            Direction::Desc => {
+                if before {
+                    '>'
+                } else {
+                    '<'
+                }
+            }
+        };
+
+        if ord.is_selected {
+            q.push_str(&format!("value->>'$.{}' {} {}", &ord.name, ope, value));
+        } else if ord.field.is_system {
+            q.push_str(&format!("{} {} {}", &ord.name, ope, value));
+        } else {
+            q.push_str(&format!(
+                "_json->>'$.{}' {} {}",
+                &ord.field.short_name, ope, value
+            ));
+        }
+
+        if paging.len() > 1 {
+            q.push(')');
+        }
+
+        if i < paging.len() - 1 {
+            q.push_str(" OR ")
+        }
+    }
+    if paging.len() > 0 {
+        q.push_str(") ");
+    }
+
+    q
+}
+
+pub fn get_limit(params: &EntityParams, prepared_query: &mut PreparedQuery) -> String {
+    let mut query = String::new();
+
+    match &params.first {
+        FieldValue::Variable(var) => {
+            let vars = prepared_query.add_param(String::from(var), false);
+            query.push_str(&format!("LIMIT {}", vars));
+        }
+        FieldValue::Value(val) => {
+            let val = val.as_i64().unwrap();
+            if val != 0 {
+                query.push_str(&format!("LIMIT {}", val));
+            }
+        }
+    }
+
+    if let Some(skip) = &params.skip {
+        match skip {
+            FieldValue::Variable(var) => {
+                let vars = prepared_query.add_param(String::from(var), false);
+                query.push_str(&format!(" OFFSET {}", vars));
+            }
+            FieldValue::Value(val) => {
+                let val = val.as_i64().unwrap();
+                if val != 0 {
+                    query.push_str(&format!(" OFFSET {}", val));
+                }
+            }
+        }
+    }
+    query
+}
+
+fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
+    let mut q = String::new();
+
+    let mut v = Vec::new();
+
+    for field in fields {
+        match &field.field_type {
+            QueryFieldType::NamedField => v.push(field.field.short_name.clone()),
+            _ => {}
+        }
+    }
+    if v.len() > 0 {
+        q.push('\n');
+        tab(&mut q, t);
+        q.push_str("GROUP BY ")
+    }
+
+    let it = &mut v.iter().peekable();
+    while let Some(field) = it.next() {
+        q.push_str(&format!("_json->>'$.{}'", field));
+        if !it.peek().is_none() {
+            q.push(',');
+        }
+    }
+
+    q
+}
+
 #[derive(Debug)]
 pub struct Queries {
-    name: String,
-    sql_queries: Vec<PreparedQuery>,
+    pub name: String,
+    pub sql_queries: Vec<PreparedQuery>,
 }
 impl Queries {
     pub fn build(parser: &QueryParser) -> Result<Self> {
@@ -213,9 +674,9 @@ impl Queries {
 }
 
 pub struct Query {
-    parameters: Parameters,
-    parser: Arc<QueryParser>,
-    sql_queries: Queries,
+    pub parameters: Parameters,
+    pub parser: Arc<QueryParser>,
+    pub sql_queries: Queries,
 }
 impl Readable for Query {
     fn read(&self, conn: &rusqlite::Connection) -> Result<super::graph_database::QueryResult> {
@@ -251,489 +712,5 @@ impl Readable for Query {
 
         result_string.push('}');
         Ok(QueryResult::String(result_string))
-    }
-}
-
-fn build_default_fields(fields: &Vec<QueryField>) -> String {
-    let mut query = String::new();
-    query.push_str("json_object(");
-    let it = &mut fields.iter().peekable();
-    while let Some(field) = it.next() {
-        let field_tuple = if field.field.is_system {
-            match field.field_type {
-                QueryFieldType::BinaryField => {
-                    format!(
-                        "'{}', base64_encode({})",
-                        &field.name(),
-                        &field.field.short_name,
-                    )
-                }
-                _ => format!("'{}', {}", &field.name(), &field.field.short_name,),
-            }
-        } else {
-            match field.field_type {
-                QueryFieldType::NamedField => {
-                    format!("'{}',{}", &field.name(), js_field(&field.field.short_name,))
-                }
-                QueryFieldType::BinaryField => format!(
-                    "'{}',base64_encode({}) ",
-                    &field.name(),
-                    js_field(&field.field.short_name,)
-                ),
-                QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _) => {
-                    format!("'{}',{}._value->'$' ", &field.name(), &field.name())
-                }
-                QueryFieldType::Function(_) | QueryFieldType::Aggregate(_) => todo!(),
-            }
-        };
-
-        query.push_str(&field_tuple);
-        if !it.peek().is_none() {
-            query.push(',');
-        }
-    }
-    query.push(')');
-    query
-}
-
-fn js_field(field: &str) -> String {
-    format!("_json_data->'$.{}'", field)
-}
-
-fn aggregate_tbl(entity: &str) -> String {
-    format!("_agg_{}", entity)
-}
-
-fn build_aggregate_fields(fields: &Vec<QueryField>, inner_table: &str) -> String {
-    let mut query = String::new();
-    query.push_str("json_object(");
-    let it = &mut fields.iter().peekable();
-    while let Some(field) = it.next() {
-        let field_tuple = match field.field_type {
-            QueryFieldType::NamedField => {
-                format!("'{}',{}.{}", &field.name(), inner_table, &field.name())
-            }
-            QueryFieldType::BinaryField => format!(
-                "'{}',base64_encode({}.{}) ",
-                &field.name(),
-                inner_table,
-                &field.name()
-            ),
-            QueryFieldType::Function(_) => unreachable!(),
-            _ => unreachable!(),
-        };
-
-        query.push_str(&field_tuple);
-        if !it.peek().is_none() {
-            query.push(',');
-        }
-    }
-    query.push(')');
-    query
-}
-
-fn build_inner_aggregate_fields(fields: &Vec<QueryField>) -> String {
-    let mut query = String::new();
-    query.push_str("json_object(");
-    let it = &mut fields.iter().peekable();
-    while let Some(field) = it.next() {
-        let field_tuple = match &field.field_type {
-            QueryFieldType::NamedField => {
-                format!("{} as {}", &field.name(), &field.name())
-            }
-            QueryFieldType::BinaryField => {
-                format!("base64_encode({}) as {}", &field.name(), &field.name(),)
-            }
-
-            QueryFieldType::Function(funx) => match &funx {
-                Function::Avg(f) => {
-                    format!("avg({}) as {}", js_field(f), &field.name())
-                }
-                Function::Count => format!("count(1) as {}", &field.name()),
-                Function::Max(f) => {
-                    format!("max({}) as {}", js_field(f), &field.name())
-                }
-                Function::Min(f) => {
-                    format!("min({}) as {}", js_field(f), &field.name())
-                }
-                Function::Sum(f) => {
-                    format!("sum({}) as {}", js_field(f), &field.name())
-                }
-                Function::RefBy(_, _) => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
-
-        query.push_str(&field_tuple);
-        if !it.peek().is_none() {
-            query.push(',');
-        }
-    }
-    query.push(')');
-    query
-}
-
-fn build_entity_table(entity: &EntityQuery, field_name: &str, field_short: &str) -> String {
-    let mut query = String::new();
-    query.push_str("( SELECT _edge.src,  \n");
-    query.push_str("    json_group_array(");
-    if entity.is_aggregate {
-        query.push_str(&build_aggregate_fields(
-            &entity.fields,
-            &aggregate_tbl(&entity.aliased_name()),
-        ));
-    } else {
-        query.push_str(&build_default_fields(&entity.fields));
-    }
-    query.push_str(") as _value");
-    query.push_str(&format!(
-        "\n   FROM _edge JOIN _node on _edge.dest=_node.id AND _edge.label = '{}' AND _node._entity ='{}'\n",
-        field_short,
-        &entity.short_name
-    ));
-    for field in &entity.fields {
-        match &field.field_type {
-            QueryFieldType::EntityQuery(e, nullable) => {
-                if *nullable {
-                    query.push_str(" LEFT ");
-                }
-                query.push_str(" JOIN ");
-                query.push_str(&build_entity_table(
-                    &*e,
-                    &field.name(),
-                    &field.field.short_name,
-                ));
-                query.push_str(&format!(" ON  _node.id = {}.src \n", &field.name()));
-            }
-            QueryFieldType::EntityArrayQuery(e, nullable) => {
-                if *nullable {
-                    query.push_str(" LEFT ");
-                }
-                query.push_str(" JOIN ");
-                query.push_str(&build_entity_table(
-                    &*e,
-                    &field.name(),
-                    &field.field.short_name,
-                ));
-                query.push_str(&format!(" ON  _node.id = {}.src \n", &field.name()));
-            }
-            _ => {}
-        }
-    }
-
-    query.push_str(" GROUP BY _edge.src ");
-    query.push_str(&format!(" ) as {} ", field_name));
-    query
-}
-
-#[cfg(test)]
-mod tests {
-
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
-
-    use rusqlite::Connection;
-
-    use crate::{
-        database::{
-            graph_database::{prepare_connection, Writeable},
-            mutation_query::PrepareMutation,
-            query_language::{data_model::DataModel, mutation_parser::MutationParser, Value},
-        },
-        Ed25519SigningKey, SigningKey,
-    };
-
-    use super::*;
-
-    const DATA_PATH: &str = "test/data/database/query_builder";
-    fn init_database_path(file: &str) -> Result<PathBuf> {
-        let mut path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path)?;
-        path.push(file);
-        if Path::exists(&path) {
-            fs::remove_file(&path)?;
-        }
-        Ok(path)
-    }
-
-    #[test]
-    fn simple_scalar() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String ,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean, 
-                some_nullable : String nullable,
-            }
-        ",
-        )
-        .unwrap();
-
-        let mutation = MutationParser::parse(
-            r#"
-            mutation mutmut {
-                Person {
-                    name : $name
-                    age: $age
-                    weight: $weight
-                    is_human : $human
-                    some_nullable : $null
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-
-        let mut param = Parameters::new();
-        param
-            .add(String::from("name"), Value::String(String::from("John")))
-            .unwrap();
-        param.add(String::from("age"), Value::Integer(100)).unwrap();
-        param
-            .add(String::from("weight"), Value::Float(42.2))
-            .unwrap();
-        param
-            .add(String::from("human"), Value::Boolean(true))
-            .unwrap();
-        param.add(String::from("null"), Value::Null).unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
-
-        let to_insert = prep_mut.read(&conn).unwrap();
-
-        if let QueryResult::MutationQuery(mutation_query) = to_insert {
-            mutation_query.write(&conn).unwrap();
-        }
-
-        let query_parser = QueryParser::parse(
-            "
-            query sample{
-                Person {
-                    name
-                    age
-                    weight
-                    is_human
-                    some_nullable
-                }
-                same_person: Person {
-                    name
-                    age
-                    weight
-                    is_human
-                    some_nullable
-                }
-            }
-        ",
-            &data_model,
-        )
-        .unwrap();
-
-        let query = Queries::build(&query_parser).unwrap();
-        let param = Parameters::new();
-        let sql = Query {
-            parameters: param,
-            parser: Arc::new(query_parser),
-            sql_queries: query,
-        };
-        let result = sql.read(&conn).unwrap();
-
-        let expected = "{\n\"Person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}],\n\"same_person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}]\n}";
-        //println!("{:#?}", result.as_string().unwrap());
-        assert_eq!(expected, result.as_string().unwrap());
-    }
-
-    #[test]
-    fn system() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String
-            }
-        ",
-        )
-        .unwrap();
-
-        let mutation = MutationParser::parse(
-            r#"
-            mutation mutmut {
-                Person {
-                    name : "hello"
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-
-        let param = Parameters::new();
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
-        let signing_key = Ed25519SigningKey::new();
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-
-        let mutation_query = to_insert.as_mutation_query().unwrap();
-        mutation_query.sign_all(&signing_key).unwrap();
-        mutation_query.write(&conn).unwrap();
-
-        let query_parser = QueryParser::parse(
-            "
-            query sample{
-                Person {
-                    id
-                    cdate
-                    mdate
-                    _entity
-                    _json_data
-                    _binary_data
-                    _pub_key
-                    _signature
-                }
-                
-            }
-        ",
-            &data_model,
-        )
-        .unwrap();
-
-        let query = Queries::build(&query_parser).unwrap();
-        let param = Parameters::new();
-        let sql = Query {
-            parameters: param,
-            parser: Arc::new(query_parser),
-            sql_queries: query,
-        };
-        let result = sql.read(&conn).unwrap();
-        //println!("{:#?}", result.as_string().unwrap());
-        println!("{}", result.as_string().unwrap());
-    }
-
-    #[test]
-    fn entity() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String ,
-                parents : [Person] nullable,
-                pet: Pet nullable,
-                siblings : [Person] nullable,
-            }
-
-            Pet {
-                name : String
-            }
-        ",
-        )
-        .unwrap();
-
-        let mutation = MutationParser::parse(
-            r#"
-            mutation mutmut {
-                Person {
-                    name : $name
-                    parents : [
-                        {name : $mother} 
-                        ,{
-                            name:$father
-                            pet:{ name:"kiki" }
-                        }
-                    ]
-                    pet: {name:$pet_name}
-                    siblings:[{name:"Wallis"},{ name : $sibling }]
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-
-        let mut param = Parameters::new();
-        param
-            .add(String::from("name"), Value::String(String::from("John")))
-            .unwrap();
-        param
-            .add(String::from("mother"), Value::String(String::from("Hello")))
-            .unwrap();
-        param
-            .add(String::from("father"), Value::String(String::from("World")))
-            .unwrap();
-        param
-            .add(
-                String::from("pet_name"),
-                Value::String(String::from("Truffle")),
-            )
-            .unwrap();
-        param
-            .add(
-                String::from("sibling"),
-                Value::String(String::from("Futuna")),
-            )
-            .unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
-
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-
-        let mutation_query = to_insert.as_mutation_query().unwrap();
-        mutation_query.write(&conn).unwrap();
-
-        let query_parser = QueryParser::parse(
-            r#"
-            query sample{
-                Person (remps_pets is not NULL, 
-                    id != "zSRIyMbf70V999wyC0KlhQ", 
-                    name = "John"
-                    ) {
-                    name
-                    parents {
-                        name
-                    }
-                    pet {name}
-                    remps_pets : parents {
-                        name
-                        pet {name}
-                    }
-                }
-                
-            }
-        "#,
-            &data_model,
-        )
-        .unwrap();
-
-        let query = Queries::build(&query_parser).unwrap();
-        for vals in &query.sql_queries {
-            println!("{}", vals.sql_query);
-        }
-
-        let param = Parameters::new();
-        let sql = Query {
-            parameters: param,
-            parser: Arc::new(query_parser),
-            sql_queries: query,
-        };
-        let result = sql.read(&conn).unwrap();
-        //println!("{:#?}", result.as_string().unwrap());
-        //println!("{}", result.as_string().unwrap());
-        //let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"},{\"name\":\"Hello\"}],\"pet\":[{\"name\":\"Truffle\"}],\"remps_pets\":[{\"name\":\"World\",\"pet\":[{\"name\":\"kiki\"}]},{\"name\":\"Hello\",\"pet\":null}]}]\n}";
-        //assert_eq!(expected, result.as_string().unwrap());
     }
 }

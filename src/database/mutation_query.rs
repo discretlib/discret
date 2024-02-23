@@ -64,7 +64,7 @@ impl Default for NodeInsert {
     }
 }
 
-const NODE_INSERT_QUERY: &'static str = "SELECT id, cdate, mdate, _entity, _json_data, _binary_data, _pub_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
+const NODE_INSERT_QUERY: &'static str = "SELECT id, cdate, mdate, _entity, _json, _binary, _pub_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
 impl FromRow for NodeInsert {
     fn from_row() -> super::graph_database::MappingFn<Self> {
         |row| {
@@ -79,8 +79,8 @@ impl FromRow for NodeInsert {
                     cdate: row.get(1)?,
                     mdate: row.get(2)?,
                     _entity: row.get(3)?,
-                    _json_data: row.get(4)?,
-                    _binary_data: row.get(5)?,
+                    _json: row.get(4)?,
+                    _binary: row.get(5)?,
                     _pub_key: row.get(6)?,
                     _signature: row.get(7)?,
                 }),
@@ -91,7 +91,7 @@ impl FromRow for NodeInsert {
 
 #[derive(Debug)]
 pub struct MutationQuery {
-    insert_enties: Vec<InsertEntity>,
+    pub insert_enties: Vec<InsertEntity>,
 }
 impl Writeable for MutationQuery {
     fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error> {
@@ -196,7 +196,7 @@ impl InsertEntity {
             serde_json::Value::String(base64_encode(&node.id)),
         );
         if let Some(node) = &node.node {
-            if let Some(json_string) = &node._json_data {
+            if let Some(json_string) = &node._json {
                 let json: serde_json::Value = serde_json::from_str(json_string)?;
                 if let serde_json::Value::Object(obj) = json {
                     for field_tuple in &mutation.fields {
@@ -340,7 +340,7 @@ impl PrepareMutation {
         };
 
         if let Some(node) = &mut node_insert.node {
-            let mut json: serde_json::Value = match &node._json_data {
+            let mut json: serde_json::Value = match &node._json {
                 Some(e) => serde_json::from_str(e)?,
                 None => serde_json::Value::Object(serde_json::Map::new()),
             };
@@ -456,7 +456,7 @@ impl PrepareMutation {
                 node_insert.node = None;
             } else {
                 let json_data = serde_json::to_string(&json)?;
-                node._json_data = Some(json_data);
+                node._json = Some(json_data);
                 node.mdate = now();
             }
             //let mut node_opt =
