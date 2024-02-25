@@ -79,8 +79,10 @@ pub enum VariableType {
     Boolean(bool),
     Float(bool),
     Base64(bool),
+    Json(bool),
     Integer(bool),
     String(bool),
+    Invalid,
 }
 impl fmt::Display for VariableType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -97,6 +99,7 @@ pub enum FieldType {
     Base64,
     Integer,
     String,
+    Json,
 }
 impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -166,7 +169,7 @@ pub enum Error {
     #[error("'{0}' is allready defined as a '{1}' and is conflicting with a field that requires an '{2}' ")]
     ConflictingVariableType(String, String, String),
 
-    #[error("Field {0} requires type '{1}' and is used with type '{2}' ")]
+    #[error("Field {0} requires type '{1}' and but is used with type '{2}' ")]
     InvalidFieldType(String, String, String),
 
     #[error("'{0}' is not nullable")]
@@ -214,6 +217,9 @@ pub enum Error {
     #[error("'{0}' is not a base64 value")]
     InvalidBase64(String),
 
+    #[error("'{0}' is not valid JSON value")]
+    InvalidJson(String),
+
     #[error("'{0}' is not a {1}. value:{2}")]
     ConflictingParameterType(String, String, String),
 
@@ -225,6 +231,9 @@ pub enum Error {
 
     #[error("name {0} cannot start with '_'. Names starting with '_' are reserved for the system")]
     InvalidName(String),
+
+    #[error(" '{0}' is a reserved keyword")]
+    ReservedKeyword(String),
 
     #[error(
         "{0}.{1} is required to create the entity. It is not nullable and has no default value"

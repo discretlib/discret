@@ -6,22 +6,23 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
 deprecated = @{ ^"@deprecated" }
+comma      =  { "," }
 
 deprecable_identifier = { deprecated? ~ identifier }
 
 datamodel = { SOI ~ entity* ~ EOI }
-entity    = { deprecable_identifier ~ "{" ~ entry ~ ("," ~ entry)* ~ ","? ~ "}" }
+entity    = { deprecable_identifier ~ "{" ~ entry ~ (comma ~ entry)* ~ comma? ~ "}" }
 
 nullable      = { ^"nullable" }
 default       = { ^"default" ~ default_value }
 default_value = { float | integer | boolean | string }
-scalar_type   = { ^"Integer" | ^"Float" | ^"Boolean" | ^"String" }
+scalar_type   = { ^"Integer" | ^"Float" | ^"Boolean" | ^"String" | ^"Base64" | ^"Json" }
 scalar_field  = { scalar_type ~ (nullable | default)? }
 entity_array  = { "[" ~ identifier ~ "]" ~ nullable? }
 entity_field  = { identifier ~ nullable? }
 field         = { deprecable_identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
 
-index = { ^"index" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
+index = { ^"index" ~ "(" ~ identifier ~ (comma ~ identifier)* ~ comma? ~ ")" }
 entry = { index | field }
 
 string = ${ "\"" ~ inner ~ "\"" }

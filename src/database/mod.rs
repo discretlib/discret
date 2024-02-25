@@ -43,7 +43,7 @@ pub enum Error {
     AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error("{0}")]
-    TokioSendError(String),
+    DatabaseSendError(String),
 
     #[error(
         "id length must be between {} and {} bytes",

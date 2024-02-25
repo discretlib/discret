@@ -15,6 +15,7 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
+comma      =  { "," }
 
 mutation = { SOI ~ "mutation" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
@@ -26,7 +27,7 @@ field = { identifier ~ ":" ~ value }
 value = { variable | entity_ref | entity_array | string | float | integer | boolean | null }
 
 entity_ref   = { "{" ~ field+ ~ "}" }
-entity_array = { "[" ~ entity_ref ~ ("," ~ entity_ref)* ~ ","? ~ "]" }
+entity_array = { "[" ~ entity_ref ~ (comma ~ entity_ref)* ~ comma? ~ "]" }
 
 string = ${ "\"" ~ inner ~ "\"" }
 inner  = @{ char* }

@@ -377,19 +377,26 @@ impl MutationParser {
         let mut entities = vec![];
         let entity_pairs = content_pair.into_inner();
         let mut depth = 0;
+
         for entity_pair in entity_pairs {
-            let mut entity = EntityMutation::new();
-            entity.name = name.clone();
-            let var_pair = entity_pair.into_inner();
-            let adepth =
-                Self::parse_entity_internals(&mut entity, data_model, var_pair, variables)?;
-            if adepth > depth {
-                depth = adepth;
+            match entity_pair.as_rule() {
+                Rule::entity_ref => {
+                    let mut entity = EntityMutation::new();
+                    entity.name = name.clone();
+                    let var_pair = entity_pair.into_inner();
+                    let adepth =
+                        Self::parse_entity_internals(&mut entity, data_model, var_pair, variables)?;
+                    if adepth > depth {
+                        depth = adepth;
+                    }
+                    let entity_model = data_model.get_entity(&entity.name)?;
+                    entity.short_name = entity_model.short_name.clone();
+                    Self::fill_not_nullable(&mut entity, entity_model)?;
+                    entities.push(entity)
+                }
+                Rule::comma => {}
+                _ => unreachable!(),
             }
-            let entity_model = data_model.get_entity(&entity.name)?;
-            entity.short_name = entity_model.short_name.clone();
-            Self::fill_not_nullable(&mut entity, entity_model)?;
-            entities.push(entity)
         }
         mutation_field.field_value = MutationFieldValue::Array(entities);
         Ok(depth + 1)
@@ -519,6 +526,15 @@ impl MutationParser {
                 mutation_field.field_value =
                     MutationFieldValue::Value(Value::String(value.to_string()));
             }
+            FieldType::Json => {
+                let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                    serde_json::from_str(value);
+                if v.is_err() {
+                    return Err(Error::InvalidJson(value.to_string()));
+                }
+                mutation_field.field_value =
+                    MutationFieldValue::Value(Value::String(value.to_string()));
+            }
             _ => {
                 return Err(Error::InvalidFieldType(
                     mutation_field.name.to_string(),
@@ -569,7 +585,7 @@ impl MutationParser {
         let var = &content_pair.as_str()[1..];
         let var_type = field.get_variable_type();
 
-        variables.add(var.to_string(), var_type)?;
+        variables.add(var, var_type)?;
         mutation_field.field_value = MutationFieldValue::Variable(var.to_string());
 
         Ok(())
@@ -583,8 +599,10 @@ mod tests {
     use super::*;
     #[test]
     fn parse_valid_mutation() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String ,
@@ -600,8 +618,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _mutation = MutationParser::parse(
             r#"
@@ -636,8 +654,10 @@ mod tests {
 
     #[test]
     fn scalar_field() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String nullable,
                 surname : String nullable,
@@ -647,8 +667,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _mutation = MutationParser::parse(
             r#"
@@ -758,15 +778,17 @@ mod tests {
 
     #[test]
     fn duplicated_field() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _mutation = MutationParser::parse(
             r#"
@@ -784,15 +806,17 @@ mod tests {
 
     #[test]
     fn alias() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _mutation = MutationParser::parse(
             r#"
@@ -863,8 +887,10 @@ mod tests {
 
     #[test]
     fn nullables() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String nullable,
@@ -874,8 +900,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _mutation = MutationParser::parse(
             r#"
@@ -930,8 +956,10 @@ mod tests {
 
     #[test]
     fn non_scalar_field() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name: String,
                 parents : [Person] nullable,
@@ -939,8 +967,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -976,8 +1004,10 @@ mod tests {
 
     #[test]
     fn depth() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name: String,
                 parents : [Person] nullable,
@@ -985,8 +1015,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -1038,5 +1068,107 @@ mod tests {
         .unwrap();
         let depth = mutation.mutations[0].depth;
         assert_eq!(8, depth);
+    }
+
+    #[test]
+    fn json() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name: Json,
+            }
+        
+        ",
+            )
+            .unwrap();
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid");
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "invalid JSON"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("invalid JSON");
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "[1,2,3,4]"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid JSON");
+    }
+
+    #[test]
+    fn base64() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name: Base64,
+            }
+        
+        ",
+            )
+            .unwrap();
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid");
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "invalid BASE 64%$"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("invalid Base64");
+
+        let _ = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "JVBQS0pP"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid Base64");
     }
 }

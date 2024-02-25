@@ -1,5 +1,5 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-comma      = _{ "," }
+comma      =  { "," }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
@@ -11,14 +11,14 @@ entity      = { entity_name ~ entity_param? ~ "{" ~ field+ ~ "}" }
 entity_name = { identifier ~ (":" ~ identifier)? }
 
 named_field = { identifier ~ (":" ~ identifier)? }
-field       = { entity | function | named_field }
+field       = { entity | json_field | function | named_field }
 
 entity_param = {
     "(" ~ ")"
   | "(" ~ param ~ (comma ~ param)* ~ comma? ~ ")"
 }
 
-param = { search | order_by | first | skip | before | after | filter }
+param = { search | order_by | first | skip | before | after | json_filter | filter }
 
 search       = { "search" ~ "(" ~ search_value ~ ")" }
 search_value = { variable | string }
@@ -35,9 +35,12 @@ before       = { "before" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ 
 after        = { "after" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ ")" }
 before_value = { variable | float | string | integer | boolean }
 
-filter       = {
+filter = {
     identifier ~ (gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value
 }
+
+json_filter = { json_selector ~ (gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value }
+
 filter_value = { variable | float | string | integer | boolean | null }
 
 eq    = { "=" }
@@ -69,11 +72,17 @@ unsigned_int = @{ ASCII_DIGIT+ }
 null = { ^"null" }
 
 function      = { identifier ~ ":" ~ function_list }
-function_list = { avg_fn | count_fn | max_fn | min_fn | sum_fn | ref_by_fn }
+function_list = { avg_fn | count_fn | max_fn | min_fn | sum_fn }
 
-ref_by_fn = { "ref_by" ~ "(" ~ identifier ~ "," ~ identifier ~ entity_param? ~ "{" ~ field+ ~ "}" ~ ")" }
-avg_fn    = { "avg" ~ "(" ~ identifier ~ ")" }
-count_fn  = { "count" ~ "(" ~ ")" }
-max_fn    = { "max" ~ "(" ~ identifier ~ ")" }
-min_fn    = { "min" ~ "(" ~ identifier ~ ")" }
-sum_fn    = { "sum" ~ "(" ~ identifier ~ ")" }
+avg_fn   = { "avg" ~ "(" ~ identifier ~ ")" }
+count_fn = { "count" ~ "(" ~ ")" }
+max_fn   = { "max" ~ "(" ~ identifier ~ ")" }
+min_fn   = { "min" ~ "(" ~ identifier ~ ")" }
+sum_fn   = { "sum" ~ "(" ~ identifier ~ ")" }
+
+json_field    =  { identifier ~ ":" ~ json_selector }
+json_selector = ${ identifier ~ ("->") ~ (json_object_selector | json_array_selector) }
+
+json_array_selector  = @{ unsigned_int }
+json_object_selector = @{ "$" ~ json_object_query* }
+json_object_query    = @{ "." ~ ((identifier ~ "[" ~ unsigned_int ~ "]") | identifier) }

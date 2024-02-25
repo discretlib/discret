@@ -1,72 +1,70 @@
-use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row};
+use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
 
 use std::{path::PathBuf, thread, time::SystemTime, usize};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{base64_decode, base64_encode};
 
-use super::{edge::Edge, mutation_query::MutationQuery, node::Node, Error, Result};
+use super::{edge::Edge, node::Node, Error, Result};
 use rand::{rngs::OsRng, RngCore};
 
-pub type MappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
+pub type RowMappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
+pub type QueryFn = Box<dyn FnOnce(&Connection) + Send + 'static>;
+pub type WriteReplyFn = Box<dyn FnOnce(Option<Error>) + Send + 'static>;
 
-pub trait FromRow {
-    fn from_row() -> MappingFn<Self>;
-}
+// pub trait Readable {
+//     fn read(&self, conn: &Connection) -> Result<QueryResult>;
+// }
 
-pub trait Readable {
-    fn read(&self, conn: &Connection) -> Result<QueryResult>;
-}
-
-pub struct ReadQuery {
-    pub stmt: Box<dyn Readable + Send>,
-    pub reply: oneshot::Sender<Result<QueryResult>>,
-}
+// pub struct ReadQuery {
+//     pub stmt: Box<dyn Readable + Send>,
+//     pub reply: oneshot::Sender<Result<QueryResult>>,
+// }
 
 /// Trait use to write content in the database
 ///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
 ///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
 pub trait Writeable {
-    fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error>;
+    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error>;
 }
 
 pub struct WriteQuery {
     pub stmt: Box<dyn Writeable + Send>,
-    pub reply: oneshot::Sender<Result<QueryResult>>,
+    pub reply: WriteReplyFn,
 }
 
-#[derive(Debug)]
-pub enum QueryResult {
-    MutationQuery(MutationQuery),
-    String(String),
-    Strings(Vec<String>),
-    None,
-}
-impl QueryResult {
-    pub fn as_strings(&self) -> Option<&Vec<String>> {
-        if let Self::Strings(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
+// #[derive(Debug)]
+// pub enum QueryResult {
+//     MutationQuery(MutationQuery),
+//     String(String),
+//     Strings(Vec<String>),
+//     None,
+// }
+// impl QueryResult {
+//     pub fn as_strings(&self) -> Option<&Vec<String>> {
+//         if let Self::Strings(e) = self {
+//             Some(e)
+//         } else {
+//             None
+//         }
+//     }
 
-    pub fn as_str(&self) -> Option<&str> {
-        if let Self::String(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
+//     pub fn as_str(&self) -> Option<&str> {
+//         if let Self::String(e) = self {
+//             Some(e)
+//         } else {
+//             None
+//         }
+//     }
 
-    pub fn as_mutation_query(&mut self) -> Option<&mut MutationQuery> {
-        if let Self::MutationQuery(e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
-}
+//     pub fn as_mutation_query(&mut self) -> Option<&mut MutationQuery> {
+//         if let Self::MutationQuery(e) = self {
+//             Some(e)
+//         } else {
+//             None
+//         }
+//     }
+// }
 
 //Create a sqlcipher database connection
 //
@@ -243,7 +241,7 @@ impl GraphDatabase {
 //
 #[derive(Clone)]
 pub struct DatabaseReader {
-    sender: flume::Sender<ReadQuery>,
+    sender: flume::Sender<QueryFn>,
 }
 impl DatabaseReader {
     pub fn new(
@@ -253,7 +251,7 @@ impl DatabaseReader {
         enable_memory_security: bool,
         parallelism: usize,
     ) -> Result<Self> {
-        let (sender, receiver) = flume::bounded::<ReadQuery>(100);
+        let (sender, receiver) = flume::bounded::<QueryFn>(100);
         for _i in 0..parallelism {
             let conn =
                 create_connection(path, secret, cache_size_in_kb, enable_memory_security).unwrap();
@@ -262,42 +260,83 @@ impl DatabaseReader {
             let local_receiver = receiver.clone();
             thread::spawn(move || {
                 while let Ok(q) = local_receiver.recv() {
-                    if let Err(_) = q.reply.send(q.stmt.read(&conn)) {
-                        println!("Reply channel is allready closed");
-                    }
+                    q(&conn);
                 }
             });
         }
         Ok(Self { sender })
     }
 
-    pub async fn query_async(&self, stmt: Box<dyn Readable + Send>) -> Result<QueryResult> {
-        let (reply, receive_response) = oneshot::channel::<Result<QueryResult>>();
-        let query = ReadQuery { stmt, reply };
+    pub fn send_blocking(&self, query: QueryFn) -> Result<()> {
+        self.sender
+            .send(query)
+            .map_err(|e| Error::DatabaseSendError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn send_async(&self, query: QueryFn) -> Result<()> {
         self.sender
             .send_async(query)
             .await
-            .map_err(|e| Error::TokioSendError(e.to_string()))?;
-
-        receive_response.await.map_err(Error::from)?
+            .map_err(|e| Error::DatabaseSendError(e.to_string()))?;
+        Ok(())
     }
 
-    pub fn query_blocking(&self, stmt: Box<dyn Readable + Send>) -> Result<QueryResult> {
-        let (reply, receive_response) = oneshot::channel::<Result<QueryResult>>();
-        let query = ReadQuery { stmt, reply };
-        self.sender
-            .send(query)
-            .map_err(|e| Error::TokioSendError(e.to_string()))?;
+    pub fn query_blocking<T: Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Box<dyn ToSql + Sync + Send>>,
+        mapping: RowMappingFn<T>,
+    ) -> Result<Vec<T>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
 
-        receive_response.blocking_recv().map_err(Error::from)?
+        self.send_blocking(Box::new(move |conn| {
+            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+            let _ = send_response.send(result);
+        }))?;
+
+        receive_response.blocking_recv()?
+    }
+
+    pub async fn query_async<T: Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Box<dyn ToSql + Sync + Send>>,
+        mapping: RowMappingFn<T>,
+    ) -> Result<Vec<T>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
+
+        self.send_async(Box::new(move |conn| {
+            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+            let _ = send_response.send(result);
+        }))
+        .await?;
+
+        receive_response.await?
+    }
+
+    fn select<T: Send + Sized + 'static>(
+        query: &str,
+        params: &Vec<Box<dyn ToSql + Sync + Send>>,
+        mapping: &RowMappingFn<T>,
+        conn: &Connection,
+    ) -> Result<Vec<T>> {
+        let mut stmt = conn.prepare_cached(query)?;
+        let params = rusqlite::params_from_iter(params);
+        let iter = stmt.query_map(params, mapping)?;
+        let mut result: Vec<T> = vec![];
+        for res in iter {
+            result.push(*res?)
+        }
+        Ok(result)
     }
 }
 
 struct Optimize {}
 impl Writeable for Optimize {
-    fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error> {
+    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         conn.execute("PRAGMA OPTIMIZE", [])?;
-        Ok(QueryResult::None)
+        Ok(())
     }
 }
 
@@ -409,27 +448,20 @@ impl BufferedDatabaseWriter {
         });
 
         thread::spawn(move || {
-            while let Some(mut buffer) = receive_buffer.blocking_recv() {
+            while let Some(buffer) = receive_buffer.blocking_recv() {
                 let result = Self::process_batch_write(&buffer, &conn);
                 match result {
-                    Ok(mut e) => {
-                        for _i in 0..buffer.len() {
-                            let result = e.pop().unwrap();
-                            let query = buffer.pop().unwrap();
-
-                            if let Err(_) = query.reply.send(Ok(result)) {
-                                println!("Reply channel closed prematurely");
-                            }
+                    Ok(_) => {
+                        for query in buffer {
+                            Self::answer(query.reply, None);
                         }
                     }
                     Err(e) => {
                         for query in buffer {
-                            let r = query
-                                .reply
-                                .send(Err(Error::DatabaseWriteError(e.to_string())));
-                            if let Err(_) = r {
-                                println!("Reply channel closed prematurely");
-                            }
+                            Self::answer(
+                                query.reply,
+                                Some(Error::DatabaseWriteError(e.to_string())),
+                            );
                         }
                     }
                 }
@@ -440,62 +472,82 @@ impl BufferedDatabaseWriter {
         Ok(Self { sender: send_write })
     }
 
+    fn answer(reply: WriteReplyFn, result: Option<Error>) {
+        reply(result);
+    }
     fn getbuffer(receive_buffer: &mut mpsc::Receiver<Vec<WriteQuery>>) -> Option<Vec<WriteQuery>> {
         receive_buffer.blocking_recv()
     }
 
-    pub async fn write_async(&self, stmt: Box<dyn Writeable + Send>) -> Result<QueryResult> {
-        let (reply, reciev) = oneshot::channel::<Result<QueryResult>>();
-        let _ = self.sender.send(WriteQuery { stmt, reply }).await;
-        reciev.await.map_err(Error::from)?
+    pub async fn write_async(&self, stmt: Box<dyn Writeable + Send>) -> Result<()> {
+        let (reply, reciev) = oneshot::channel::<Option<Error>>();
+
+        let _ = self
+            .sender
+            .send(WriteQuery {
+                stmt,
+                reply: Box::new(move |result| {
+                    let _ = reply.send(result);
+                }),
+            })
+            .await;
+
+        match reciev.await? {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    pub fn write_blocking(&self, stmt: Box<dyn Writeable + Send>) -> Result<QueryResult> {
-        let (reply, reciev) = oneshot::channel::<Result<QueryResult>>();
-        let _ = self.sender.blocking_send(WriteQuery { stmt, reply });
-        reciev.blocking_recv().map_err(Error::from)?
+    pub fn write_blocking(&self, stmt: Box<dyn Writeable + Send>) -> Result<()> {
+        let (reply, reciev) = oneshot::channel::<Option<Error>>();
+        let _ = self.sender.blocking_send(WriteQuery {
+            stmt,
+            reply: Box::new(move |result| {
+                let _ = reply.send(result);
+            }),
+        });
+
+        match reciev.blocking_recv()? {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     pub async fn send_async(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .send(msg)
             .await
-            .map_err(|e| Error::TokioSendError(e.to_string()))
+            .map_err(|e| Error::DatabaseSendError(e.to_string()))
     }
 
     pub fn send_blocking(&self, msg: WriteQuery) -> Result<()> {
         self.sender
             .blocking_send(msg)
-            .map_err(|e| Error::TokioSendError(e.to_string()))
+            .map_err(|e| Error::DatabaseSendError(e.to_string()))
     }
 
-    pub async fn optimize_async(&self) -> Result<QueryResult> {
+    pub async fn optimize_async(&self) -> Result<()> {
         self.write_async(Box::new(Optimize {})).await
     }
 
-    pub fn optimize_blocking(&self) -> Result<QueryResult> {
+    pub fn optimize_blocking(&self) -> Result<()> {
         self.write_blocking(Box::new(Optimize {}))
     }
 
     fn process_batch_write(
         buffer: &Vec<WriteQuery>,
         conn: &Connection,
-    ) -> Result<Vec<QueryResult>> {
+    ) -> std::result::Result<(), rusqlite::Error> {
         conn.execute("BEGIN TRANSACTION", [])?;
-        let mut result = Vec::new();
+
         for query in buffer {
-            match query.stmt.write(conn) {
-                Err(e) => {
-                    conn.execute("ROLLBACK", [])?;
-                    return Err(Error::DatabaseError(e));
-                }
-                Ok(e) => {
-                    result.push(e);
-                }
+            if let Err(e) = query.stmt.write(conn) {
+                conn.execute("ROLLBACK", [])?;
+                return Err(e);
             }
         }
         conn.execute("COMMIT", [])?;
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -601,46 +653,34 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::cryptography::hash;
     use crate::database::Error;
     use std::result::Result;
     use std::{fs, path::Path, time::Instant};
     #[derive(Debug)]
+
     struct InsertPerson {
         name: String,
         surname: String,
     }
     impl Writeable for InsertPerson {
-        fn write(&self, conn: &Connection) -> std::result::Result<QueryResult, rusqlite::Error> {
+        fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
             let mut stmt =
                 conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 
             stmt.execute((&self.name, &self.surname))?;
-            Ok(QueryResult::None)
+            Ok(())
         }
     }
     use std::str;
-    struct SelectAll {}
-    impl Readable for SelectAll {
-        fn read(&self, conn: &Connection) -> Result<QueryResult, Error> {
-            let mut stmt = conn.prepare_cached(
-                "
-            SELECT 	
-                json_object('name', name, 'surname', surname)
-            FROM person",
-            )?;
 
-            let mut rows = stmt.query([])?;
-
-            let mut result = Vec::new();
-
-            while let Some(row) = rows.next()? {
-                result.push(row.get(0)?);
-            }
-            Ok(QueryResult::Strings(result))
-        }
-    }
+    const STRING_MAPPING: RowMappingFn<String> = |row| Ok(Box::new(row.get(0)?));
+    const SELECT_ALL: &'static str = "
+    SELECT 	
+        json_object('name', name, 'surname', surname)
+    FROM person";
 
     const DATA_PATH: &str = "test/data/database/graph_service";
     fn init_database_path(file: &str) -> Result<PathBuf, Error> {
@@ -705,11 +745,11 @@ mod tests {
             .unwrap();
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
-        let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
-        assert_eq!(
-            r#"{"name":"Steven","surname":"Bob"}"#,
-            res.as_strings().unwrap()[0]
-        );
+        let res = reader
+            .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
+            .await
+            .unwrap();
+        assert_eq!(r#"{"name":"Steven","surname":"Bob"}"#, res[0]);
         // println!("{}", res);
     }
 
@@ -738,11 +778,10 @@ mod tests {
             }));
 
             let reader = DatabaseReader::new(&path, &secret, 8192, false, 1).unwrap();
-            let res = reader.query_blocking(Box::new(SelectAll {})).unwrap();
-            assert_eq!(
-                r#"{"name":"Steven","surname":"Bob"}"#,
-                res.as_strings().unwrap()[0]
-            );
+            let res = reader
+                .query_blocking(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
+                .unwrap();
+            assert_eq!(r#"{"name":"Steven","surname":"Bob"}"#, res[0]);
         })
         .join();
     }
@@ -770,24 +809,29 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<QueryResult, Error>>();
+            let (reply, reciev) = oneshot::channel::<Option<Error>>();
 
             let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
                 }),
-                reply: reply,
+                reply: Box::new(move |result| {
+                    let _ = reply.send(result);
+                }),
             };
             writer.send_async(query).await.unwrap();
             reply_list.push(reciev);
         }
-        reply_list.pop().unwrap().await.unwrap().unwrap();
+        reply_list.pop().unwrap().await.unwrap();
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
-        let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
+        let res = reader
+            .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
+            .await
+            .unwrap();
 
-        assert_eq!(loop_number, res.as_strings().unwrap().len());
+        assert_eq!(loop_number, res.len());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -813,27 +857,31 @@ mod tests {
         let mut reply_list = vec![];
 
         for _i in 0..loop_number {
-            let (reply, reciev) = oneshot::channel::<Result<QueryResult, Error>>();
+            let (reply, reciev) = oneshot::channel::<Option<Error>>();
 
             let query = WriteQuery {
                 stmt: Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
                 }),
-                reply: reply,
+                reply: Box::new(move |result| {
+                    let _ = reply.send(result);
+                }),
             };
             writer.send_async(query).await.unwrap();
             reply_list.push(reciev);
         }
-        reply_list.pop().unwrap().await.unwrap().unwrap();
+        reply_list.pop().unwrap().await.unwrap();
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
-        let res = reader.query_async(Box::new(SelectAll {})).await.unwrap();
+        let res = reader
+            .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
+            .await
+            .unwrap();
         // println!("{}", res.len());
-        assert_eq!(loop_number, res.as_strings().unwrap().len());
+        assert_eq!(loop_number, res.len());
     }
 
-    //batch write is much faster than inserting row one by one
     #[tokio::test(flavor = "multi_thread")]
     async fn read_only_test() {
         let path: PathBuf = init_database_path("read_only_test.db").unwrap();
@@ -860,25 +908,9 @@ mod tests {
 
         let reader = DatabaseReader::new(&path, &secret, 8192, false, 2).unwrap();
 
-        struct BadPerson {
-            name: String,
-            surname: String,
-        }
-        impl Readable for BadPerson {
-            fn read(&self, conn: &Connection) -> Result<QueryResult, Error> {
-                let mut stmt =
-                    conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
-
-                stmt.execute((&self.name, &self.surname))?;
-                Ok(QueryResult::None)
-            }
-        }
-
-        let _ = reader
-            .query_async(Box::new(BadPerson {
-                name: "Steven".to_string(),
-                surname: "Bob".to_string(),
-            }))
+        let insert_query = "INSERT INTO person (name, surname) VALUES ('bad', 'one')".to_string();
+        let _res = reader
+            .query_async(insert_query, Vec::new(), STRING_MAPPING)
             .await
             .expect_err("attempt to write a readonly database");
     }

@@ -5,15 +5,16 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::database::graph_database::Readable;
+    use crate::database::graph_database::Writeable;
+    use crate::database::mutation_query::MutationQuery;
+    use crate::database::query_language::parameter::ParametersAdd;
     use crate::{
         database::{
-            graph_database::{prepare_connection, QueryResult, Writeable},
-            mutation_query::PrepareMutation,
+            graph_database::prepare_connection,
             query::{Queries, Query},
             query_language::{
                 data_model::DataModel, mutation_parser::MutationParser, parameter::Parameters,
-                query_parser::QueryParser, Value,
+                query_parser::QueryParser,
             },
         },
         Ed25519SigningKey, SigningKey,
@@ -21,8 +22,10 @@ mod tests {
 
     #[test]
     fn simple_scalar() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 age : Integer,
@@ -31,8 +34,8 @@ mod tests {
                 some_nullable : String nullable,
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -50,31 +53,18 @@ mod tests {
         .unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add(String::from("name"), Value::String(String::from("John")))
-            .unwrap();
-        param.add(String::from("age"), Value::Integer(100)).unwrap();
-        param
-            .add(String::from("weight"), Value::Float(42.2))
-            .unwrap();
-        param
-            .add(String::from("human"), Value::Boolean(true))
-            .unwrap();
-        param.add(String::from("null"), Value::Null).unwrap();
+        param.add("name", String::from("John")).unwrap();
+        param.add("age", 100).unwrap();
+        param.add("weight", 42.2).unwrap();
+        param.add("human", true).unwrap();
+        param.add_null("null").unwrap();
 
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
-
-        let to_insert = prep_mut.read(&conn).unwrap();
-
-        if let QueryResult::MutationQuery(mutation_query) = to_insert {
-            mutation_query.write(&conn).unwrap();
-        }
+        mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
             "
@@ -109,19 +99,62 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected = "{\n\"Person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}],\n\"same_person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (
+                    name = "John",
+                    age = 100,
+                    weight = 42.2,
+                    is_human = true,
+                    some_nullable = null
+                ){
+                    name
+                    age
+                    weight
+                    is_human
+                    some_nullable
+                }
+                same_person: Person {
+                    name
+                    age
+                    weight
+                    is_human
+                    some_nullable
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+
+        let expected = "{\n\"Person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}],\n\"same_person\":[{\"name\":\"John\",\"age\":100,\"weight\":42.2,\"is_human\":true,\"some_nullable\":null}]\n}";
+        assert_eq!(expected, result);
     }
 
     #[test]
     fn system() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -138,14 +171,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
-        let signing_key = Ed25519SigningKey::new();
-        let mut to_insert = prep_mut.read(&conn).unwrap();
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
 
-        let mutation_query = to_insert.as_mutation_query().unwrap();
+        let signing_key = Ed25519SigningKey::new();
+
         mutation_query.sign_all(&signing_key).unwrap();
         mutation_query.write(&conn).unwrap();
 
@@ -176,16 +206,58 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: query,
         };
+        let _ = sql
+            .read(&conn)
+            .expect("result changes everytime, just test that it creates a valid query");
 
-        // hard to test, results changes everytime,
-        let _ = sql.read(&conn).unwrap();
-        // println!("{}", result.as_str().unwrap());
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (
+                id != "ZXRzZXRzNDMx", 
+                cdate < 1234341,
+                mdate > 12345, 
+                _entity ="0", 
+                _json="", 
+                _binary = "ZXRzZXRzNDMx",
+                _pub_key <="ZXRzZXRzNDMx",
+                _pub_key >= "ZXRzZXRzNDMx",
+            ){
+                    id
+                    cdate
+                    mdate
+                    _entity
+                    _json
+                    _binary
+                    _pub_key
+                    _signature
+                }
+                
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+
+        let _ = sql
+            .read(&conn)
+            .expect("result changes everytime, just test that it creates a valid query");
     }
 
     #[test]
     fn entity() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 parents : [Person] nullable,
@@ -197,8 +269,8 @@ mod tests {
                 name : String
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -221,39 +293,18 @@ mod tests {
         .unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add(String::from("name"), Value::String(String::from("John")))
-            .unwrap();
-        param
-            .add(String::from("mother"), Value::String(String::from("Hello")))
-            .unwrap();
-        param
-            .add(String::from("father"), Value::String(String::from("World")))
-            .unwrap();
-        param
-            .add(
-                String::from("pet_name"),
-                Value::String(String::from("Truffle")),
-            )
-            .unwrap();
-        param
-            .add(
-                String::from("sibling"),
-                Value::String(String::from("Futuna")),
-            )
-            .unwrap();
+        param.add("name", String::from("John")).unwrap();
+        param.add("mother", String::from("Hello")).unwrap();
+        param.add("father", String::from("World")).unwrap();
+        param.add("pet_name", String::from("Truffle")).unwrap();
+        param.add("sibling", String::from("Futuna")).unwrap();
 
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: Arc::new(mutation),
-        };
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
 
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-
-        let mutation_query = to_insert.as_mutation_query().unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -289,9 +340,11 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: query,
         };
+        println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"}],\"pet\":{\"name\":\"Truffle\"},\"remps_pets\":[{\"name\":\"World\",\"pet\":{\"name\":\"kiki\"}}]}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
     }
 
     #[test]
@@ -299,15 +352,17 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -323,78 +378,40 @@ mod tests {
         let mutation = Arc::new(mutation);
 
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("John".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(42)).unwrap();
+        param.add("name", "John".to_string()).unwrap();
+        param.add("age", 42).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: mutation.clone(),
-        };
+        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
 
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-        let mutation_query = to_insert.as_mutation_query().unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("Silvie".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(46)).unwrap();
+        param.add("name", "Silvie".to_string()).unwrap();
+        param.add("age", 46).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: mutation.clone(),
-        };
+        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
 
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-        let mutation_query = to_insert.as_mutation_query().unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("Kevin".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(22)).unwrap();
+        param.add("name", "Kevin".to_string()).unwrap();
+        param.add("age", 22).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: mutation.clone(),
-        };
-
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-        let mutation_query = to_insert.as_mutation_query().unwrap();
+        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("Sarah".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(12)).unwrap();
+        param.add("name", "Sarah".to_string()).unwrap();
+        param.add("age", 12).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: mutation.clone(),
-        };
-
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-        let mutation_query = to_insert.as_mutation_query().unwrap();
+        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("Leonore".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(22)).unwrap();
+        param.add("name", "Leonore".to_string()).unwrap();
+        param.add("age", 22).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: param,
-            mutation: mutation.clone(),
-        };
-
-        let mut to_insert = prep_mut.read(&conn).unwrap();
-        let mutation_query = to_insert.as_mutation_query().unwrap();
+        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -423,7 +440,7 @@ mod tests {
 
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"John\",\"age\":42},{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Leonore\",\"age\":22}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -450,7 +467,7 @@ mod tests {
         println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"Sarah\",\"age\":12}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -478,7 +495,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
         let expected =
             "{\n\"Person\":[{\"name\":\"Leonore\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -505,7 +522,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
         let expected =
             "{\n\"Person\":[{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -534,7 +551,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
         let expected =
             "{\n\"Person\":[{\"name\":\"Silvie\",\"age\":46},{\"name\":\"John\",\"age\":42}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         //println!("{:#?}", result.as_str().unwrap());
         // println!("{}", result.as_str().unwrap());
@@ -542,8 +559,10 @@ mod tests {
 
     #[test]
     fn filter() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 age : Integer,
@@ -551,8 +570,8 @@ mod tests {
                 is_human : Boolean, 
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -582,16 +601,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: Parameters::new(),
-            mutation: Arc::new(mutation),
-        };
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
 
-        let to_insert = prep_mut.read(&conn).unwrap();
-
-        if let QueryResult::MutationQuery(mutation_query) = to_insert {
-            mutation_query.write(&conn).unwrap();
-        }
+        mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
             r#"
@@ -619,7 +633,7 @@ mod tests {
 
         let expected =
             "{\n\"Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -638,12 +652,10 @@ mod tests {
 
         let query = Queries::build(&query_parser).unwrap();
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("Jean".to_string()))
-            .unwrap();
-        param.add("age".to_string(), Value::Integer(100)).unwrap();
-        param.add("we".to_string(), Value::Float(100.0)).unwrap();
-        param.add("hum".to_string(), Value::Boolean(false)).unwrap();
+        param.add("name", "Jean".to_string()).unwrap();
+        param.add("age", 100).unwrap();
+        param.add("we", 100.0).unwrap();
+        param.add("hum", false).unwrap();
 
         let sql = Query {
             parameters: param,
@@ -654,15 +666,17 @@ mod tests {
 
         let expected =
             "{\n\"Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
-        println!("{:#?}", result.as_str().unwrap());
+        assert_eq!(expected, result);
+        println!("{:#?}", result);
     }
 
     #[test]
     //test variable name reuse and internalised string
     fn positional_param() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String,
@@ -670,8 +684,8 @@ mod tests {
                 is_human : Boolean, 
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -689,16 +703,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: Parameters::new(),
-            mutation: Arc::new(mutation),
-        };
-
-        let to_insert = prep_mut.read(&conn).unwrap();
-
-        if let QueryResult::MutationQuery(mutation_query) = to_insert {
-            mutation_query.write(&conn).unwrap();
-        }
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
             r#"
@@ -717,9 +725,7 @@ mod tests {
 
         let query = Queries::build(&query_parser).unwrap();
         let mut param = Parameters::new();
-        param
-            .add("name".to_string(), Value::String("John".to_string()))
-            .unwrap();
+        param.add("name", "John".to_string()).unwrap();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
@@ -730,23 +736,25 @@ mod tests {
 
         let expected =
              "{\n\"Person\":[{\"name\":\"John\",\"surname\":\"John\",\"pseudo\":\"John\",\"is_human\":true}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         //println!("{:#?}", result.as_str().unwrap());
     }
 
     #[test]
     fn aggregate() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 age : Integer,
                 weight : Float,
                 nat: String, 
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
@@ -769,16 +777,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let prep_mut = PrepareMutation {
-            parameters: Parameters::new(),
-            mutation: Arc::new(mutation),
-        };
-
-        let to_insert = prep_mut.read(&conn).unwrap();
-
-        if let QueryResult::MutationQuery(mutation_query) = to_insert {
-            mutation_query.write(&conn).unwrap();
-        }
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
             r#"
@@ -808,7 +810,7 @@ mod tests {
 
         let expected =
         "{\n\"Person\":[{\"nat\":\"us\",\"avg\":34.0,\"count\":2,\"max\":45.0,\"min\":23.0,\"sum\":68.0},{\"nat\":\"fr\",\"avg\":64.5,\"count\":2,\"max\":86.0,\"min\":43.0,\"sum\":129.0},{\"nat\":\"en\",\"avg\":71.75,\"count\":4,\"max\":95.0,\"min\":52.0,\"sum\":287.0},{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
-        assert_eq!(expected, result.as_str().unwrap());
+        assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
@@ -840,15 +842,16 @@ mod tests {
             r#"
             query sample{
                 Person (
-                    order_by(nat asc),
-                    nat = "fr",
-                    avg > 0
+                    order_by(nat asc, count desc),
+                    count > 2,
+                    after("en", 3)
             ) {
                     nat
-                    avg: avg(mdate)
+                    avg: avg(weight)
                     count: count()
-                    max: max(cdate)
-                    min: min(cdate)
+                    max: max(weight)
+                    min: min(weight)
+                    sum: sum(weight)
                 }
             }
         "#,
@@ -863,9 +866,322 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: query,
         };
-        println!("{}", sql.sql_queries.sql_queries[0].sql_query);
-        let _result = sql.read(&conn).unwrap();
-        //println!("{:#?}", result.as_str().unwrap());
+        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        let result = sql.read(&conn).unwrap();
+
+        let expected ="{\n\"Person\":[{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
+        assert_eq!(expected, result);
+        // println!("{:#?}", _result.as_str().unwrap());
         //println!("{}", _result.as_str().unwrap());
+    }
+
+    #[test]
+    fn search() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String,
+                comment : String,
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P1: Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
+                P2: Person { name:"Alice" comment:"Lorem lorem ipsum " }
+                P3: Person { name:"Bob" comment:"A completely different comment" }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person(search("ames")) {
+                    name
+                    comment
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        let result = sql.read(&conn).unwrap();
+
+        let expected =
+            "{\n\"Person\":[{\"name\":\"John\",\"comment\":\"Lorem ipsum sit doler et ames\"}]\n}";
+        assert_eq!(expected, result);
+        // println!("{:#?}", result.as_str().unwrap());
+        //println!("{}", result.as_str().unwrap());
+    }
+
+    #[test]
+    fn default_value() {
+        let mut data_model = DataModel::new();
+
+        data_model
+            .update(
+                r#"
+            Person {
+                name : String,
+                def : String default "Lorem ipsum", 
+            }
+        "#,
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P2: Person { name:"Alice"  }
+                P3: Person { name:"Bob" def:"A completely different" }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person() {
+                    name
+                    def
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+
+        let expected =
+            "{\n\"Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\"},{\"name\":\"Bob\",\"def\":\"A completely different\"}]\n}";
+        assert_eq!(expected, result);
+
+        data_model
+            .update(
+                r#"
+            Person {
+                name : String,
+                def : String default "Lorem ipsum", 
+                newdef : String default "sit met", 
+            }
+        "#,
+            )
+            .unwrap();
+
+        //old rows  will return the default value of the 'newdef' field
+        let query_parser = QueryParser::parse(
+            r#"
+                query sample{
+                    Person() {
+                        name
+                        def
+                        newdef
+                    }
+                }
+            "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+        let expected =
+        "{\n\"Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\",\"newdef\":\"sit met\"},{\"name\":\"Bob\",\"def\":\"A completely different\",\"newdef\":\"sit met\"}]\n}";
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn json() {
+        let mut data_model = DataModel::new();
+
+        data_model
+            .update(
+                r#"
+            Person {
+                name : String,
+                data : Json, 
+            }
+        "#,
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P2: Person { name:"Alice" data:$data }
+                P3: Person { name:"Bob" data:"[1,2,3,4]" }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        param
+            .add("data", String::from(r#"{"val":"hello json"}"#))
+            .unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            "
+            query sample{
+                Person {
+                    name
+                    data
+                    array: data->$.val
+                }
+            }
+        ",
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+        let expected = 
+        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":null}]\n}";
+        assert_eq!(expected, result);
+      
+        let query_parser = QueryParser::parse(
+            "
+            query sample{
+                Person {
+                    name
+                    data
+                    array: data->1
+                }
+            }
+        ",
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+
+        let expected = 
+        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":null},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
+        assert_eq!(expected, result);
+   
+
+        let query_parser = QueryParser::parse(
+            "
+            query sample{
+                Person (data->1 = 2, order_by(array asc)) {
+                    name
+                    data
+                    array: data->1
+                }
+            }
+        ",
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        let result = sql.read(&conn).unwrap();
+
+        let expected = 
+        "{\n\"Person\":[{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
+        assert_eq!(expected, result);
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (data->$.val = "hello json", order_by(array asc)) {
+                    name
+                    data
+                    array: data->$.val
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = Queries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: query,
+        };
+        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        let result = sql.read(&conn).unwrap();
+
+        let expected = 
+        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"}]\n}";
+        assert_eq!(expected, result);
+        // println!("{}", result);
+        // println!("{:#?}", result);
+
     }
 }

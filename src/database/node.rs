@@ -1,11 +1,11 @@
 use super::{
-    graph_database::{is_valid_id_len, new_id, now, FromRow, MAX_ROW_LENTGH},
+    graph_database::{is_valid_id_len, new_id, now, RowMappingFn, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
     base64_encode, Ed2519PublicKey, Ed25519SigningKey, PublicKey, SigningKey,
 };
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -187,13 +187,32 @@ impl Node {
         Ok(())
     }
 
+    pub const NODE_QUERY: &'static str = "
+    SELECT id , cdate, mdate, _entity,_json, _binary, _pub_key, _signature  
+    FROM _node 
+    WHERE id = ? AND 
+    _entity = ?";
+
+    pub const NODE_MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(Node {
+            id: row.get(0)?,
+            cdate: row.get(1)?,
+            mdate: row.get(2)?,
+            _entity: row.get(3)?,
+            _json: row.get(4)?,
+            _binary: row.get(5)?,
+            _pub_key: row.get(6)?,
+            _signature: row.get(7)?,
+        }))
+    };
+
     ///
     /// Retrieve a node by id and entity name
     ///
     pub fn get(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<Option<Box<Node>>> {
-        let mut get_stmt = conn.prepare_cached(NODE_FROM_ROW_QUERY)?;
+        let mut get_stmt = conn.prepare_cached(Self::NODE_QUERY)?;
         let node = get_stmt
-            .query_row((id, entity), Node::from_row())
+            .query_row((id, entity), Self::NODE_MAPPING)
             .optional()?;
         Ok(node)
     }
@@ -320,6 +339,7 @@ impl Node {
                 &self._pub_key,
                 &self._signature,
             ))?;
+
             if index {
                 if let Some(current) = current_fts {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
@@ -328,25 +348,6 @@ impl Node {
             }
         }
         Ok(())
-    }
-}
-
-///query used in conjunction with the from_row() method to easily retrieve a node
-const NODE_FROM_ROW_QUERY: &'static str = "SELECT id , cdate, mdate, _entity,_json, _binary, _pub_key, _signature  FROM _node WHERE id = ? AND _entity = ?";
-impl FromRow for Node {
-    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
-        |row| {
-            Ok(Box::new(Node {
-                id: row.get(0)?,
-                cdate: row.get(1)?,
-                mdate: row.get(2)?,
-                _entity: row.get(3)?,
-                _json: row.get(4)?,
-                _binary: row.get(5)?,
-                _pub_key: row.get(6)?,
-                _signature: row.get(7)?,
-            }))
-        }
     }
 }
 
@@ -448,8 +449,16 @@ mod tests {
         )
         .unwrap();
 
-        let mut stmt = conn.prepare("SELECT _node.* FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid WHERE _node_fts MATCH ? ORDER BY rank;").unwrap();
-        let results = stmt.query_map(["Lorem"], Node::from_row()).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "
+        SELECT id , cdate, mdate, _entity,_json, _binary, _pub_key, _signature 
+        FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid 
+        WHERE _node_fts MATCH ? 
+        ORDER BY rank;",
+            )
+            .unwrap();
+        let results = stmt.query_map(["Lorem"], Node::NODE_MAPPING).unwrap();
         let mut res = vec![];
         for node in results {
             let node = node.unwrap();
@@ -459,7 +468,7 @@ mod tests {
         assert_eq!(1, res.len());
         let id = &res[0].id;
 
-        let results = stmt.query_map(["randomtext"], Node::from_row()).unwrap();
+        let results = stmt.query_map(["randomtext"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //JSON fields name are not indexed
 
         let mut rowid_stmt = conn
@@ -483,10 +492,10 @@ mod tests {
         )
         .unwrap();
 
-        let results = stmt.query_map(["lorem"], Node::from_row()).unwrap();
+        let results = stmt.query_map(["lorem"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
 
-        let results = stmt.query_map(["conjectur"], Node::from_row()).unwrap();
+        let results = stmt.query_map(["conjectur"], Node::NODE_MAPPING).unwrap();
         assert_eq!(1, results.count()); //Search table is correctly updated
 
         //
@@ -501,10 +510,10 @@ mod tests {
         )
         .unwrap();
 
-        let results = stmt.query_map(["lorem"], Node::from_row()).unwrap();
+        let results = stmt.query_map(["lorem"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
 
-        let results = stmt.query_map(["inserted"], Node::from_row()).unwrap();
+        let results = stmt.query_map(["inserted"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
     }
 

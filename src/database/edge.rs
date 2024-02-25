@@ -1,16 +1,16 @@
 use super::{
-    graph_database::{is_valid_id_len, now, FromRow, MAX_ROW_LENTGH},
+    graph_database::{is_valid_id_len, now, RowMappingFn, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{
     base64_encode, Ed2519PublicKey, Ed25519SigningKey, PublicKey, SigningKey,
 };
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 ///
 /// Edge object stores relations between nodes
-/// 
+///
 /// One of the two tables that defines the graph database
 ///
 #[derive(Serialize, Deserialize, Debug)]
@@ -50,6 +50,25 @@ impl Edge {
         )?;
         Ok(())
     }
+
+    pub const EDGE_QUERY: &'static str = "
+    SELECT  src, label, dest, cdate, pub_key, signature 
+        FROM _edge
+    WHERE 
+        src = ? AND
+        label = ? AND
+        dest = ?";
+
+    pub const EDGE_MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(Edge {
+            src: row.get(0)?,
+            label: row.get(1)?,
+            dest: row.get(2)?,
+            cdate: row.get(3)?,
+            pub_key: row.get(4)?,
+            signature: row.get(5)?,
+        }))
+    };
 
     fn len(&self) -> usize {
         let mut len = 0;
@@ -183,9 +202,9 @@ impl Edge {
         dest: &Vec<u8>,
         conn: &Connection,
     ) -> Result<Option<Box<Edge>>> {
-        let mut get_stmt = conn.prepare_cached(EDGE_FROM_ROW_QUERY)?;
+        let mut get_stmt = conn.prepare_cached(Self::EDGE_QUERY)?;
 
-        let edge = get_stmt.query_row((src, label, dest), Edge::from_row())?;
+        let edge = get_stmt.query_row((src, label, dest), Self::EDGE_MAPPING)?;
         Ok(Some(edge))
     }
 
@@ -219,7 +238,7 @@ impl Edge {
                 src = ? AND
                 label = ? ",
         )?;
-        let edges = edges_stmt.query_map((src, label), Edge::from_row())?;
+        let edges = edges_stmt.query_map((src, label), Self::EDGE_MAPPING)?;
         let mut rows = vec![];
         for edge in edges {
             rows.push(edge?);
@@ -230,28 +249,6 @@ impl Edge {
 }
 
 /// Query used in conjunction with the from_row() method to easily retrieve an edge
-const EDGE_FROM_ROW_QUERY: &'static str = "
-    SELECT  src, label, dest, cdate, pub_key, signature 
-        FROM _edge
-    WHERE 
-        src = ? AND
-        label = ? AND
-        dest = ?";
-
-impl FromRow for Edge {
-    fn from_row() -> fn(&Row) -> std::result::Result<Box<Self>, rusqlite::Error> {
-        |row| {
-            Ok(Box::new(Edge {
-                src: row.get(0)?,
-                label: row.get(1)?,
-                dest: row.get(2)?,
-                cdate: row.get(3)?,
-                pub_key: row.get(4)?,
-                signature: row.get(5)?,
-            }))
-        }
-    }
-}
 
 impl Default for Edge {
     fn default() -> Self {

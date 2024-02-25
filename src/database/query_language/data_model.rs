@@ -1,3 +1,5 @@
+use crate::base64_decode;
+
 use super::{Error, FieldType, Value, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
@@ -219,7 +221,7 @@ impl DataModel {
         Ok(())
     }
 
-    pub fn parse(query: &str) -> Result<DataModel, Error> {
+    fn parse(query: &str) -> Result<DataModel, Error> {
         let mut data_model = DataModel::new();
 
         let parse = match PestParser::parse(Rule::datamodel, query) {
@@ -262,10 +264,14 @@ impl DataModel {
                         match i.as_rule() {
                             Rule::deprecated => entity.deprecated = true,
                             Rule::identifier => {
-                                entity.name = i.as_str().to_string();
-                                if entity.name.starts_with('_') {
-                                    return Err(Error::InvalidName(entity.name.to_string()));
+                                let name = i.as_str();
+                                if name.starts_with('_') {
+                                    return Err(Error::InvalidName(name.to_string()));
                                 }
+                                if Self::is_reserved(name) {
+                                    return Err(Error::ReservedKeyword(name.to_string()));
+                                }
+                                entity.name = name.to_string();
                             }
                             _ => unreachable!(),
                         }
@@ -287,7 +293,7 @@ impl DataModel {
                         }
                     }
                 }
-
+                Rule::comma => {}
                 _ => unreachable!(),
             }
         }
@@ -299,10 +305,21 @@ impl DataModel {
         let mut index = Index::new();
 
         for field in entity_pair.into_inner() {
-            index.add_field(field.as_str().to_string())?;
+            match field.as_rule() {
+                Rule::identifier => index.add_field(field.as_str().to_string())?,
+                Rule::comma => {}
+                _ => unreachable!(),
+            }
         }
         //   println!("{:#?}", entity_pair);
         Ok(index)
+    }
+
+    fn is_reserved(value: &str) -> bool {
+        match value.to_lowercase().as_str() {
+            "boolean" | "float" | "integer" | "string" | "base64" | "json" => true,
+            _ => false,
+        }
     }
 
     fn parse_field_type(entity_pair: Pair<'_, Rule>) -> Result<Field, Error> {
@@ -315,10 +332,14 @@ impl DataModel {
             match i.as_rule() {
                 Rule::deprecated => field.deprecated = true,
                 Rule::identifier => {
-                    field.name = i.as_str().to_string();
-                    if field.name.starts_with('_') {
-                        return Err(Error::InvalidName(field.name.clone()));
+                    let name = i.as_str();
+                    if name.starts_with('_') {
+                        return Err(Error::InvalidName(name.to_string()));
                     }
+                    if Self::is_reserved(name) {
+                        return Err(Error::ReservedKeyword(name.to_string()));
+                    }
+                    field.name = name.to_string();
                 }
                 _ => unreachable!(),
             }
@@ -329,13 +350,15 @@ impl DataModel {
         match field_type.as_rule() {
             Rule::scalar_field => {
                 let mut scalar_field = field_type.into_inner();
-                let scalar_type = scalar_field.next().unwrap().as_str();
+                let scalar_type = scalar_field.next().unwrap().as_str().to_lowercase();
 
-                match scalar_type {
-                    "Boolean" => field.field_type = FieldType::Boolean,
-                    "Float" => field.field_type = FieldType::Float,
-                    "Integer" => field.field_type = FieldType::Integer,
-                    "String" => field.field_type = FieldType::String,
+                match scalar_type.as_str() {
+                    "boolean" => field.field_type = FieldType::Boolean,
+                    "float" => field.field_type = FieldType::Float,
+                    "integer" => field.field_type = FieldType::Integer,
+                    "string" => field.field_type = FieldType::String,
+                    "base64" => field.field_type = FieldType::Base64,
+                    "json" => field.field_type = FieldType::Json,
                     _ => unreachable!(),
                 }
 
@@ -410,6 +433,27 @@ impl DataModel {
                                             field.default_value =
                                                 Some(Value::String(value.to_string()))
                                         }
+                                        FieldType::Base64 => {
+                                            let decode = base64_decode(value.as_bytes());
+                                            if decode.is_err() {
+                                                return Err(Error::InvalidBase64(
+                                                    value.to_string(),
+                                                ));
+                                            }
+                                            field.default_value =
+                                                Some(Value::String(value.to_string()))
+                                        }
+                                        FieldType::Json => {
+                                            let v: std::result::Result<
+                                                serde_json::Value,
+                                                serde_json::Error,
+                                            > = serde_json::from_str(value);
+                                            if v.is_err() {
+                                                return Err(Error::InvalidJson(value.to_string()));
+                                            }
+                                            field.default_value =
+                                                Some(Value::String(value.to_string()))
+                                        }
                                         _ => {
                                             return Err(Error::InvalidDefaultValue(
                                                 field.name.clone(),
@@ -432,33 +476,27 @@ impl DataModel {
                 let mut entity_field = field_type.into_inner();
 
                 let name = entity_field.next().unwrap().as_str();
-                match name {
-                    "Boolean" | "Float" | "Integer" | "String" => {
-                        return Err(Error::ParserError(format! ("{} [{}] only Entity is supported. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
-                    }
-                    _ => {
-                        field.field_type = FieldType::Entity(String::from(name));
+                if Self::is_reserved(name) {
+                    return Err(Error::ReservedKeyword(name.to_string()));
+                }
 
-                        if let Some(_next) = entity_field.next() {
-                            field.nullable = true;
-                        }
-                    }
+                field.field_type = FieldType::Entity(String::from(name));
+
+                if let Some(_next) = entity_field.next() {
+                    field.nullable = true;
                 }
             }
             Rule::entity_array => {
                 let mut entity_field = field_type.into_inner();
                 let name = entity_field.next().unwrap().as_str();
-                match name {
-                    "Boolean" | "Float" | "Integer" | "String" => {
-                        return Err(Error::ParserError(format! ("{} [{}] only Entity is supported in array definition. Scalar fields (Boolean, Float, Integer, String) are not supported", field.name, name)));
-                    }
-                    _ => {
-                        field.field_type = FieldType::Array(String::from(name));
+                if Self::is_reserved(name) {
+                    return Err(Error::ReservedKeyword(name.to_string()));
+                }
 
-                        if let Some(_next) = entity_field.next() {
-                            field.nullable = true;
-                        }
-                    }
+                field.field_type = FieldType::Array(String::from(name));
+
+                if let Some(_next) = entity_field.next() {
+                    field.nullable = true;
                 }
             }
 
@@ -729,25 +767,23 @@ impl Field {
 
     pub fn get_variable_type(&self) -> VariableType {
         match self.field_type {
-            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Base64 => {
-                VariableType::Base64(self.nullable)
-            }
+            FieldType::Array(_) | FieldType::Entity(_) => VariableType::Invalid,
+            FieldType::Base64 => VariableType::Base64(self.nullable),
             FieldType::Boolean => VariableType::Boolean(self.nullable),
             FieldType::Integer => VariableType::Integer(self.nullable),
             FieldType::Float => VariableType::Float(self.nullable),
-            FieldType::String => VariableType::String(self.nullable),
+            FieldType::String | FieldType::Json => VariableType::String(self.nullable),
         }
     }
 
     pub fn get_variable_type_non_nullable(&self) -> VariableType {
         match self.field_type {
-            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Base64 => {
-                VariableType::Base64(false)
-            }
+            FieldType::Array(_) | FieldType::Entity(_) => VariableType::Invalid,
+            FieldType::Base64 => VariableType::Base64(false),
             FieldType::Boolean => VariableType::Boolean(false),
             FieldType::Integer => VariableType::Integer(false),
             FieldType::Float => VariableType::Float(false),
-            FieldType::String => VariableType::String(false),
+            FieldType::String | FieldType::Json => VariableType::String(false),
         }
     }
 }
@@ -875,6 +911,46 @@ mod tests {
         let _datamodel = DataModel::parse(
             "
                 Person {
+                    child : [Boolean],
+                }",
+        )
+        .expect_err("Cannot reference scalar field");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [integer],
+                }",
+        )
+        .expect_err("Cannot reference scalar field");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [float],
+                }",
+        )
+        .expect_err("Cannot reference scalar field");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [json],
+                }",
+        )
+        .expect_err("Cannot reference scalar field");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    child : [base64],
+                }",
+        )
+        .expect_err("Cannot reference scalar field");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
                     child : [Person],
                 }",
         )
@@ -898,7 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn start_with_underscore() {
+    fn reserved_names() {
         let _datamodel = DataModel::parse(
             "
                 _Person {
@@ -922,6 +998,50 @@ mod tests {
                 }",
         )
         .expect("entity and field name can contain _");
+
+        let _datamodel = DataModel::parse(
+            "
+                Person {
+                    String : String,
+                }",
+        )
+        .expect_err("scalar field names are reserved");
+
+        let _datamodel = DataModel::parse(
+            "
+                json {
+                    name : String,
+                }",
+        )
+        .expect_err("scalar field names are reserved");
+        let _datamodel = DataModel::parse(
+            "
+            baSe64 {
+                name : String,
+            }",
+        )
+        .expect_err("scalar field names are reserved");
+        let _datamodel = DataModel::parse(
+            "
+        String {
+            name : String,
+        }",
+        )
+        .expect_err("scalar field names are reserved");
+        let _datamodel = DataModel::parse(
+            "
+        floAt {
+            name : String,
+        }",
+        )
+        .expect_err("scalar field names are reserved");
+        let _datamodel = DataModel::parse(
+            "
+        INTEGer {
+            name : String,
+        }",
+        )
+        .expect_err("scalar field names are reserved");
     }
 
     #[test]
@@ -970,10 +1090,11 @@ mod tests {
         let _datamodel = DataModel::parse(
             "
                 Person {
-                    child : Person],
+                    child : [Person],
+                    name: String
                 }",
         )
-        .expect_err("missing [ before person");
+        .expect("missing [ before person");
 
         let _datamodel = DataModel::parse(
             "
@@ -1369,5 +1490,65 @@ mod tests {
         let person = datamodel.get_entity("Person").unwrap();
         assert_eq!(0, person.indexes.len());
         assert_eq!(1, person.indexes_to_remove.len());
+    }
+
+    #[test]
+    fn base64_field() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "Person {
+                    name : Base64,
+                }",
+            )
+            .expect("valid");
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                r#"Person {
+                        name : Base64 default "?%&JVBQS0pP",
+                    }"#,
+            )
+            .expect_err("invalid default value");
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                r#"Person {
+                            name : Base64 default "JVBQS0pP",
+                        }"#,
+            )
+            .expect("valid default value");
+    }
+
+    #[test]
+    fn json_field() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "Person {
+                    name : Json,
+                }",
+            )
+            .expect("valid Json");
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                r#"Person {
+                        name : Json default "qsd",
+                    }"#,
+            )
+            .expect_err("invalid default value");
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                r#"Person {
+                            name : Json default "[1,2,3]",
+                        }"#,
+            )
+            .expect("valid default value");
     }
 }

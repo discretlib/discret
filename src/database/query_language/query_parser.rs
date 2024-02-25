@@ -9,8 +9,6 @@ use super::{
 use pest::{iterators::{Pair, Pairs}, Parser};
 use pest_derive::Parser;
 
-
-
 #[derive(Parser)]
 #[grammar = "database/query_language/query.pest"]
 struct PestParser;
@@ -18,21 +16,20 @@ struct PestParser;
 
 #[derive(Debug)]
 pub enum QueryFieldType {
-    Function(Function),
     Aggregate(Function),
-    NamedField,
-    BinaryField,
-    EntityQuery(Box<EntityQuery>,bool),
+    Binary,
     EntityArrayQuery(Box<EntityQuery>, bool), 
+    EntityQuery(Box<EntityQuery>,bool),
+    Scalar,
+    Json
 }
-
-
 
 #[derive(Debug)]
 pub struct QueryField{
     pub field: Field,
     pub alias: Option<String>,
-    pub field_type:QueryFieldType
+    pub json_selector: Option<String>,
+    pub field_type: QueryFieldType
 } impl QueryField{
     pub fn name(&self) -> String{
         if self.alias.is_some(){
@@ -50,7 +47,6 @@ pub enum Function {
     Max(String),
     Min(String) ,
     Sum(String),
-    RefBy(String,Box<EntityQuery>)
 }
 
 #[derive(Debug)]
@@ -63,10 +59,11 @@ const DEFAULT_LIMIT: i64 = 100;
 #[derive(Debug)]
 pub struct EntityParams {
    pub filters: Vec<FilterParam>,
+   pub json_filters: Vec<JsonFilter>,
    pub aggregate_filters: Vec<FilterParam>,
    pub fulltext_search: Option<FieldValue>,
-   pub after: Vec<FieldValue>,
    pub before: Vec<FieldValue>,
+   pub after: Vec<FieldValue>,
    pub order_by: Vec<OrderBy>,
    pub first: FieldValue,
    pub skip: Option<FieldValue>,
@@ -79,11 +76,12 @@ impl Default for EntityParams{
 impl EntityParams {
     pub fn new() -> Self {
         Self {
-            after: Vec::new(),
-            before: Vec::new(),
             filters: Vec::new(),
+            json_filters:Vec::new(),
             aggregate_filters: Vec::new(),
             fulltext_search: None,
+            before: Vec::new(),
+            after: Vec::new(),
             first: FieldValue::Value(Value::Integer(DEFAULT_LIMIT)),
             order_by: Vec::new(),
             skip: None,
@@ -108,6 +106,15 @@ pub struct FilterParam {
     pub is_selected: bool,
     pub field: Field
 }
+
+#[derive(Debug)]
+pub struct JsonFilter {
+    pub selector: String, 
+    pub operation: String,
+    pub value: FieldValue,
+    pub field: Field
+}
+
 
 #[derive(Debug)]
 pub struct ParsedOrderBy{
@@ -183,19 +190,33 @@ impl EntityQuery {
 
     pub fn finalize(&self, variables: &mut Variables) -> Result<(), Error>{
         let par =&self.params;
+
+        if par.fulltext_search.is_some() & !par.order_by.is_empty(){
+            return Err(Error::InvalidQuery(String::from(
+                "Cannot add sort field when using search(). Results will be sorted by search rank '"
+            )))
+        }
+
         if !par.after.is_empty() && !par.before.is_empty(){
             return Err(Error::InvalidQuery(format!(
                 "'after' and 'before' filters cannot be used at the same time in query '{}'",
                 self.aliased_name()
             )))
         }
+        
         let paging = if !par.after.is_empty(){
             &par.after
         }else{
             &par.before
         };
-
+        
         if !paging.is_empty(){
+            if par.fulltext_search.is_some(){
+                return Err(Error::InvalidQuery(String::from(
+                    "'after' and 'before' are not compatible with search(). You can however use skip and first if you want to navigate through search() results'"
+                )))
+            }
+
             if paging.len() > par.order_by.len() {
                 return Err(Error::InvalidQuery(format!(
                     "'after' and 'before' must have a number of parameters lower or equal to the Order By clause. Order by size: '{}'",
@@ -207,16 +228,12 @@ impl EntityQuery {
                 let val = &paging[i];
                 let order_field = &par.order_by[i];
 
-                if self.is_aggregate{
-                    return Err(Error::InvalidPagingQuery())
-                }
-  
                 let field_type = &order_field.field.field_type;
                 match val{
                     FieldValue::Variable(var) => {
                         //we couln't know the variable type until now 
                         let variable_type = order_field.field.get_variable_type_non_nullable();
-                        variables.add(var.clone(), variable_type)?;
+                        variables.add(var, variable_type)?;
 
                     },
                     FieldValue::Value(val) => match val{
@@ -266,13 +283,7 @@ impl EntityQuery {
                 QueryFieldType::Aggregate(_)=>{
                     has_aggregate_function = true;
                 }
-                QueryFieldType::Function(f)=>{
-                    match f {
-                      Function::RefBy(_,_ ) => has_entity_field = true,
-                      _=> {} 
-                    }
-                }
-                QueryFieldType::NamedField| QueryFieldType::BinaryField=>{}
+                QueryFieldType::Scalar| QueryFieldType::Binary | QueryFieldType::Json=>{}
             }
         }
         
@@ -382,7 +393,7 @@ impl QueryParser {
         for entity_pair in pairs {
             match entity_pair.as_rule() {
                 Rule::entity_param => {
-                    let params = Self::parse_params( entity_pair, variables)?;
+                    let params = Self::parse_params( entity_pair,entity_model, variables)?;
                     parameters = params.0;
                     parsed_filters = Some(params.1);
                     parsed_order_by = Some(params.2)
@@ -418,22 +429,21 @@ impl QueryParser {
 
                             let field_type = match model_field.field_type {
                                 FieldType::Array(_) | FieldType::Entity(_) => {
-                                   
-
                                     return Err(Error::InvalidQuery(format!(
                                         "Invalid syntax for non scalar field. please use {}{{ .. }}",
                                         &name
                                     )))
                                 }
-                                FieldType::Base64 => QueryFieldType::BinaryField,
+                                FieldType::Base64 => QueryFieldType::Binary,
                                 
-                                _=>QueryFieldType::NamedField  
+                                _=>QueryFieldType::Scalar  
                             };
                             
 
                             let named = QueryField{
                                 field:model_field.clone(),
                                 alias,
+                                json_selector: None,
                                 field_type
                             };
                             entity.add_field(named)?;
@@ -498,14 +508,43 @@ impl QueryParser {
                             let named = QueryField{
                                 field:model_field.clone(),
                                 alias,
+                                json_selector: None,
                                 field_type: field_type
                             };
                             entity.add_field(named)?;
                         }
                         Rule::function => {
-                            let query_field =  Self::parse_functions(depth, entity, data_model,field_pair, variables)?;
+                            let query_field =  Self::parse_functions(entity, data_model,field_pair)?;
                             entity.add_field(query_field)?;
                         }
+                        Rule::json_field => {
+                            let mut json_pair = field_pair.into_inner();
+                            let alias = json_pair.next().unwrap().as_str().to_string();
+                            let mut selector_pair =  json_pair.next().unwrap().into_inner();
+                            let  name = selector_pair.next().unwrap().as_str();
+                            let field = entity_model.get_field(name)?;
+                            if field.field_type != FieldType::Json{
+                                return Err(Error::InvalidFieldType(name.to_string(), FieldType::Json.to_string(), field.field_type.to_string()));
+                            }
+                            let selector_pair = selector_pair.next().unwrap();
+                            
+                            let selector =  match selector_pair.as_rule(){
+                                Rule::json_object_selector => format!("'{}'", selector_pair.as_str()),
+                                Rule::json_array_selector =>  selector_pair.as_str().to_string(),
+                                _=> unreachable!()
+                            };
+                          
+                            let json = QueryField{
+                                field:field.clone(),
+                                alias:Some(alias),
+                                json_selector: Some(selector),
+                                field_type: QueryFieldType::Json
+                            };
+                          
+                          
+                            entity.add_field(json)?;
+                        }
+
                         _ => unreachable!()
                     }
                 }
@@ -547,11 +586,10 @@ impl QueryParser {
 
 
     fn parse_functions(  
-        depth: usize,
         entity: &mut EntityQuery,
         data_model: &DataModel,
         field_pair: Pair<'_, Rule>,
-        variables: &mut Variables,) -> Result<QueryField, Error>{
+       ) -> Result<QueryField, Error>{
 
         let mut function_pairs = field_pair.into_inner();
         let name = function_pairs.next().unwrap().as_str().to_string();
@@ -572,6 +610,7 @@ impl QueryParser {
                 QueryField{
                     field,
                     alias:Some(name),
+                    json_selector: None,
                     field_type: QueryFieldType::Aggregate(Function::Count)
                 }
             }
@@ -596,6 +635,7 @@ impl QueryParser {
                 QueryField{
                     field,
                     alias:Some(name),
+                    json_selector: None,
                     field_type: QueryFieldType::Aggregate(Function::Avg(String::from(&model_field.short_name)))
                 }
             }
@@ -621,6 +661,7 @@ impl QueryParser {
                 QueryField{
                     field,
                     alias:Some(name),
+                    json_selector: None,
                     field_type: QueryFieldType::Aggregate(Function::Max(String::from(&model_field.short_name)))
                 }
             }
@@ -646,6 +687,7 @@ impl QueryParser {
                 QueryField{
                     field,
                     alias:Some(name),
+                    json_selector: None,
                     field_type: QueryFieldType::Aggregate(Function::Min(String::from(&model_field.short_name)))
                 }
             }
@@ -670,58 +712,12 @@ impl QueryParser {
                 QueryField{
                     field,
                     alias:Some(name),
+                    json_selector: None,
                     field_type: QueryFieldType::Aggregate(Function::Sum(String::from(&model_field.short_name)))
                 }
 
             }
 
-            Rule::ref_by_fn => { 
-                let mut ref_by_pairs = function_pair.into_inner();
-                let ref_field = ref_by_pairs.next().unwrap().as_str();
-                let ref_entity_name = ref_by_pairs.next().unwrap().as_str();
-
-                let model_entity = data_model.get_entity(ref_entity_name)?;
-                let model_field = model_entity.get_field(ref_field)?;
-                match &model_field.field_type {
-                    FieldType::Array(e)| FieldType::Entity(e) => {
-                        if !e.eq(&entity.name){
-                            return Err(Error::InvalidQuery(format!(
-                                "field: '{}' in entity '{}' is not referencing entity '{}'. It is referencing the entity: '{}'",
-                                &ref_field, &ref_entity_name, &entity.name, e
-                            ))) 
-                        }
-                    }
-                    _=>{
-                        return Err(Error::InvalidQuery(format!(
-                            "field: '{}' in entity: '{}' is not referencing external entities. Its field type is '{}' ",
-                            &ref_field, &ref_entity_name, model_field.field_type 
-                        ))) 
-                    }
-                }
-                let mut target_entity =  EntityQuery::new();
-                target_entity.name = ref_entity_name.to_string();
-                target_entity.depth = depth + 1;
-
-                Self::parse_entity_internals(&mut target_entity, data_model, ref_by_pairs, variables)?;
-
-                entity.complexity += target_entity.complexity + 1;
-
-                if entity.depth < target_entity.depth {
-                    entity.depth = target_entity.depth
-                }
-
-                let field = Field {
-                    name,
-                    is_system: false,
-                    field_type: FieldType::Float,
-                    ..Default::default()
-                };
-                QueryField{
-                    field,
-                    alias:None,
-                    field_type: QueryFieldType::Function(Function::RefBy(model_field.short_name.to_string(), Box::new(target_entity)))
-                }
-            }
            
             _=> unreachable!()
         };
@@ -762,6 +758,7 @@ impl QueryParser {
 
     fn parse_params(
         pair: Pair<'_, Rule>,
+        entity_model: &Entity,
         variables: &mut Variables,
     ) -> Result<(EntityParams, Vec<ParsedFilter>, Vec<ParsedOrderBy>), Error> {
         let mut parameters = EntityParams::new();
@@ -770,101 +767,142 @@ impl QueryParser {
 
         let param_pairs = pair.into_inner();
         for param_pair in param_pairs {
-            let pair = param_pair.into_inner().next().unwrap();
-            match pair.as_rule() {
-                Rule::filter => {
-                    let filter = Self::parse_filter(pair)?;
-                    parsed_filter.push(filter);
-                }
-                Rule::order_by => {
-                    let order_pairs = pair.into_inner();
-                    
-                    for order_pair in order_pairs {
-                        let mut order_p = order_pair.into_inner();
-                        let name = order_p.next().unwrap().as_str().to_string();
+            match param_pair.as_rule() {
+                Rule::param => {
+                    let pair = param_pair.into_inner().next().unwrap();
+                    match pair.as_rule() {
+                        Rule::filter => {
+                            let filter = Self::parse_filter(pair)?;
+                            parsed_filter.push(filter);
+                        }
+                        Rule::order_by => {
+                            let order_pairs = pair.into_inner();
+                       
+                            for order_pair in order_pairs {
+                                match order_pair.as_rule() {
+                                    Rule::order_param => {  
+                                        let mut order_p = order_pair.into_inner();
+                                        let name = order_p.next().unwrap().as_str().to_string();
+        
+                                        let direction_str = order_p.next().unwrap().as_str().to_lowercase();
+                                        let direction = match direction_str.as_str() {
+                                            "asc" => Direction::Asc,
+                                            "desc" => Direction::Desc,
+                                            _=> unreachable!()
+                                        };
+                                        parsed_order_by.push(ParsedOrderBy{ name, direction })}
+                                    Rule::comma => {}
+                                    _=> unreachable!()
+                                }
+                            }
+                        }
+                        Rule::first => {
+                            let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
+                            match val.as_rule(){
+                                Rule::variable => {
+                                    let var = &val.as_str()[1..];
+                                    variables.add(var, VariableType::Integer(false))?;
+                                    parameters.first = FieldValue::Variable(var.to_string());
 
-                        let direction_str = order_p.next().unwrap().as_str().to_lowercase();
-                        let direction = match direction_str.as_str() {
-                            "asc" => Direction::Asc,
-                            "desc" => Direction::Desc,
-                            _=> unreachable!()
-                        };
-                        parsed_order_by.push(ParsedOrderBy{ name, direction })
+                                }
+                                Rule::unsigned_int => {
+                                    let value = val.as_str();
+                                    parameters.first = FieldValue::Value(Value::Integer(value.parse()?));
+                                }
+                                _=> unreachable!()
+                            }
+                        }
+
+                        Rule::skip => {
+                            let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
+                            match val.as_rule(){
+                                Rule::variable => {
+                                    let var = &val.as_str()[1..];
+                                    variables.add(var, VariableType::Integer(false))?;
+                                    parameters.skip = Some(FieldValue::Variable(var.to_string()));
+
+                                }
+                                Rule::unsigned_int => {
+                                    let value = val.as_str();
+                                    parameters.skip = Some(FieldValue::Value(Value::Integer(value.parse()?)));
+                                }
+                                _=> unreachable!()
+                            }
+                        }
+
+
+                        Rule::search => {
+                            let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
+                            match val.as_rule(){
+                                Rule::variable => {
+                                    let var = &val.as_str()[1..];
+                                    variables.add(var, VariableType::String(false))?;
+                                    parameters.fulltext_search = Some(FieldValue::Variable(var.to_string()));
+
+                                }
+                                Rule::string => {
+                                    let value = val.into_inner().next().unwrap().as_str();
+                                    parameters.fulltext_search = Some(FieldValue::Value(Value::String(value.to_string())));
+                                }
+                                _=> unreachable!()
+                            }
+                        }
+
+                        Rule::before => {
+                        let values = pair.into_inner();
+                        let before = Self::parse_paging_params(values)?;
+                        parameters.before = before;
+                        }
+
+                        Rule::after => {
+                            let values = pair.into_inner();
+                            let after = Self::parse_paging_params(values)?;
+                            parameters.after = after;
+                        }
+
+                        Rule::json_filter => {
+                            
+                            let mut values = pair.into_inner();
+                            let mut json_selector = values.next().unwrap().into_inner();
+                            let name = json_selector.next().unwrap().as_str(); 
+                            
+                            let field = entity_model.get_field(name)?;
+                            if field.field_type != FieldType::Json{
+                                return Err(Error::InvalidFieldType(name.to_string(), FieldType::Json.to_string(), field.field_type.to_string()));
+                            }
+
+                            let selector_pair = json_selector.next().unwrap();
+                            
+                            let selector =  match selector_pair.as_rule(){
+                                Rule::json_object_selector => format!("'{}'", selector_pair.as_str()),
+                                Rule::json_array_selector =>  selector_pair.as_str().to_string(),
+                                _=> unreachable!()
+                            };
+                           // println!("{:#?}", selector);
+                            let operation = values.next().unwrap().as_str().to_string();
+
+                            let val_pair = values.next().unwrap().into_inner().next().unwrap();
+                            
+                            let value =Self::parse_field_value(val_pair)?;
+                            let filter = JsonFilter{ selector, operation, value, field:field.clone() };
+                            parameters.json_filters.push(filter);
+
+                        }
+                        _ => unreachable!(),
+                        
                     }
                 }
-                Rule::first => {
-                    let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
-                    match val.as_rule(){
-                        Rule::variable => {
-                            let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Integer(false))?;
-                            parameters.first = FieldValue::Variable(var.to_string());
-
-                        }
-                        Rule::unsigned_int => {
-                            let value = val.as_str();
-                            parameters.first = FieldValue::Value(Value::Integer(value.parse()?));
-                        }
-                        _=> unreachable!()
-                    }
-                }
-
-                Rule::skip => {
-                    let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
-                    match val.as_rule(){
-                        Rule::variable => {
-                            let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::Integer(false))?;
-                            parameters.skip = Some(FieldValue::Variable(var.to_string()));
-
-                        }
-                        Rule::unsigned_int => {
-                            let value = val.as_str();
-                            parameters.skip = Some(FieldValue::Value(Value::Integer(value.parse()?)));
-                        }
-                        _=> unreachable!()
-                    }
-                }
-
-
-                Rule::search => {
-                    let val = pair.into_inner().next().unwrap().into_inner().next().unwrap();
-                    match val.as_rule(){
-                        Rule::variable => {
-                            let var = &val.as_str()[1..];
-                            variables.add(var.to_string(), VariableType::String(false))?;
-                            parameters.fulltext_search = Some(FieldValue::Variable(var.to_string()));
-
-                        }
-                        Rule::string => {
-                            let value = val.into_inner().next().unwrap().as_str();
-                            parameters.fulltext_search = Some(FieldValue::Value(Value::String(value.to_string())));
-                        }
-                        _=> unreachable!()
-                    }
-                }
-
-                Rule::before => {
-                  let values = pair.into_inner();
-                  let before = Self::parse_paging_params(values)?;
-                  parameters.before = before;
-                }
-
-                Rule::after => {
-                    let values = pair.into_inner();
-                    let after = Self::parse_paging_params(values)?;
-                    parameters.after = after;
-                }
-                _ => unreachable!(),
-                
+                Rule::comma => {}
+                _=> unreachable!()
             }
+            
         }
 
         Ok((parameters, parsed_filter, parsed_order_by))
     }
 
 
-    fn parse_filter(
+    fn parse_filter (
         pair: Pair<'_, Rule>,
     ) -> Result<ParsedFilter, Error> {
         let mut filter_pairs = pair.into_inner();
@@ -887,7 +925,7 @@ impl QueryParser {
         parsed_filters: ParsedFilter
     ) -> Result<FilterParam, Error> {
 
-        let mut is_aggregate = false;
+        let mut is_aggregate = false; 
         let mut is_entity_field = false;
         let mut is_selected = false;
 
@@ -906,9 +944,9 @@ impl QueryParser {
                         Some(e) => {
                             is_selected = true;
                             match e.field_type {
-                                QueryFieldType::Function(_) | QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
+                                QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
                                 QueryFieldType::Aggregate(_) => is_aggregate = true,
-                                QueryFieldType::NamedField | QueryFieldType::BinaryField => {},
+                                QueryFieldType::Scalar | QueryFieldType::Binary | QueryFieldType::Json=> {},
                             }
                             &e.field
                         },
@@ -938,7 +976,7 @@ impl QueryParser {
                     ))
                 }
                 let var_type = field.get_variable_type();
-                variables.add(var.to_string(), var_type)?;
+                variables.add(var, var_type)?;
                 parsed_filters.value
             },
             FieldValue::Value(val) => {
@@ -1068,9 +1106,9 @@ impl QueryParser {
                         Some(e) => {
                             is_selected = true;
                             match e.field_type {
-                                QueryFieldType::Function(_) | QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
+                                QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
                                 QueryFieldType::Aggregate(_) => is_aggregate = true,
-                                QueryFieldType::NamedField | QueryFieldType::BinaryField => {},
+                                QueryFieldType::Scalar | QueryFieldType::Binary | QueryFieldType::Json=> {},
                             }
                             &e.field
                         },
@@ -1080,7 +1118,9 @@ impl QueryParser {
             },
         };
 
-
+        if is_entity_field{
+            return Err(Error::InvalidQuery(format!("Order by Field '{}' references an Entity", &parsed_order.name)));
+        }
 
         Ok(OrderBy { 
             name: parsed_order.name,

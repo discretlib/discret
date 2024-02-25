@@ -110,9 +110,9 @@ impl DeletionParser {
                 }
 
                 Rule::id_field => {
-                    let var = entity_pair.as_str()[1..].to_string(); //remove $
-                    variables.add(var.clone(), VariableType::Base64(false))?;
-                    entity.id_param = var;
+                    let var = &entity_pair.as_str()[1..]; //remove $
+                    variables.add(var, VariableType::Base64(false))?;
+                    entity.id_param = var.to_string();
                 }
                 Rule::array_field => {
                     let dm_entity = data_model.get_entity(&entity.entity_name).unwrap();
@@ -137,11 +137,11 @@ impl DeletionParser {
                     };
                     let id_param: Option<String>;
                     if let Some(param_pair) = array_field_pairs.next() {
-                        let var = param_pair.as_str()[1..].to_string(); //remove $
+                        let var = &param_pair.as_str()[1..]; //remove $
 
-                        variables.add(var.clone(), VariableType::Base64(false))?;
+                        variables.add(var, VariableType::Base64(false))?;
 
-                        id_param = Some(var);
+                        id_param = Some(String::from(var));
                     } else {
                         id_param = None;
                     }
@@ -162,8 +162,10 @@ mod tests {
     use super::*;
     #[test]
     fn parse_valid_deletion() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String ,
@@ -176,8 +178,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let deletion = DeletionParser::parse(
             "
@@ -226,8 +228,10 @@ mod tests {
 
     #[test]
     fn parse_invalid_datamodel() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String ,
@@ -240,8 +244,8 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _ = DeletionParser::parse(
             "
@@ -336,8 +340,10 @@ mod tests {
 
     #[test]
     fn parse_invalid_field_type() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String ,
                 surname : String ,
@@ -345,8 +351,8 @@ mod tests {
                 pet : [Person]
             }        
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _ = DeletionParser::parse(
             "

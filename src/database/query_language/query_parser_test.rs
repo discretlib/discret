@@ -4,8 +4,10 @@ mod tests {
 
     #[test]
     fn parse_valid_query() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 surname : String,
@@ -22,14 +24,13 @@ mod tests {
             }
         
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
             query aquery {
                 Person(
-                    search("a search string"),
                     name = "someone",
                     is_human = true, 
                     age >= 1,
@@ -55,7 +56,6 @@ mod tests {
                 }
 
                 Parametrized : Person (
-                    search($search),
                     name = $name,
                     is_human = $human, 
                     age >= $age,
@@ -91,13 +91,6 @@ mod tests {
 
                 PetAndOwner : Pet (id=$id) {
                     name 
-                    owner: ref_by(
-                        pet, 
-                        Person{
-                            name
-                            surname
-                        }
-                    )
                 }
 
             }
@@ -111,15 +104,17 @@ mod tests {
 
     #[test]
     fn query_depth() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 parents : [Person],
             }        
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let query = QueryParser::parse(
             r#"
@@ -169,40 +164,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(2, query.queries[0].depth);
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    parents {
-                        name
-                    }
-                    children : ref_by(parents, Person {
-                        name
-                        parents {
-                            name
-                        }
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(2, query.queries[0].depth);
     }
 
     #[test]
     fn query_complexity() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 parents : [Person],
             }        
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let query = QueryParser::parse(
             r#"
@@ -251,47 +227,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(3, query.queries[0].complexity);
-
-        let query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    name 
-                    aliased : parents {
-                        name
-                        parents {
-                            name
-                        }
-                    }
-                    parents {
-                        name
-                    }
-                    children : ref_by(parents, Person {
-                        name
-                        parents {
-                            name
-                        }
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .unwrap();
-        assert_eq!(5, query.queries[0].complexity);
     }
 
     #[test]
     fn duplicated_field() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
                 parents : [Person],
             }        
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -360,16 +311,18 @@ mod tests {
 
     #[test]
     fn function() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
                 parents : [Person],
             }        
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -505,104 +458,14 @@ mod tests {
             &data_model,
         )
         .expect("count wil be grouped by age");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    fn : count()
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("when an aggregate function is used, 'entity' sub query is not allowed and ref_by(..) is a sub_query ");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    parents{
-                        name
-                    } 
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("ref_by(..) is not an aggregate function and accepts others sub queries");
-    }
-
-    #[test]
-    fn ref_by() {
-        let data_model = DataModel::parse(
-            "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
-
-            Pet {
-                name: String
-            }
-        ",
-        )
-        .unwrap();
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    children : ref_by(age, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("ref_by(..) is not referencing an entity");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    children : ref_by(pets, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("ref_by(..) field pets is not referencing a Person");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person {
-                    some : ref_by(someone, Person{
-                        name
-                    })
-                    children : ref_by(parents, Person{
-                        name
-                    })
-                }
-            } "#,
-            &data_model,
-        )
-        .expect("ref_by(..) is correct ");
     }
 
     #[test]
     fn start_with_underscore() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
@@ -615,8 +478,8 @@ mod tests {
                 name: String
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -669,8 +532,10 @@ mod tests {
 
     #[test]
     fn aliases() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
@@ -683,8 +548,8 @@ mod tests {
                 name: String
             }
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -742,16 +607,18 @@ mod tests {
 
     #[test]
     fn entity_field() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 parents : [Person],
                 someone : Person
             } 
 
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -790,8 +657,10 @@ mod tests {
 
     #[test]
     fn filters() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age : Integer,
@@ -801,8 +670,8 @@ mod tests {
             } 
 
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -917,16 +786,18 @@ mod tests {
 
     #[test]
     fn before_after() {
-        let data_model = DataModel::parse(
-            "
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
             Person {
                 name : String,
                 age: Integer
             } 
 
         ",
-        )
-        .unwrap();
+            )
+            .unwrap();
 
         let _query = QueryParser::parse(
             r#"
@@ -1016,5 +887,160 @@ mod tests {
             &data_model,
         )
         .expect("valid  ");
+    }
+
+    #[test]
+    fn search() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String,
+                age: Integer
+            } 
+
+        ",
+            )
+            .unwrap();
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   search("hello")
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   search("hello"),
+                   order_by(name asc)
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("Cannot add sort field when using search()");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   search("hello"),
+                   before("invalid")
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err(" 'before' is not compatible with search()");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   search("hello"),
+                   after("invalid")
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err(" 'before' is not compatible with search()");
+    }
+
+    #[test]
+    fn json() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String,
+                data: Json
+            } 
+
+        ",
+            )
+            .unwrap();
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   data->1 = "tesst"
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                  data->$.a[1].b = 1
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   data->1 = 1
+                ) {
+                    name
+                    internal : data->1
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   data->$.c[2].f = 1
+                ) {
+                    name
+                    internal : data->$.c[2].f
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   data->$.c[2].f = 1
+                ) {
+                    wrong: name->$.c[2].f
+                    internal : data->$.c[2].f
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("name is not a json_type");
     }
 }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
 
-use super::graph_database::{QueryResult, Readable};
 use super::query_language::query_parser::{
     Direction, EntityParams, EntityQuery, Function, QueryField, QueryFieldType,
 };
@@ -120,6 +119,9 @@ pub fn get_entity_query(
     tab(&mut q, t);
     q.push_str(&format!("FROM _node {}", entity.aliased_name()));
 
+    let search = get_search_join(&entity.params, &entity.aliased_name(), t);
+    q.push_str(&search);
+
     q.push('\n');
     tab(&mut q, t);
     q.push_str("WHERE \n");
@@ -129,22 +131,9 @@ pub fn get_entity_query(
         entity.aliased_name(),
         &entity.short_name
     ));
-    let paging = get_paging(&entity.params, prepared_query, t);
-    q.push_str(&paging);
 
-    let filters = get_where_filters(&entity.params, prepared_query, t);
-    q.push_str(&filters);
-    if entity.is_aggregate {
-        let group_by = get_group_by(&entity.fields, t);
-        q.push_str(&group_by);
-    }
-
-    if entity.params.order_by.len() > 0 {
-        q.push('\n');
-        tab(&mut q, t);
-        let order_by = get_order(&entity.params);
-        q.push_str(&order_by);
-    }
+    let end = get_end_select_query(entity, prepared_query, t);
+    q.push_str(&end);
 
     q.push('\n');
     tab(&mut q, t);
@@ -210,6 +199,8 @@ pub fn get_sub_entity_query(
         "FROM _edge JOIN _node {0} on _edge.dest={0}.id AND _edge.label='{1}'",
         field_name, field_short
     ));
+    let search = get_search_join(&entity.params, field_name, t);
+    q.push_str(&search);
 
     q.push('\n');
     tab(&mut q, t);
@@ -222,23 +213,8 @@ pub fn get_sub_entity_query(
     tab(&mut q, t);
     q.push_str(&format!("_edge.src={}.id ", &parent_table));
 
-    let paging = get_paging(&entity.params, prepared_query, t);
-    q.push_str(&paging);
-
-    let filters = get_where_filters(&entity.params, prepared_query, t);
-    q.push_str(&filters);
-
-    if entity.is_aggregate {
-        let group_by = get_group_by(&entity.fields, t);
-        q.push_str(&group_by);
-    }
-
-    if entity.params.order_by.len() > 0 {
-        q.push('\n');
-        tab(&mut q, t);
-        let order_by = get_order(&entity.params);
-        q.push_str(&order_by);
-    }
+    let end = get_end_select_query(entity, prepared_query, t);
+    q.push_str(&end);
 
     q.push('\n');
     tab(&mut q, t);
@@ -247,6 +223,58 @@ pub fn get_sub_entity_query(
         q.push_str(&limit);
     } else {
         q.push_str("LIMIT 1 ");
+    }
+    q
+}
+
+pub fn get_end_select_query(
+    entity: &EntityQuery,
+    prepared_query: &mut PreparedQuery,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+
+    let search = get_search_filter(&entity.params, prepared_query, t);
+    q.push_str(&search);
+
+    let filters = get_where_filters(&entity.params, prepared_query, t);
+    q.push_str(&filters);
+
+    if entity.is_aggregate {
+        let group_by = get_group_by(&entity.fields, t);
+        q.push_str(&group_by);
+        if !entity.params.aggregate_filters.is_empty()
+            | !entity.params.before.is_empty()
+            | !entity.params.after.is_empty()
+        {
+            q.push('\n');
+            tab(&mut q, t);
+            q.push_str("HAVING \n");
+            tab(&mut q, t);
+        }
+    }
+    let having = get_having_filters(&entity.params, prepared_query, t);
+    q.push_str(&having);
+
+    if !entity.params.aggregate_filters.is_empty()
+        && (!entity.params.before.is_empty() || !entity.params.after.is_empty())
+    {
+        q.push_str(" AND \n");
+        tab(&mut q, t);
+    }
+    if !entity.is_aggregate && (!entity.params.before.is_empty() || !entity.params.after.is_empty())
+    {
+        q.push_str(" AND \n");
+        tab(&mut q, t);
+    }
+    let paging = get_paging(&entity.params, prepared_query);
+    q.push_str(&paging);
+
+    if entity.params.order_by.len() > 0 || entity.params.fulltext_search.is_some() {
+        q.push('\n');
+        tab(&mut q, t);
+        let order_by = get_order(&entity.params);
+        q.push_str(&order_by);
     }
     q
 }
@@ -275,7 +303,7 @@ fn get_fields(
         tab(&mut q, t);
 
         match &field.field_type {
-            QueryFieldType::BinaryField => {
+            QueryFieldType::Binary => {
                 q.push_str(&format!(
                     "'{}', base64_encode({})",
                     &field.name(),
@@ -283,15 +311,56 @@ fn get_fields(
                 ));
             }
 
-            QueryFieldType::NamedField => {
+            QueryFieldType::Scalar => {
                 if field.field.is_system {
                     q.push_str(&format!("'{}', {}", &field.name(), &field.field.short_name,));
                 } else {
+                    if let Some(val) = &field.field.default_value {
+                        let default = match val {
+                            Value::Boolean(b) => b.to_string(),
+                            Value::Integer(i) => i.to_string(),
+                            Value::Float(f) => f.to_string(),
+                            Value::String(s) => prepared_query.add_param(String::from(s), true),
+                            Value::Null => unreachable!(),
+                        };
+                        q.push_str(&format!(
+                            "'{}',{}",
+                            &field.name(),
+                            format!("Ifnull({},{})", js_field(&field.field.short_name), default)
+                        ))
+                    } else {
+                        q.push_str(&format!(
+                            "'{}',{}",
+                            &field.name(),
+                            js_field(&field.field.short_name)
+                        ))
+                    }
+                }
+            }
+
+            QueryFieldType::Json => {
+                let selector = match &field.json_selector {
+                    Some(sel) => sel.clone(),
+                    None => String::from("$"),
+                };
+
+                let select = format!("{}->{}", js_field(&field.field.short_name), selector);
+
+                if let Some(val) = &field.field.default_value {
+                    let default = match val {
+                        Value::Boolean(b) => b.to_string(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::String(s) => prepared_query.add_param(String::from(s), true),
+                        Value::Null => unreachable!(),
+                    };
                     q.push_str(&format!(
                         "'{}',{}",
                         &field.name(),
-                        js_field(&field.field.short_name,)
+                        format!("Ifnull({},{})", select, default)
                     ))
+                } else {
+                    q.push_str(&format!("'{}',{}", &field.name(), select))
                 }
             }
 
@@ -363,12 +432,9 @@ fn get_fields(
                         };
                         format!("'{}', total({}) ", &field.name(), agg_field)
                     }
-                    Function::RefBy(_, _) => unreachable!(),
                 };
                 q.push_str(&func);
             }
-
-            QueryFieldType::Function(_) => todo!(),
         }
 
         if !it.peek().is_none() {
@@ -451,12 +517,97 @@ fn get_where_filters(
             }
         }
     }
+    if params.json_filters.len() > 0 {
+        q.push_str("AND ");
+        q.push('\n');
+        tab(&mut q, t);
+        let it = &mut params.json_filters.iter().peekable();
+        while let Some(filter) = it.next() {
+            let mut operation = filter.operation.clone();
+
+            let value = match &filter.value {
+                FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+                FieldValue::Value(val) => match val {
+                    Value::Boolean(bool) => bool.to_string(),
+                    Value::Integer(i) => i.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::String(s) => prepared_query.add_param(String::from(s), true),
+                    Value::Null => {
+                        match filter.operation.as_str() {
+                            "=" => operation = String::from("is"),
+                            "!=" => operation = String::from("is not"),
+                            _ => {}
+                        }
+                        String::from("null")
+                    }
+                },
+            };
+            let selector = &filter.selector;
+
+            q.push_str(&format!(
+                "{}->>{} {} {}",
+                js_field(&filter.field.short_name),
+                selector,
+                operation,
+                value
+            ));
+
+            if !it.peek().is_none() {
+                q.push_str(" AND\n");
+                tab(&mut q, t);
+            }
+        }
+    }
     q
 }
+
+fn get_having_filters(
+    params: &EntityParams,
+    prepared_query: &mut PreparedQuery,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+
+    let it = &mut params.aggregate_filters.iter().peekable();
+    while let Some(filter) = it.next() {
+        let mut operation = filter.operation.clone();
+
+        let value = match &filter.value {
+            FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+            FieldValue::Value(val) => match val {
+                Value::Boolean(bool) => bool.to_string(),
+                Value::Integer(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::String(s) => prepared_query.add_param(String::from(s), true),
+                Value::Null => {
+                    match filter.operation.as_str() {
+                        "=" => operation = String::from("is"),
+                        "!=" => operation = String::from("is not"),
+                        _ => {}
+                    }
+                    String::from("null")
+                }
+            },
+        };
+
+        q.push_str(&format!(
+            "value->>'$.{}' {} {}",
+            &filter.name, operation, &value
+        ));
+
+        if !it.peek().is_none() {
+            q.push_str(" AND\n");
+            tab(&mut q, t);
+        }
+    }
+    q
+}
+
 pub fn get_order(params: &EntityParams) -> String {
     let mut query = String::new();
-
-    if !params.order_by.is_empty() {
+    if params.fulltext_search.is_some() {
+        query.push_str("ORDER BY rank");
+    } else if !params.order_by.is_empty() {
         query.push_str("ORDER BY ");
 
         let it = &mut params.order_by.iter().peekable();
@@ -485,7 +636,42 @@ pub fn get_order(params: &EntityParams) -> String {
     query
 }
 
-pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery, t: usize) -> String {
+pub fn get_search_join(params: &EntityParams, node_table: &str, t: usize) -> String {
+    let mut q = String::new();
+    if params.fulltext_search.is_some() {
+        q.push('\n');
+        tab(&mut q, t);
+        q.push_str(&format!(
+            "JOIN _node_fts ON _node_fts.rowid={0}.rowid",
+            node_table
+        ));
+    }
+    q
+}
+
+pub fn get_search_filter(
+    params: &EntityParams,
+    prepared_query: &mut PreparedQuery,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+    if let Some(query) = &params.fulltext_search {
+        let value = match query {
+            FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
+            FieldValue::Value(val) => match val {
+                Value::String(s) => prepared_query.add_param(String::from(s), true),
+                _ => unreachable!(),
+            },
+        };
+
+        q.push_str("AND \n");
+        tab(&mut q, t);
+        q.push_str(&format!("_node_fts MATCH {}", value));
+    }
+    q
+}
+
+pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery) -> String {
     let mut q = String::new();
 
     let mut before = true;
@@ -497,8 +683,6 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery, t: 
     };
 
     if paging.len() > 0 {
-        q.push_str(" AND \n");
-        tab(&mut q, t);
         q.push('(');
     }
     for i in 0..paging.len() {
@@ -634,7 +818,7 @@ fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
 
     for field in fields {
         match &field.field_type {
-            QueryFieldType::NamedField => v.push(field.field.short_name.clone()),
+            QueryFieldType::Scalar => v.push(field.field.short_name.clone()),
             _ => {}
         }
     }
@@ -678,8 +862,8 @@ pub struct Query {
     pub parser: Arc<QueryParser>,
     pub sql_queries: Queries,
 }
-impl Readable for Query {
-    fn read(&self, conn: &rusqlite::Connection) -> Result<super::graph_database::QueryResult> {
+impl Query {
+    pub fn read(&self, conn: &rusqlite::Connection) -> Result<String> {
         let mut result_string = String::new();
         result_string.push('{');
         result_string.push('\n');
@@ -711,6 +895,6 @@ impl Readable for Query {
         }
 
         result_string.push('}');
-        Ok(QueryResult::String(result_string))
+        Ok(result_string)
     }
 }
