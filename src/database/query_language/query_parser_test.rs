@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::database::query_language::{data_model::DataModel, query_parser::QueryParser};
+    use crate::database::query_language::{
+        data_model_parser::DataModel, query_parser::QueryParser,
+    };
 
     #[test]
     fn parse_valid_query() {
@@ -521,13 +523,13 @@ mod tests {
                 }
 
                 pet: Person {
-                    _pub_key
+                    _verifying_key
                 }
 
             } "#,
             &data_model,
         )
-        .expect("_pub_key is a valid system field");
+        .expect("_verifying_key is a valid system field");
     }
 
     #[test]
@@ -665,7 +667,7 @@ mod tests {
                 name : String,
                 age : Integer,
                 weight : Float,
-                parents : [Person] nullable,
+                parents : [Person] ,
                 someone : Person
             } 
 
@@ -705,28 +707,6 @@ mod tests {
             &data_model,
         )
         .expect("nullable non scalar fields can check for the null value");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (someone = null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non nullable non scalar fields cannot check for the null value");
-
-        let _query = QueryParser::parse(
-            r#"
-            query aquery {
-                Person (someone != null) {
-                    name
-                }
-            } "#,
-            &data_model,
-        )
-        .expect_err("non nullable non scalar fields cannot check for the null value");
 
         let _query = QueryParser::parse(
             r#"

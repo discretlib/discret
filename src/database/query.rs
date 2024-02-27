@@ -17,12 +17,12 @@ pub struct Param {
 }
 
 #[derive(Debug)]
-pub struct PreparedQuery {
+pub struct SingleQuery {
     pub name: String,
     pub var_order: Vec<Param>,
     pub sql_query: String,
 }
-impl Default for PreparedQuery {
+impl Default for SingleQuery {
     fn default() -> Self {
         Self {
             name: Default::default(),
@@ -31,7 +31,7 @@ impl Default for PreparedQuery {
         }
     }
 }
-impl PreparedQuery {
+impl SingleQuery {
     fn add_param(&mut self, value: String, internal: bool) -> String {
         if internal {
             self.var_order.push(Param { internal, value });
@@ -49,7 +49,7 @@ impl PreparedQuery {
     }
 
     pub fn build(entity: &EntityQuery) -> Result<Self> {
-        let mut prepared_query = PreparedQuery {
+        let mut prepared_query = SingleQuery {
             name: String::from(&entity.aliased_name()),
             ..Default::default()
         };
@@ -106,7 +106,7 @@ impl PreparedQuery {
 
 pub fn get_entity_query(
     entity: &EntityQuery,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     t: usize,
 ) -> String {
     let mut q = String::new();
@@ -145,7 +145,7 @@ pub fn get_entity_query(
 
 pub fn get_sub_group_array(
     entity: &EntityQuery,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     parent_table: &str,
     field_name: &str,
     field_short: &str,
@@ -179,7 +179,7 @@ pub fn get_sub_group_array(
 
 pub fn get_sub_entity_query(
     entity: &EntityQuery,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     parent_table: &str,
     field_name: &str,
     field_short: &str,
@@ -229,7 +229,7 @@ pub fn get_sub_entity_query(
 
 pub fn get_end_select_query(
     entity: &EntityQuery,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     t: usize,
 ) -> String {
     let mut q = String::new();
@@ -291,7 +291,7 @@ fn js_field(field: &str) -> String {
 
 fn get_fields(
     entity: &EntityQuery,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     parent_table: &str,
     t: usize,
 ) -> String {
@@ -445,11 +445,7 @@ fn get_fields(
     q
 }
 
-fn get_where_filters(
-    params: &EntityParams,
-    prepared_query: &mut PreparedQuery,
-    t: usize,
-) -> String {
+fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t: usize) -> String {
     let mut q = String::new();
 
     if params.filters.len() > 0 {
@@ -561,11 +557,7 @@ fn get_where_filters(
     q
 }
 
-fn get_having_filters(
-    params: &EntityParams,
-    prepared_query: &mut PreparedQuery,
-    t: usize,
-) -> String {
+fn get_having_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t: usize) -> String {
     let mut q = String::new();
 
     let it = &mut params.aggregate_filters.iter().peekable();
@@ -651,7 +643,7 @@ pub fn get_search_join(params: &EntityParams, node_table: &str, t: usize) -> Str
 
 pub fn get_search_filter(
     params: &EntityParams,
-    prepared_query: &mut PreparedQuery,
+    prepared_query: &mut SingleQuery,
     t: usize,
 ) -> String {
     let mut q = String::new();
@@ -671,7 +663,7 @@ pub fn get_search_filter(
     q
 }
 
-pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery) -> String {
+pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> String {
     let mut q = String::new();
 
     let mut before = true;
@@ -778,7 +770,7 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut PreparedQuery) -> 
     q
 }
 
-pub fn get_limit(params: &EntityParams, prepared_query: &mut PreparedQuery) -> String {
+pub fn get_limit(params: &EntityParams, prepared_query: &mut SingleQuery) -> String {
     let mut query = String::new();
 
     match &params.first {
@@ -840,15 +832,15 @@ fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
 }
 
 #[derive(Debug)]
-pub struct Queries {
+pub struct PreparedQueries {
     pub name: String,
-    pub sql_queries: Vec<PreparedQuery>,
+    pub sql_queries: Vec<SingleQuery>,
 }
-impl Queries {
+impl PreparedQueries {
     pub fn build(parser: &QueryParser) -> Result<Self> {
         let mut sql_queries = Vec::new();
         for query in &parser.queries {
-            sql_queries.push(PreparedQuery::build(&query)?);
+            sql_queries.push(SingleQuery::build(&query)?);
         }
         Ok(Self {
             name: String::from(&parser.name),
@@ -860,7 +852,7 @@ impl Queries {
 pub struct Query {
     pub parameters: Parameters,
     pub parser: Arc<QueryParser>,
-    pub sql_queries: Queries,
+    pub sql_queries: Arc<PreparedQueries>,
 }
 impl Query {
     pub fn read(&self, conn: &rusqlite::Connection) -> Result<String> {

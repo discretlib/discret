@@ -1,10 +1,8 @@
 use super::{
-    graph_database::{is_valid_id_len, now, RowMappingFn, MAX_ROW_LENTGH},
+    sqlite_database::{is_valid_id_len, RowMappingFn, MAX_ROW_LENTGH},
     Error, Result,
 };
-use crate::cryptography::{
-    base64_encode, Ed2519PublicKey, Ed25519SigningKey, PublicKey, SigningKey,
-};
+use crate::cryptography::{base64_encode, import_verifying_key, now, SigningKey};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +17,7 @@ pub struct Edge {
     pub label: String,
     pub dest: Vec<u8>,
     pub cdate: i64,
-    pub pub_key: Vec<u8>,
+    pub verifying_key: Vec<u8>,
     pub signature: Vec<u8>,
 }
 impl Edge {
@@ -36,7 +34,7 @@ impl Edge {
                 label TEXT NOT NULL,
                 dest BLOB NOT NULL,
                 cdate INTEGER NOT NULL,
-                pub_key BLOB NOT NULL,
+                verifying_key BLOB NOT NULL,
                 signature BLOB NOT NULL,
                 PRIMARY KEY (src, label, dest)
             ) WITHOUT ROWID, STRICT;
@@ -52,7 +50,7 @@ impl Edge {
     }
 
     pub const EDGE_QUERY: &'static str = "
-    SELECT  src, label, dest, cdate, pub_key, signature 
+    SELECT  src, label, dest, cdate, verifying_key, signature 
         FROM _edge
     WHERE 
         src = ? AND
@@ -65,7 +63,7 @@ impl Edge {
             label: row.get(1)?,
             dest: row.get(2)?,
             cdate: row.get(3)?,
-            pub_key: row.get(4)?,
+            verifying_key: row.get(4)?,
             signature: row.get(5)?,
         }))
     };
@@ -76,7 +74,7 @@ impl Edge {
         len += &self.label.as_bytes().len();
         len += &self.dest.len();
         len += 8; //cdate
-        len += &self.pub_key.len();
+        len += &self.verifying_key.len();
         len += &self.signature.len();
         len
     }
@@ -87,7 +85,7 @@ impl Edge {
         hasher.update(&self.label.as_bytes());
         hasher.update(&self.dest);
         hasher.update(&self.cdate.to_le_bytes());
-        hasher.update(&self.pub_key);
+        hasher.update(&self.verifying_key);
         hasher.finalize()
     }
 
@@ -116,15 +114,15 @@ impl Edge {
         }
         let hash = self.hash();
 
-        let pub_key = Ed2519PublicKey::import(&self.pub_key)?;
-        pub_key.verify(hash.as_bytes(), &self.signature)?;
+        let verifying_key = import_verifying_key(&self.verifying_key)?;
+        verifying_key.verify(hash.as_bytes(), &self.signature)?;
         Ok(())
     }
 
     ///
     /// sign the edge after performing some checks
     ///
-    pub fn sign(&mut self, signing_key: &Ed25519SigningKey) -> Result<()> {
+    pub fn sign(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         if !is_valid_id_len(&self.src) {
             return Err(Error::InvalidId());
         }
@@ -133,7 +131,7 @@ impl Edge {
             return Err(Error::InvalidId());
         }
 
-        self.pub_key = signing_key.export_public();
+        self.verifying_key = signing_key.export_verifying_key();
 
         let size = self.len();
         if size > MAX_ROW_LENTGH.try_into().unwrap() {
@@ -159,7 +157,7 @@ impl Edge {
     ///
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _edge (src, label, dest, cdate, pub_key, signature) 
+            "INSERT OR REPLACE INTO _edge (src, label, dest, cdate, verifying_key, signature) 
                             VALUES (?, ?, ?, ?, ?, ?)",
         )?;
         insert_stmt.execute((
@@ -167,7 +165,7 @@ impl Edge {
             &self.label,
             &self.dest,
             &self.cdate,
-            &self.pub_key,
+            &self.verifying_key,
             &self.signature,
         ))?;
 
@@ -190,6 +188,24 @@ impl Edge {
             ",
         )?;
         delete_stmt.execute((&self.src, &self.label, &self.dest))?;
+        Ok(())
+    }
+
+    pub fn delete_edge(
+        src: &Vec<u8>,
+        label: &str,
+        dest: &Vec<u8>,
+        conn: &Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        let mut delete_stmt = conn.prepare_cached(
+            "DELETE FROM _edge
+            WHERE 
+                src = ? AND
+                label = ? AND
+                dest = ?
+            ",
+        )?;
+        delete_stmt.execute((&src, &label, &dest))?;
         Ok(())
     }
 
@@ -232,7 +248,7 @@ impl Edge {
     ///
     pub fn get_edges(src: &Vec<u8>, label: &str, conn: &Connection) -> Result<Vec<Box<Edge>>> {
         let mut edges_stmt = conn.prepare_cached(
-            "SELECT  src, label, dest, cdate, pub_key, signature 
+            "SELECT  src, label, dest, cdate, verifying_key, signature 
             FROM _edge
             WHERE 
                 src = ? AND
@@ -257,7 +273,7 @@ impl Default for Edge {
             label: String::from(""),
             dest: vec![],
             cdate: now(),
-            pub_key: vec![],
+            verifying_key: vec![],
             signature: vec![],
         }
     }
@@ -267,8 +283,8 @@ impl Default for Edge {
 mod tests {
 
     use crate::{
-        cryptography::{Ed25519SigningKey, SigningKey},
-        database::graph_database::{new_id, prepare_connection, DB_ID_MAX_SIZE},
+        cryptography::{new_id, Ed25519SigningKey, SigningKey},
+        database::sqlite_database::{prepare_connection, DB_ID_MAX_SIZE},
     };
 
     use super::*;
@@ -276,8 +292,8 @@ mod tests {
     #[test]
     fn edge_signature() {
         let keypair = Ed25519SigningKey::new();
-        let from = new_id(10);
-        let to = new_id(10);
+        let from = new_id();
+        let to = new_id();
         let mut e = Edge {
             src: from.clone(),
             label: String::from("Test"),
@@ -288,7 +304,7 @@ mod tests {
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        let bad_id = new_id(10);
+        let bad_id = new_id();
         e.src = bad_id.clone();
         e.verify()
             .expect_err("'from' has changed, verification must fail");
@@ -308,7 +324,7 @@ mod tests {
         e.verify().unwrap();
 
         let badk = Ed25519SigningKey::new();
-        e.pub_key = badk.export_public();
+        e.verifying_key = badk.export_verifying_key();
         e.verify()
             .expect_err("'public key' has changed, verification must fail");
         e.sign(&keypair).unwrap();
@@ -321,7 +337,7 @@ mod tests {
     #[test]
     fn edge_limit() {
         let keypair = Ed25519SigningKey::new();
-        let source = new_id(10);
+        let source = new_id();
 
         let mut e = Edge {
             src: source.clone(),
@@ -361,8 +377,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let label = "pet";
-        let from = new_id(now());
-        let to = new_id(now());
+        let from = new_id();
+        let to = new_id();
         let mut e = Edge {
             src: from.clone(),
             label: String::from(label),
@@ -380,7 +396,7 @@ mod tests {
         let edges = Edge::get_edges(&from, label, &conn).unwrap();
         assert_eq!(1, edges.len());
 
-        new_edge.dest = new_id(now());
+        new_edge.dest = new_id();
         new_edge.sign(&signing_key).unwrap();
         new_edge.write(&conn).unwrap();
 

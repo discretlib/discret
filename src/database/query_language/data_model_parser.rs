@@ -1,9 +1,10 @@
-use crate::base64_decode;
+use crate::cryptography::base64_decode;
 
 use super::{Error, FieldType, Value, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -19,7 +20,7 @@ const MODIFICATION_DATE_FIELD: &str = "mdate";
 const ENTITY_FIELD: &str = "_entity";
 const JSON_FIELD: &str = "_json";
 const BINARY_FIELD: &str = "_binary";
-const PUB_KEY_FIELD: &str = "_pub_key";
+const PUB_KEY_FIELD: &str = "_verifying_key";
 const SIGNATURE_FIELD: &str = "_signature";
 
 lazy_static::lazy_static! {
@@ -162,8 +163,9 @@ lazy_static::lazy_static! {
 /// applies to entity and field
 const RESERVED_SHORT_NAMES: usize = 32;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DataModel {
+    model: String,
     entities: HashMap<String, Entity>,
 }
 impl Default for DataModel {
@@ -174,6 +176,7 @@ impl Default for DataModel {
 impl DataModel {
     pub fn new() -> Self {
         Self {
+            model: String::from(""),
             entities: HashMap::new(),
         }
     }
@@ -206,25 +209,46 @@ impl DataModel {
         }
     }
 
-    pub fn update(&mut self, query: &str) -> Result<(), Error> {
-        let mut new_data_model = Self::parse(query)?;
+    pub fn update(&mut self, model: &str) -> Result<(), Error> {
+        let new_data_model = Self::parse(model)?;
+        self.update_with(new_data_model)?;
+        Ok(())
+    }
+
+    pub fn update_with(&mut self, mut new_data_model: Self) -> Result<(), Error> {
         for entity in &mut self.entities {
             let new_entity_op = new_data_model.entities.remove(entity.0);
             match new_entity_op {
-                Some(new_entity) => entity.1.update(new_entity)?,
+                Some(new_entity) => {
+                    let old_entity = entity.1;
+                    if !old_entity.short_name.eq(&new_entity.short_name) {
+                        let mut new_pos: usize = new_entity.short_name.parse()?;
+                        new_pos -= RESERVED_SHORT_NAMES;
+                        let mut previous_pos: usize = old_entity.short_name.parse()?;
+                        previous_pos -= RESERVED_SHORT_NAMES;
+
+                        return Err(Error::InvalidEntityOrdering(
+                            String::from(&old_entity.name),
+                            new_pos,
+                            previous_pos,
+                        ));
+                    }
+                    old_entity.update(new_entity)?
+                }
                 None => return Err(Error::MissingEntity(String::from(entity.0))),
             }
         }
         for entity in new_data_model.entities {
-            self.insert(entity.0, entity.1)?;
+            self.entities.insert(entity.0, entity.1);
         }
+        self.model = String::from(new_data_model.model);
         Ok(())
     }
 
-    fn parse(query: &str) -> Result<DataModel, Error> {
+    fn parse(model: &str) -> Result<DataModel, Error> {
         let mut data_model = DataModel::new();
-
-        let parse = match PestParser::parse(Rule::datamodel, query) {
+        data_model.model = String::from(model);
+        let parse = match PestParser::parse(Rule::datamodel, model) {
             Err(e) => {
                 let message = format!("{}", e);
                 return Err(Error::ParserError(message));
@@ -427,7 +451,8 @@ impl DataModel {
                                 }
 
                                 Rule::string => {
-                                    let value = value_pair.into_inner().next().unwrap().as_str();
+                                    let pair = value_pair.into_inner().next().unwrap();
+                                    let value = pair.as_str().replace("\\\"", "\"");
                                     match field.field_type {
                                         FieldType::String => {
                                             field.default_value =
@@ -436,18 +461,15 @@ impl DataModel {
                                         FieldType::Base64 => {
                                             let decode = base64_decode(value.as_bytes());
                                             if decode.is_err() {
-                                                return Err(Error::InvalidBase64(
-                                                    value.to_string(),
-                                                ));
+                                                return Err(Error::InvalidBase64(value));
                                             }
-                                            field.default_value =
-                                                Some(Value::String(value.to_string()))
+                                            field.default_value = Some(Value::String(value))
                                         }
                                         FieldType::Json => {
                                             let v: std::result::Result<
                                                 serde_json::Value,
                                                 serde_json::Error,
-                                            > = serde_json::from_str(value);
+                                            > = serde_json::from_str(&value);
                                             if v.is_err() {
                                                 return Err(Error::InvalidJson(value.to_string()));
                                             }
@@ -481,10 +503,7 @@ impl DataModel {
                 }
 
                 field.field_type = FieldType::Entity(String::from(name));
-
-                if let Some(_next) = entity_field.next() {
-                    field.nullable = true;
-                }
+                field.nullable = true;
             }
             Rule::entity_array => {
                 let mut entity_field = field_type.into_inner();
@@ -494,10 +513,7 @@ impl DataModel {
                 }
 
                 field.field_type = FieldType::Array(String::from(name));
-
-                if let Some(_next) = entity_field.next() {
-                    field.nullable = true;
-                }
+                field.nullable = true;
             }
 
             _ => unreachable!(),
@@ -535,7 +551,7 @@ impl DataModel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Index {
     fields: Vec<String>,
 }
@@ -578,7 +594,7 @@ impl Index {
 /// - existing fields can be changed from nullable to not nullable only if a default value is provided
 /// - new fields must provide a default value if not nullable
 ///
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Entity {
     pub name: String,
     pub short_name: String,
@@ -614,7 +630,19 @@ impl Entity {
             match new_field_opt {
                 Some(new_field) => {
                     let field = field.1;
+                    if !field.short_name.eq(&new_field.short_name) {
+                        let mut new_pos: usize = new_field.short_name.parse()?;
+                        new_pos -= RESERVED_SHORT_NAMES;
+                        let mut previous_pos: usize = field.short_name.parse()?;
+                        previous_pos -= RESERVED_SHORT_NAMES;
 
+                        return Err(Error::InvalidFieldOrdering(
+                            String::from(&self.name),
+                            String::from(&field.name),
+                            new_pos,
+                            previous_pos,
+                        ));
+                    }
                     if !field.field_type.eq(&new_field.field_type) {
                         return Err(Error::CannotUpdateFieldType(
                             String::from(&self.name),
@@ -735,7 +763,7 @@ impl Entity {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Field {
     pub name: String,
     pub short_name: String,
@@ -802,9 +830,9 @@ mod tests {
                 @deprecated Person {
                     name : String ,
                     surname : String nullable,
-                    child : [Person] nullable,
+                    child : [Person] ,
                     mother : Person ,
-                    father : Person NULLABLE, 
+                    father : Person , 
                     index(name, surname),
                      
                 }
@@ -845,7 +873,7 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(false, owner.nullable);
+        assert_eq!(true, owner.nullable);
 
         let index = &pet.indexes;
         assert_eq!(1, index.len());
@@ -886,7 +914,7 @@ mod tests {
             FieldType::Entity(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(false, mother.nullable);
+        assert_eq!(true, mother.nullable);
 
         let father = person.fields.get("father").unwrap();
         match &father.field_type {
@@ -1358,24 +1386,19 @@ mod tests {
                     name : String,
                 } ",
             )
-            .unwrap();
-        //entity order in the updated datamodel does not change the existing short names
-        let person = datamodel.entities.get("Person").unwrap();
-        assert_eq!(RESERVED_SHORT_NAMES.to_string(), person.short_name);
-        let pet = datamodel.entities.get("Pet").unwrap();
-        assert_eq!((RESERVED_SHORT_NAMES + 1).to_string(), pet.short_name);
-        assert!(pet.deprecated);
+            .expect_err("updates must preserve entity ordering");
 
         datamodel
             .update(
                 "
+            @deprecated Person {
+                name : String,
+            } 
             Pet {
                 name : String,
             }
 
-            @deprecated Person {
-                name : String,
-            } ",
+           ",
             )
             .unwrap();
 
@@ -1450,7 +1473,16 @@ mod tests {
                 name : String default "",
             }"#,
             )
-            .expect("New Field that are not nullable must have a default value");
+            .expect_err("Field Ordering must be respected");
+
+        datamodel
+            .update(
+                r#"Person {
+                name : String default "",
+                age : Integer default 0,
+            }"#,
+            )
+            .expect("Field Ordering is respected");
 
         let person = datamodel.entities.get("Person").unwrap();
         let name = person.get_field("name").unwrap();

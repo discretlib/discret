@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::base64_decode;
+use crate::cryptography::base64_decode;
 
 use super::{
-    data_model::{DataModel, Entity, Field, ID_FIELD},
+    data_model_parser::{DataModel, Entity, Field, ID_FIELD},
     parameter::Variables,
     Error, FieldType, Value,
 };
@@ -515,25 +515,24 @@ impl MutationParser {
         mutation_field: &mut MutationField,
         content_pair: Pair<'_, Rule>,
     ) -> Result<(), Error> {
-        let value = content_pair.into_inner().next().unwrap().as_str();
+        let pair = content_pair.into_inner().next().unwrap();
+        let value = pair.as_str().replace("\\\"", "\"");
         match field.field_type {
             FieldType::String => {
-                mutation_field.field_value =
-                    MutationFieldValue::Value(Value::String(value.to_string()));
+                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
             }
             FieldType::Base64 => {
-                MutationParser::validate_base64(value, &field.name)?;
-                mutation_field.field_value =
-                    MutationFieldValue::Value(Value::String(value.to_string()));
+                MutationParser::validate_base64(&value, &field.name)?;
+                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
             }
             FieldType::Json => {
                 let v: std::result::Result<serde_json::Value, serde_json::Error> =
-                    serde_json::from_str(value);
+                    serde_json::from_str(&value);
                 if v.is_err() {
-                    return Err(Error::InvalidJson(value.to_string()));
+                    return Err(Error::InvalidJson(value));
                 }
-                mutation_field.field_value =
-                    MutationFieldValue::Value(Value::String(value.to_string()));
+
+                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
             }
             _ => {
                 return Err(Error::InvalidFieldType(
@@ -594,7 +593,7 @@ impl MutationParser {
 
 #[cfg(test)]
 mod tests {
-    use crate::database::query_language::data_model::DataModel;
+    use crate::database::query_language::data_model_parser::DataModel;
 
     use super::*;
     #[test]
@@ -895,8 +894,8 @@ mod tests {
                 name : String ,
                 surname : String nullable,
                 is_human : Boolean default true,
-                some_person : Person nullable,
-                parents : [Person] nullable
+                some_person : Person ,
+                parents : [Person] 
             }
         
         ",
@@ -962,8 +961,8 @@ mod tests {
                 "
             Person {
                 name: String,
-                parents : [Person] nullable,
-                someone : Person nullable,
+                parents : [Person] ,
+                someone : Person ,
             }
         
         ",
@@ -1010,8 +1009,8 @@ mod tests {
                 "
             Person {
                 name: String,
-                parents : [Person] nullable,
-                someone : Person nullable,
+                parents : [Person] ,
+                someone : Person ,
             }
         
         ",

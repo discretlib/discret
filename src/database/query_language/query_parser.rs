@@ -1,7 +1,7 @@
-use crate::{base64_decode, database::query_language::VariableType};
+use crate::{cryptography::base64_decode, database::query_language::VariableType};
 
 use super::{
-    data_model::{DataModel, Entity, Field},
+    data_model_parser::{DataModel, Entity, Field},
     parameter::Variables,
     Error, FieldType, FieldValue, Value,
 };
@@ -841,7 +841,8 @@ impl QueryParser {
 
                                 }
                                 Rule::string => {
-                                    let value = val.into_inner().next().unwrap().as_str();
+                                    let pair = val.into_inner().next().unwrap();
+                                    let value = pair.as_str().replace("\\\"", "\"");
                                     parameters.fulltext_search = Some(FieldValue::Value(Value::String(value.to_string())));
                                 }
                                 _=> unreachable!()
@@ -1149,7 +1150,8 @@ impl QueryParser {
                 FieldValue::Value(Value::Null)
             }
             Rule::string => {
-                let value = value_pair.into_inner().next().unwrap().as_str().to_string();
+                let pair = value_pair.into_inner().next().unwrap();
+                let value = pair.as_str().replace("\\\"", "\"");
                 FieldValue::Value(Value::String(value))
             }
             Rule::variable => {

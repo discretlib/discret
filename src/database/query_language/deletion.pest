@@ -1,18 +1,11 @@
 /*
     deletion delete{
 
-    //remove a reference in the parent field
+    //remove a references in the parent field
     person {
     $id,
-    parent: [$sid2]
+    parent: [$sid2, $id3]
     }
-
-    //remove all reference in the parent field
-    person {
-    $id,
-    parent []
-    }
-
 
     //remove person
     person{
@@ -24,12 +17,12 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
-variable = @{ "$" ~ identifier }
+variable    = @{ "$" ~ identifier }
+entity_name =  { identifier ~ (":" ~ identifier)? }
+deletion    =  { SOI ~ "deletion" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
 
-deletion = { SOI ~ "deletion" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
-
-entity = { identifier ~ "{" ~ id_field ~ array_field* ~ "}" }
+entity = { entity_name ~ "{" ~ id_field ~ array_field* ~ "}" }
 
 id_field = { variable }
 
-array_field = { identifier ~ "[" ~ variable? ~ "]" }
+array_field = { identifier ~ "[" ~ variable ~ ("," ~ variable)* ~ ","? ~ "]" }

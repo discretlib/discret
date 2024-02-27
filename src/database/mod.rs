@@ -1,3 +1,5 @@
+pub mod configuration;
+pub mod deletion;
 pub mod edge;
 pub mod graph_database;
 pub mod mutation_query;
@@ -5,6 +7,7 @@ pub mod node;
 pub mod query;
 pub mod query_language;
 pub mod query_test;
+pub mod sqlite_database;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
@@ -47,8 +50,8 @@ pub enum Error {
 
     #[error(
         "id length must be between {} and {} bytes",
-        crate::database::graph_database::DB_ID_MIN_SIZE,
-        crate::database::graph_database::DB_ID_MAX_SIZE
+        crate::database::sqlite_database::DB_ID_MIN_SIZE,
+        crate::database::sqlite_database::DB_ID_MAX_SIZE
     )]
     InvalidId(),
 

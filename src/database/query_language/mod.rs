@@ -1,4 +1,4 @@
-pub mod data_model;
+pub mod data_model_parser;
 pub mod deletion_parser;
 pub mod mutation_parser;
 pub mod parameter;
@@ -7,6 +7,7 @@ pub mod query_parser_test;
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Number;
 use thiserror::Error;
 
@@ -16,7 +17,7 @@ pub enum FieldValue {
     Value(Value),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     Boolean(bool),
     Integer(i64),
@@ -90,7 +91,7 @@ impl fmt::Display for VariableType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     Array(String),
     Entity(String),
@@ -198,6 +199,12 @@ pub enum Error {
 
     #[error("New field definition {0}.{1} is is tring to change the field type. old type:{2} new type:{3}")]
     CannotUpdateFieldType(String, String, String, String),
+
+    #[error("Field {0}.{1} is in postion {2} and was expected in position '{3}'")]
+    InvalidFieldOrdering(String, String, usize, usize),
+
+    #[error("Entity {0} is in postion {1} and was expected in position '{2}'")]
+    InvalidEntityOrdering(String, usize, usize),
 
     #[error(transparent)]
     BoolParsingError(#[from] std::str::ParseBoolError),

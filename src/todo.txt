@@ -1,0 +1,15 @@
+
+DataModel: 
+  
+    make entities nullable by default and forbid non nullable
+   
+    allow selection of deleted entity(starting with $)
+    allow to undelete entity
+
+
+// let instance_map = 
+//     .map
+//     .entry(key)
+//     // and create a new one if not
+//     .or_insert(HashMap::new());
+

@@ -1,18 +1,12 @@
 #![allow(dead_code)]
 
-pub mod cryptography;
-pub mod database;
-pub mod message;
-pub mod network;
-pub mod synchronisation;
+mod cryptography;
+mod database;
+mod message;
+mod network;
+mod synchronisation;
 
-use std::{
-    fs::{self, File},
-    path::PathBuf,
-};
-
-use cryptography::*;
-
+pub type Result<T> = std::result::Result<T, Error>;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -35,22 +29,22 @@ pub enum Error {
     JSONError(#[from] serde_json::Error),
 
     #[error("{0}")]
-    InvalidNode(String),
+    SerialisationError(#[from] Box<bincode::ErrorKind>),
+
+    #[error("Provider signer is not allowed to sign the datamodel")]
+    InvalidSigner(),
+
+    #[error("Application Template cannot be updated with a template with another id")]
+    InvalidUpdateTemplate(),
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    NetworkError(#[from] crate::network::error::Error),
-
-    #[error(transparent)]
-    AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    RecvError(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error("{0}")]
-    TokioError(String),
-
-    #[error("{0}")]
-    Unknown(String),
+    ChannelError(String),
 }
 
 // lazy_static::lazy_static! {
@@ -58,77 +52,77 @@ pub enum Error {
 //     Arc::new(Mutex::new(HashMap::new()));
 // }
 
-fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<PathBuf, Error> {
-    let mut path: PathBuf = data_folder.into();
-    let subfolder = &file_name[0..2];
-    path.push(subfolder);
-    fs::create_dir_all(&path)?;
-    path.push(file_name);
-    Ok(path)
-}
-
-pub struct Account {
-    sign_key: Ed25519SigningKey,
-    secret: [u8; 32],
-}
-impl Account {
-    pub fn create(login: String, pass_phrase: String, data_folder: &str) -> Result<Account, Error> {
-        let secret = derive_pass_phrase(login, pass_phrase);
-        Self::create_from_secret(secret, data_folder)
-    }
-
-    pub fn create_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account, Error> {
-        let file_name = Self::derive_account_file(&secret);
-        let account_path = build_path(data_folder, &file_name)?;
-        if account_path.exists() {
-            return Err(Error::AccountExists);
-        }
-        File::create(account_path)?;
-        let sign_key = Ed25519SigningKey::create_from(&secret);
-
-        Ok(Self {
-            sign_key,
-            secret: Self::derive_secret(&secret),
-        })
-    }
-
-    pub fn login(login: String, pass_phrase: String, data_folder: &str) -> Result<Account, Error> {
-        let secret = derive_pass_phrase(login, pass_phrase);
-        Self::login_from_secret(secret, data_folder)
-    }
-
-    pub fn login_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account, Error> {
-        let file_name = Self::derive_account_file(&secret);
-        let account_path = build_path(data_folder, &file_name)?;
-        if !account_path.exists() {
-            return Err(Error::InvalidAccount);
-        }
-        let sign_key = Ed25519SigningKey::create_from(&secret);
-
-        Ok(Self {
-            sign_key,
-            secret: Self::derive_secret(&secret),
-        })
-    }
-
-    fn derive_account_file(secret: &[u8; 32]) -> String {
-        const DERIVE_ACCOUNT_FILE_SEED: &str = "DERIVE_ACCOUNT_FILE_SEED";
-        base64_encode(&cryptography::derive_key(DERIVE_ACCOUNT_FILE_SEED, secret))
-    }
-
-    fn derive_secret(secret: &[u8; 32]) -> [u8; 32] {
-        const DERIVE_SECRET_SEED: &str = "DERIVE_SECRET_SEED";
-        cryptography::derive_key(DERIVE_SECRET_SEED, secret)
-    }
-}
-
-// struct Application<'a> {
-//     name: String,
-//     data_model: DataModel,
-//     graph_database: GraphDatabase<'a>,
-//     database_path: PathBuf,
-//     signing_key: Ed2519SigningKey,
+// fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<PathBuf> {
+//     let mut path: PathBuf = data_folder.into();
+//     let subfolder = &file_name[0..2];
+//     path.push(subfolder);
+//     fs::create_dir_all(&path)?;
+//     path.push(file_name);
+//     Ok(path)
 // }
+
+// pub struct Account {
+//     sign_key: Ed25519SigningKey,
+//     secret: [u8; 32],
+// }
+// impl Account {
+//     pub fn create(login: String, pass_phrase: String, data_folder: &str) -> Result<Account> {
+//         let secret = derive_pass_phrase(login, pass_phrase);
+//         Self::create_from_secret(secret, data_folder)
+//     }
+
+//     pub fn create_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account> {
+//         let file_name = Self::derive_account_file(&secret);
+//         let account_path = build_path(data_folder, &file_name)?;
+//         if account_path.exists() {
+//             return Err(Error::AccountExists);
+//         }
+//         File::create(account_path)?;
+//         let sign_key = Ed25519SigningKey::create_from(&secret);
+
+//         Ok(Self {
+//             sign_key,
+//             secret: Self::derive_secret(&secret),
+//         })
+//     }
+
+//     pub fn login(login: String, pass_phrase: String, data_folder: &str) -> Result<Account> {
+//         let secret = derive_pass_phrase(login, pass_phrase);
+//         Self::login_from_secret(secret, data_folder)
+//     }
+
+//     pub fn login_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account> {
+//         let file_name = Self::derive_account_file(&secret);
+//         let account_path = build_path(data_folder, &file_name)?;
+//         if !account_path.exists() {
+//             return Err(Error::InvalidAccount);
+//         }
+//         let sign_key = Ed25519SigningKey::create_from(&secret);
+
+//         Ok(Self {
+//             sign_key,
+//             secret: Self::derive_secret(&secret),
+//         })
+//     }
+
+//     fn derive_account_file(secret: &[u8; 32]) -> String {
+//         const DERIVE_ACCOUNT_FILE_SEED: &str = "DERIVE_ACCOUNT_FILE_SEED";
+//         base64_encode(&cryptography::derive_key(DERIVE_ACCOUNT_FILE_SEED, secret))
+//     }
+
+//     fn derive_secret(secret: &[u8; 32]) -> [u8; 32] {
+//         const DERIVE_SECRET_SEED: &str = "DERIVE_SECRET_SEED";
+//         cryptography::derive_key(DERIVE_SECRET_SEED, secret)
+//     }
+// }
+
+// // struct Application<'a> {
+// //     name: String,
+// //     data_model: DataModel,
+// //     graph_database: GraphDatabase<'a>,
+// //     database_path: PathBuf,
+// //     signing_key: Ed2519SigningKey,
+// // }
 // impl Application<'_> {
 //     pub fn new(
 //         name: &str,

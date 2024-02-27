@@ -1,4 +1,4 @@
-use super::{data_model::DataModel, parameter::Variables, Error};
+use super::{data_model_parser::DataModel, parameter::Variables, Error};
 use super::{FieldType, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
@@ -10,16 +10,18 @@ struct PestParser;
 
 #[derive(Debug)]
 pub struct DeletionParser {
-    name: String,
-    variables: Variables,
-    deletions: Vec<EntityDeletion>,
+    pub name: String,
+    pub variables: Variables,
+    pub deletions: Vec<EntityDeletion>,
 }
 
 #[derive(Debug)]
-struct EntityDeletion {
-    entity_name: String,
-    id_param: String,
-    references: Vec<ReferenceDeletion>,
+pub struct EntityDeletion {
+    pub name: String,
+    pub short_name: String,
+    pub alias: Option<String>,
+    pub id_param: String,
+    pub references: Vec<ReferenceDeletion>,
 }
 impl Default for EntityDeletion {
     fn default() -> Self {
@@ -29,7 +31,9 @@ impl Default for EntityDeletion {
 impl EntityDeletion {
     pub fn new() -> Self {
         Self {
-            entity_name: "".to_string(),
+            name: "".to_string(),
+            short_name: "".to_string(),
+            alias: None,
             id_param: "".to_string(),
             references: Vec::new(),
         }
@@ -37,9 +41,9 @@ impl EntityDeletion {
 }
 
 #[derive(Debug)]
-struct ReferenceDeletion {
-    name: String,
-    id_param: Option<String>,
+pub struct ReferenceDeletion {
+    pub label: String,
+    pub dest_param: String,
 }
 impl Default for DeletionParser {
     fn default() -> Self {
@@ -101,51 +105,61 @@ impl DeletionParser {
     ) -> Result<EntityDeletion, Error> {
         let mut entity = EntityDeletion::new();
 
-        for entity_pair in pair.into_inner() {
-            match entity_pair.as_rule() {
-                Rule::identifier => {
-                    let name = entity_pair.as_str().to_string();
-                    data_model.get_entity(&name)?;
-                    entity.entity_name = name;
-                }
+        let mut entity_pairs = pair.into_inner();
+        let mut name_pair = entity_pairs.next().unwrap().into_inner();
+        let entity_name = if name_pair.len() == 2 {
+            let alias = name_pair.next().unwrap().as_str().to_string();
+            if alias.starts_with('_') {
+                return Err(Error::InvalidName(alias));
+            }
 
+            entity.alias = Some(alias);
+            name_pair.next().unwrap().as_str()
+        } else {
+            name_pair.next().unwrap().as_str()
+        };
+        let model_entity = data_model.get_entity(entity_name)?;
+        entity.name = entity_name.to_string();
+        entity.short_name = model_entity.short_name.clone();
+
+        for entity_pair in entity_pairs {
+            match entity_pair.as_rule() {
                 Rule::id_field => {
                     let var = &entity_pair.as_str()[1..]; //remove $
                     variables.add(var, VariableType::Base64(false))?;
                     entity.id_param = var.to_string();
                 }
                 Rule::array_field => {
-                    let dm_entity = data_model.get_entity(&entity.entity_name).unwrap();
                     let mut array_field_pairs = entity_pair.into_inner();
                     let name = array_field_pairs.next().unwrap().as_str().to_string();
-                    match dm_entity.fields.get(&name) {
+                    let model_field = match model_entity.fields.get(&name) {
                         None => {
                             return Err(Error::InvalidQuery(format!(
                                 "Unknown field '{}' in entity '{}'",
-                                name, entity.entity_name
+                                name, entity_name
                             )))
                         }
                         Some(e) => match e.field_type {
-                            FieldType::Array(_) => {}
+                            FieldType::Array(_) => e,
                             _ => {
                                 return Err(Error::InvalidQuery(format!(
                                 "'{}' in entity '{}' is not defined as an array in the data model",
-                                name, entity.entity_name
+                                name, entity_name
                             )))
                             }
                         },
                     };
-                    let id_param: Option<String>;
-                    if let Some(param_pair) = array_field_pairs.next() {
-                        let var = &param_pair.as_str()[1..]; //remove $
 
-                        variables.add(var, VariableType::Base64(false))?;
+                    for param_pair in array_field_pairs {
+                        let id_param = param_pair.as_str()[1..].to_string(); //remove $
 
-                        id_param = Some(String::from(var));
-                    } else {
-                        id_param = None;
+                        variables.add(&id_param, VariableType::Base64(false))?;
+
+                        entity.references.push(ReferenceDeletion {
+                            label: model_field.short_name.clone(),
+                            dest_param: id_param,
+                        });
                     }
-                    entity.references.push(ReferenceDeletion { name, id_param });
                 }
 
                 _ => unreachable!(),
@@ -185,10 +199,10 @@ mod tests {
             "
             deletion delete_person {
   
-                Person {
+                del1: Person {
                     $id
-                    parent[$id2]
-                    pet[]
+                    parent[$id2, $id3]
+                    pet[$id4]
                 }
 
                 Pet {
@@ -206,21 +220,30 @@ mod tests {
         assert_eq!(2, deletion.deletions.len());
 
         let query = deletion.deletions.get(0).unwrap();
-        assert_eq!("Person", query.entity_name);
+        assert_eq!("Person", query.name);
+        assert_eq!("32", query.short_name);
+        let alias = query.alias.as_ref().unwrap();
+        assert_eq!("del1", alias);
         assert_eq!("id", query.id_param);
-        assert_eq!(2, query.references.len());
+        assert_eq!(3, query.references.len());
 
         let reference = query.references.get(0).unwrap();
-        assert_eq!("parent", reference.name);
-        assert_eq!(Some("id2".to_string()), reference.id_param);
+        assert_eq!("34", reference.label);
+        assert_eq!("id2".to_string(), reference.dest_param);
 
         let reference = query.references.get(1).unwrap();
-        assert_eq!("pet", reference.name);
-        assert_eq!(None, reference.id_param);
+        assert_eq!("34", reference.label);
+        assert_eq!("id3".to_string(), reference.dest_param);
+
+        let reference = query.references.get(2).unwrap();
+        assert_eq!("35", reference.label);
+        assert_eq!("id4".to_string(), reference.dest_param);
 
         let query = deletion.deletions.get(1).unwrap();
-        assert_eq!("Pet", query.entity_name);
-        assert_eq!("id3".to_string(), query.id_param);
+        assert_eq!("Pet", query.name);
+        assert_eq!("33", query.short_name);
+        assert_eq!(None, query.alias);
+        assert_eq!("id3", query.id_param);
         assert_eq!(0, query.references.len());
 
         //println!("{:#?}", deletion);
@@ -279,7 +302,6 @@ mod tests {
                 Person {
                     $id1
                     Parent[$id2]
-                    pet[]
                 }
             }
             
@@ -296,7 +318,6 @@ mod tests {
                 Person {
                     $id1
                     parent[$id2]
-                    pet[]
                 }
             }
             
@@ -310,30 +331,16 @@ mod tests {
             deletion delete_pet{
                 Person {
                     $id1
-                    parent[$id2]
-                    pe[]
+                    parent[]
                 }
             }
             
           ",
             &data_model,
         )
-        .expect_err("'pe' field does not exists");
-
-        let _ = DeletionParser::parse(
-            "
-            deletion delete_pet{
-                Person {
-                    $id1
-                    parent[$id2]
-                    pet[]
-                }
-            }
-            
-          ",
-            &data_model,
-        )
-        .expect("'pet' field exists");
+        .expect_err(
+            "'parent' cannot be empty to delete it compretely set it to null in a mutation query",
+        );
 
         //println!("{:#?}", deletion);
     }

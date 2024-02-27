@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::base64_decode;
+use crate::cryptography::base64_decode;
 
 use super::{Error, Value, VariableType};
 

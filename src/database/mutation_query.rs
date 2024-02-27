@@ -1,17 +1,17 @@
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::{base64_decode, base64_encode, Ed25519SigningKey};
+use crate::cryptography::{base64_decode, base64_encode, now, SigningKey};
 
 use super::{
     edge::Edge,
-    graph_database::{now, RowMappingFn, Writeable},
     node::Node,
     query_language::{
-        data_model::ID_FIELD,
+        data_model_parser::ID_FIELD,
         mutation_parser::{EntityMutation, MutationField, MutationFieldValue, MutationParser},
         parameter::Parameters,
         FieldType,
     },
+    sqlite_database::{RowMappingFn, Writeable},
     Error, Result,
 };
 use std::{collections::HashMap, sync::Arc};
@@ -44,14 +44,14 @@ impl NodeInsert {
         Ok(())
     }
 
-    pub fn sign(&mut self, signing_key: &Ed25519SigningKey) -> std::result::Result<(), Error> {
+    pub fn sign(&mut self, signing_key: &impl SigningKey) -> std::result::Result<(), Error> {
         if let Some(node) = &mut self.node {
             node.sign(signing_key)?;
         }
         Ok(())
     }
 
-    const NODE_INSERT_QUERY: &'static str = "SELECT id, cdate, mdate, _entity, _json, _binary, _pub_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
+    const NODE_INSERT_QUERY: &'static str = "SELECT id, cdate, mdate, _entity, _json, _binary, _verifying_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
     const NODE_INSERT_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(NodeInsert {
             id: row.get(0)?,
@@ -66,7 +66,7 @@ impl NodeInsert {
                 _entity: row.get(3)?,
                 _json: row.get(4)?,
                 _binary: row.get(5)?,
-                _pub_key: row.get(6)?,
+                _verifying_key: row.get(6)?,
                 _signature: row.get(7)?,
             }),
         }))
@@ -365,7 +365,7 @@ impl MutationQuery {
         Ok(serde_json::Value::Array(vec))
     }
 
-    pub fn sign_all(&mut self, signing_key: &Ed25519SigningKey) -> Result<()> {
+    pub fn sign_all(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         for insert in &mut self.insert_entities {
             insert.sign_all(signing_key)?;
         }
@@ -400,7 +400,7 @@ impl InsertEntity {
         Ok(())
     }
 
-    pub fn sign_all(&mut self, signing_key: &Ed25519SigningKey) -> Result<()> {
+    pub fn sign_all(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         for query in &mut self.sub_nodes {
             for insert in query.1 {
                 insert.sign_all(signing_key)?;
@@ -541,8 +541,8 @@ mod tests {
     use rusqlite::Connection;
 
     use crate::database::{
-        graph_database::prepare_connection,
-        query_language::{data_model::DataModel, parameter::ParametersAdd},
+        query_language::{data_model_parser::DataModel, parameter::ParametersAdd},
+        sqlite_database::prepare_connection,
     };
 
     use super::*;
@@ -661,9 +661,9 @@ mod tests {
                 "
             Person {
                 name : String ,
-                parents : [Person] nullable,
-                pet: Pet nullable,
-                siblings : [Person] nullable
+                parents : [Person] ,
+                pet: Pet ,
+                siblings : [Person] 
             }
 
             Pet {

@@ -5,20 +5,18 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::database::graph_database::Writeable;
+    use crate::cryptography::Ed25519SigningKey;
+    use crate::database::sqlite_database::Writeable;
     use crate::database::mutation_query::MutationQuery;
     use crate::database::query_language::parameter::ParametersAdd;
-    use crate::{
-        database::{
-            graph_database::prepare_connection,
-            query::{Queries, Query},
+    use crate::database::{
+            sqlite_database::prepare_connection,
+            query::{PreparedQueries, Query},
             query_language::{
-                data_model::DataModel, mutation_parser::MutationParser, parameter::Parameters,
+                data_model_parser::DataModel, mutation_parser::MutationParser, parameter::Parameters,
                 query_parser::QueryParser,
             },
-        },
-        Ed25519SigningKey, SigningKey,
-    };
+        };
 
     #[test]
     fn simple_scalar() {
@@ -89,12 +87,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -130,12 +128,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -189,7 +187,7 @@ mod tests {
                     _entity
                     _json
                     _binary
-                    _pub_key
+                    _verifying_key
                     _signature
                 }
                 
@@ -199,12 +197,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let _ = sql
             .read(&conn)
@@ -220,8 +218,8 @@ mod tests {
                 _entity ="0", 
                 _json="", 
                 _binary = "ZXRzZXRzNDMx",
-                _pub_key <="ZXRzZXRzNDMx",
-                _pub_key >= "ZXRzZXRzNDMx",
+                _verifying_key <="ZXRzZXRzNDMx",
+                _verifying_key >= "ZXRzZXRzNDMx",
             ){
                     id
                     cdate
@@ -229,7 +227,7 @@ mod tests {
                     _entity
                     _json
                     _binary
-                    _pub_key
+                    _verifying_key
                     _signature
                 }
                 
@@ -239,12 +237,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
 
         let _ = sql
@@ -260,9 +258,9 @@ mod tests {
                 "
             Person {
                 name : String ,
-                parents : [Person] nullable,
-                pet: Pet nullable,
-                siblings : [Person] nullable,
+                parents : [Person] ,
+                pet: Pet ,
+                siblings : [Person] ,
             }
 
             Pet {
@@ -333,12 +331,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         println!("{}", sql.sql_queries.sql_queries[0].sql_query);
 
@@ -430,12 +428,12 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
 
         let sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
 
         let result = sql.read(&conn).unwrap();
@@ -457,12 +455,12 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
 
         let sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
@@ -484,12 +482,12 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
 
         let sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
 
         let result = sql.read(&conn).unwrap();
@@ -512,12 +510,12 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
 
         let sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
         let expected =
@@ -539,14 +537,14 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
 
         println!("{}", &query.sql_queries[0].sql_query);
 
         let sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
         let expected =
@@ -622,12 +620,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -650,7 +648,7 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let mut param = Parameters::new();
         param.add("name", "Jean".to_string()).unwrap();
         param.add("age", 100).unwrap();
@@ -660,7 +658,7 @@ mod tests {
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -723,13 +721,13 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let mut param = Parameters::new();
         param.add("name", "John".to_string()).unwrap();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
@@ -799,12 +797,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -829,12 +827,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let _result = sql.read(&conn).unwrap();
 
@@ -859,12 +857,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
@@ -920,12 +918,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
@@ -982,12 +980,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -1022,12 +1020,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
         let expected =
@@ -1053,7 +1051,7 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P2: Person { name:"Alice" data:$data }
+                P2: Person { name:"Alice" data:"{\"val\":\"hello json\"}" }
                 P3: Person { name:"Bob" data:"[1,2,3,4]" }
             } "#,
             &data_model,
@@ -1086,12 +1084,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries:  Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
         let expected = 
@@ -1112,12 +1110,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -1140,12 +1138,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
 
@@ -1167,12 +1165,12 @@ mod tests {
         )
         .unwrap();
 
-        let query = Queries::build(&query_parser).unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
         let sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
-            sql_queries: query,
+            sql_queries: Arc::new(query),
         };
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();

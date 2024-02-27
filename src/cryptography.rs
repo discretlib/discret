@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
@@ -54,6 +56,8 @@ pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     hash(hashed.as_bytes())
 }
 
+const DB_ID_SIZE: usize = 16;
+
 ///
 /// hash a byte array using the Blake3 hash function
 ///
@@ -87,14 +91,47 @@ pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
 /// Defines the necessary function to sign  data  
 ///
 pub trait SigningKey {
-    fn new() -> Self;
-    fn create_from(random: &[u8; 32]) -> Self;
-    fn import(keypair: &[u8]) -> Result<Box<Self>, Error>;
     fn export(&self) -> Vec<u8>;
-    fn export_public(&self) -> Vec<u8>;
+    fn export_verifying_key(&self) -> Vec<u8>;
+    fn verifying_key(&self) -> impl VerifyingKey;
     fn sign(&self, message: &[u8]) -> Vec<u8>;
 }
 
+pub fn import_signing_key(keypair: &[u8]) -> Result<impl SigningKey, Error> {
+    if keypair[0] != KEY_TYPE_ED_2519 {
+        return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
+    }
+    if keypair.len() != 33 {
+        return Err(Error::InvalidKeyLenght(format!(
+            "key lenght must be 33,  value: {} ",
+            keypair.len()
+        )));
+    }
+
+    let ke: [u8; 32] = keypair[1..33].try_into().unwrap();
+    let keypair = ed25519_dalek::SigningKey::from(ke);
+
+    Ok(Ed25519SigningKey {
+        signing_key: keypair,
+    })
+}
+
+pub fn import_verifying_key(veriying_key: &[u8]) -> Result<Box<dyn VerifyingKey>, Error> {
+    if veriying_key[0] != KEY_TYPE_ED_2519 {
+        return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
+    }
+    if veriying_key.len() != 33 {
+        return Err(Error::InvalidKeyLenght(format!(
+            "key lenght must be 33,  value: {} ",
+            veriying_key.len()
+        )));
+    }
+
+    let ke: [u8; 32] = veriying_key[1..33].try_into().unwrap();
+
+    let veriying_key = ed25519_dalek::VerifyingKey::from_bytes(&ke)?;
+    Ok(Box::new(Ed2519VerifyingKey { veriying_key }))
+}
 ///
 /// when exporting a key the first byte is a flag indicating the public key algorithm used
 /// currenlty useless but might become usefull in the future
@@ -107,8 +144,9 @@ const KEY_TYPE_ED_2519: u8 = 1;
 pub struct Ed25519SigningKey {
     signing_key: ed25519_dalek::SigningKey,
 }
-impl SigningKey for Ed25519SigningKey {
-    fn new() -> Self {
+
+impl Ed25519SigningKey {
+    pub fn new() -> Self {
         let mut random: [u8; 32] = [0; 32];
 
         OsRng.fill_bytes(&mut random);
@@ -116,32 +154,15 @@ impl SigningKey for Ed25519SigningKey {
         Ed25519SigningKey::create_from(&random)
     }
 
-    fn create_from(random: &[u8; 32]) -> Self {
+    pub fn create_from(random: &[u8; 32]) -> Self {
         let sk: &ed25519_dalek::SecretKey = random;
         Ed25519SigningKey {
             signing_key: ed25519_dalek::SigningKey::from(sk),
         }
     }
+}
 
-    fn import(keypair: &[u8]) -> Result<Box<Self>, Error> {
-        if keypair[0] != KEY_TYPE_ED_2519 {
-            return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
-        }
-        if keypair.len() != 33 {
-            return Err(Error::InvalidKeyLenght(format!(
-                "key lenght must be 33,  value: {} ",
-                keypair.len()
-            )));
-        }
-
-        let ke: [u8; 32] = keypair[1..33].try_into().unwrap();
-        let keypair = ed25519_dalek::SigningKey::from(ke);
-
-        Ok(Box::new(Ed25519SigningKey {
-            signing_key: keypair,
-        }))
-    }
-
+impl SigningKey for Ed25519SigningKey {
     fn export(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
         let keyp = self.signing_key.to_bytes();
@@ -149,7 +170,7 @@ impl SigningKey for Ed25519SigningKey {
         export
     }
 
-    fn export_public(&self) -> Vec<u8> {
+    fn export_verifying_key(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
         let keyp = self.signing_key.verifying_key().to_bytes();
         export.extend(keyp);
@@ -159,13 +180,18 @@ impl SigningKey for Ed25519SigningKey {
     fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.signing_key.sign(message).to_bytes().into()
     }
+
+    fn verifying_key(&self) -> impl VerifyingKey {
+        Ed2519VerifyingKey {
+            veriying_key: self.signing_key.verifying_key(),
+        }
+    }
 }
 
 ///
 /// Defines the necessary function to verify data  
 ///
-pub trait PublicKey {
-    fn import(public_key: &[u8]) -> Result<Box<Self>, Error>;
+pub trait VerifyingKey {
     fn export(&self) -> Vec<u8>;
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error>;
 }
@@ -173,30 +199,13 @@ pub trait PublicKey {
 ///
 /// verification key using Ed25519 signature scheme
 ///
-pub struct Ed2519PublicKey {
-    public_key: ed25519_dalek::VerifyingKey,
+pub struct Ed2519VerifyingKey {
+    veriying_key: ed25519_dalek::VerifyingKey,
 }
-impl PublicKey for Ed2519PublicKey {
-    fn import(public_key: &[u8]) -> Result<Box<Self>, Error> {
-        if public_key[0] != KEY_TYPE_ED_2519 {
-            return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
-        }
-        if public_key.len() != 33 {
-            return Err(Error::InvalidKeyLenght(format!(
-                "key lenght must be 33,  value: {} ",
-                public_key.len()
-            )));
-        }
-
-        let ke: [u8; 32] = public_key[1..33].try_into().unwrap();
-
-        let public_key = ed25519_dalek::VerifyingKey::from_bytes(&ke)?;
-        Ok(Box::new(Self { public_key }))
-    }
-
+impl VerifyingKey for Ed2519VerifyingKey {
     fn export(&self) -> Vec<u8> {
         let mut export = vec![KEY_TYPE_ED_2519];
-        let keyp = self.public_key.to_bytes();
+        let keyp = self.veriying_key.to_bytes();
         export.extend(keyp);
         export
     }
@@ -211,7 +220,7 @@ impl PublicKey for Ed2519PublicKey {
         let sign: [u8; 64] = signature.try_into().unwrap();
 
         let sig = ed25519_dalek::Signature::from_bytes(&sign);
-        self.public_key.verify(data, &sig)?;
+        self.veriying_key.verify(data, &sig)?;
         Ok(())
     }
 }
@@ -234,6 +243,35 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
     let pub_key = rustls::Certificate(cert);
 
     (pub_key, secret_key)
+}
+
+///
+/// id with time on first four bytes to improve index locality
+///
+pub fn new_id() -> Vec<u8> {
+    const TIME_BYTES: usize = 4;
+    let time = now();
+    let time = &time.to_be_bytes()[TIME_BYTES..];
+
+    let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
+    let (one, two) = whole.split_at_mut(time.len());
+
+    one.copy_from_slice(time);
+    OsRng.fill_bytes(two);
+
+    whole.to_vec()
+}
+
+///
+/// current time in milliseconds since unix epoch
+///
+pub fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .try_into()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -273,17 +311,17 @@ mod tests {
         );
 
         assert_eq!(
-            base64_encode(&signing_key.export_public()[0..]),
+            base64_encode(&signing_key.export_verifying_key()[0..]),
             "AVS6nzDyEt5jfykx0UObb32ySqI4sN89Y6nL9KFp_tWO"
         );
 
         let msg = b"message to sign";
         let signature = signing_key.sign(&msg.to_vec());
 
-        let keypair = Ed25519SigningKey::import(&exp_kp).unwrap();
+        let keypair = import_signing_key(&exp_kp).unwrap();
 
-        let exp_pub = keypair.export_public();
-        let imp_pub = Ed2519PublicKey::import(&exp_pub).unwrap();
+        let exp_pub = keypair.export_verifying_key();
+        let imp_pub = import_verifying_key(&exp_pub).unwrap();
 
         imp_pub.verify(msg, &signature).unwrap();
     }
