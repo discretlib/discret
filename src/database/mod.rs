@@ -1,3 +1,4 @@
+pub mod authorisation;
 pub mod configuration;
 pub mod deletion;
 pub mod edge;
@@ -12,16 +13,19 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("{0}")]
+    #[error(transparent)]
+    AuthorisationError(#[from] authorisation::Error),
+
+    #[error(transparent)]
     CryptoError(#[from] crate::cryptography::Error),
 
-    #[error("{0}")]
+    #[error(transparent)]
     DatabaseError(#[from] rusqlite::Error),
 
-    #[error("{0}")]
+    #[error(transparent)]
     ParsingError(#[from] query_language::Error),
 
-    #[error("{0}")]
+    #[error(transparent)]
     JSONError(#[from] serde_json::Error),
 
     #[error("Invalid JSON Object {0}")]
@@ -33,10 +37,10 @@ pub enum Error {
     #[error("{0}")]
     InvalidNode(String),
 
-    #[error("{0}")]
+    #[error(transparent)]
     IoError(#[from] std::io::Error),
 
-    #[error("{0}")]
+    #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
 
     #[error("{0}")]

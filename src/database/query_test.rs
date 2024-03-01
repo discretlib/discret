@@ -970,7 +970,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person() {
+                Person(order_by(name Asc)) {
                     name
                     def
                 }
@@ -1009,7 +1009,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
                 query sample{
-                    Person() {
+                    Person(order_by(name asc)) {
                         name
                         def
                         newdef
@@ -1073,7 +1073,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             "
             query sample{
-                Person {
+                Person (order_by(name asc)){
                     name
                     data
                     array: data->$.val
@@ -1099,7 +1099,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             "
             query sample{
-                Person {
+                Person(order_by(name asc)) {
                     name
                     data
                     array: data->1

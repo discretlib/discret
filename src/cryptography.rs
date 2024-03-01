@@ -88,15 +88,8 @@ pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 ///
-/// Defines the necessary function to sign  data  
+/// import a existing signing key, using the first byte flag to detect the signature scheme
 ///
-pub trait SigningKey {
-    fn export(&self) -> Vec<u8>;
-    fn export_verifying_key(&self) -> Vec<u8>;
-    fn verifying_key(&self) -> impl VerifyingKey;
-    fn sign(&self, message: &[u8]) -> Vec<u8>;
-}
-
 pub fn import_signing_key(keypair: &[u8]) -> Result<impl SigningKey, Error> {
     if keypair[0] != KEY_TYPE_ED_2519 {
         return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
@@ -116,6 +109,9 @@ pub fn import_signing_key(keypair: &[u8]) -> Result<impl SigningKey, Error> {
     })
 }
 
+///
+/// import a existing verifying key, using the first byte flag to detect the signature scheme
+///
 pub fn import_verifying_key(veriying_key: &[u8]) -> Result<Box<dyn VerifyingKey>, Error> {
     if veriying_key[0] != KEY_TYPE_ED_2519 {
         return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
@@ -134,7 +130,7 @@ pub fn import_verifying_key(veriying_key: &[u8]) -> Result<Box<dyn VerifyingKey>
 }
 ///
 /// when exporting a key the first byte is a flag indicating the public key algorithm used
-/// currenlty useless but might become usefull in the future
+/// currenlty useless but might become usefull in the future to implement new key algorithms
 ///
 const KEY_TYPE_ED_2519: u8 = 1;
 
@@ -146,20 +142,57 @@ pub struct Ed25519SigningKey {
 }
 
 impl Ed25519SigningKey {
+    ///
+    /// new key using a random number
+    ///
     pub fn new() -> Self {
-        let mut random: [u8; 32] = [0; 32];
-
-        OsRng.fill_bytes(&mut random);
-
+        let random: [u8; 32] = random_secret();
         Ed25519SigningKey::create_from(&random)
     }
 
+    ///
+    /// creates a signing key using a provided random number
+    /// usefull to create a predictable key from a key derivation function
+    ///
     pub fn create_from(random: &[u8; 32]) -> Self {
         let sk: &ed25519_dalek::SecretKey = random;
         Ed25519SigningKey {
             signing_key: ed25519_dalek::SigningKey::from(sk),
         }
     }
+}
+
+pub fn random_secret() -> [u8; 32] {
+    let mut random: [u8; 32] = [0; 32];
+
+    OsRng.fill_bytes(&mut random);
+    random
+}
+
+///
+/// Defines the necessary functions to sign  data  
+///
+pub trait SigningKey {
+    ///
+    /// Export the signing key, adding a flag to detect the encryption scheme
+    ///
+    fn export(&self) -> Vec<u8>;
+
+    ///
+    /// Exports the verifying key, adding a a flag to detect the encryption scheme
+    ///
+    fn export_verifying_key(&self) -> Vec<u8>;
+
+    ///
+    /// Provides a copy of the verifying key
+    ///
+    fn verifying_key(&self) -> impl VerifyingKey;
+
+    ///
+    /// Sign a message, returning the signature
+    /// passed message should be small, like a hash of the real message
+    ///
+    fn sign(&self, message: &[u8]) -> Vec<u8>;
 }
 
 impl SigningKey for Ed25519SigningKey {
@@ -192,7 +225,14 @@ impl SigningKey for Ed25519SigningKey {
 /// Defines the necessary function to verify data  
 ///
 pub trait VerifyingKey {
+    ///
+    /// Export the verifying key, adding a flag to detect the encryption scheme
+    ///
     fn export(&self) -> Vec<u8>;
+
+    ///
+    /// verify the signature against the provided message
+    ///
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error>;
 }
 
@@ -227,8 +267,7 @@ impl VerifyingKey for Ed2519VerifyingKey {
 
 ///
 /// generate self signed certificate to be used by the QUIC protocol
-///
-/// the discret system does not relies on certificate authorithy to ensure privacy and encryption
+/// self signed certificates are safe to use because this library does not relies on the certificate authority architecture to ensure privacy and encryption
 ///
 pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
     let mut param = rcgen::CertificateParams::new(vec!["".into()]);
@@ -237,16 +276,16 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
     let cert = rcgen::Certificate::from_params(param).unwrap();
 
     let key = cert.serialize_private_key_der();
-    let secret_key = rustls::PrivateKey(key);
+    let signing_key = rustls::PrivateKey(key);
 
     let cert = cert.serialize_der().unwrap();
-    let pub_key = rustls::Certificate(cert);
+    let verifying_key = rustls::Certificate(cert);
 
-    (pub_key, secret_key)
+    (verifying_key, signing_key)
 }
 
 ///
-/// id with time on first four bytes to improve index locality
+/// id with the current time on the first four bytes to improve index locality
 ///
 pub fn new_id() -> Vec<u8> {
     const TIME_BYTES: usize = 4;

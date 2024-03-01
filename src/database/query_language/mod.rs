@@ -1,10 +1,10 @@
 pub mod data_model_parser;
+pub mod data_model_parser_test;
 pub mod deletion_parser;
 pub mod mutation_parser;
 pub mod parameter;
 pub mod query_parser;
 pub mod query_parser_test;
-
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

@@ -7,6 +7,11 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+///
+/// Upon deletion or mutation, the _entity field is updated by appending $ at the start, resulting in a 'soft' deletion or archival
+///
+pub const ARCHIVED_CHAR: char = '$';
+
 impl Default for Node {
     fn default() -> Self {
         let date = now();
@@ -23,7 +28,7 @@ impl Default for Node {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Node {
     pub id: Vec<u8>,
     pub cdate: i64,
@@ -59,11 +64,20 @@ impl Node {
             [],
         )?;
 
+        //node primary key
+        //mdate is part to allow for archiving nodes
         conn.execute(
-            "CREATE UNIQUE INDEX _node_sys_id__entity_mdate_idx ON _node (id, _entity,  mdate)",
+            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (id, _entity, mdate)",
             [],
         )?;
 
+        //allows for more efficient "entity full scan" for example when loading all rooms for the authorisation feature
+        conn.execute(
+            "CREATE UNIQUE INDEX _node__entity_id__mdate_idx ON _node (_entity, id)",
+            [],
+        )?;
+
+        //the full text search virtual table
         conn.execute(
             "CREATE VIRTUAL TABLE _node_fts USING fts5(text, content='' , prefix='2,3' , detail=none)",
             [],
@@ -185,12 +199,9 @@ impl Node {
         Ok(())
     }
 
-    pub const NODE_QUERY: &'static str = "
-    SELECT id , cdate, mdate, _entity,_json, _binary, _verifying_key, _signature  
-    FROM _node 
-    WHERE id = ? AND 
-    _entity = ?";
-
+    ///
+    /// Convert sql query result into a Node
+    ///
     pub const NODE_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(Node {
             id: row.get(0)?,
@@ -205,7 +216,15 @@ impl Node {
     };
 
     ///
-    /// Retrieve a node by id and entity name
+    /// SQL Query to retrieve a Node by its primary key
+    ///
+    pub const NODE_QUERY: &'static str = "
+    SELECT id , cdate, mdate, _entity,_json, _binary, _verifying_key, _signature  
+    FROM _node 
+    WHERE id = ? AND 
+    _entity = ?";
+    ///
+    /// Retrieve a node using its primary key
     ///
     pub fn get(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<Option<Box<Node>>> {
         let mut get_stmt = conn.prepare_cached(Self::NODE_QUERY)?;
@@ -215,8 +234,6 @@ impl Node {
         Ok(node)
     }
 
-    pub const DELETED_FIRST_CHAR: char = '$';
-
     ///
     /// Low level method to delete a node
     /// This method is intended to be used in the write thread wich perform operations in larges batches.
@@ -224,21 +241,21 @@ impl Node {
     ///
     /// Nodes are soft deleted first. Upon deletion they are updated by prepending '$' to the _entity field field value.
     ///
-    /// deleteting an allready deleted node wil result in an hard deletion
-    /// hard deletions are not synchronized
+    /// Deleting an allready deleted node wil result in an hard deletion
+    /// Hard deletions are not synchronized
     ///
     pub fn delete(
         id: &Vec<u8>,
         entity: &str,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        if entity.starts_with(Self::DELETED_FIRST_CHAR) {
+        if entity.starts_with(ARCHIVED_CHAR) {
             let mut delete_stmt =
                 conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
             delete_stmt.execute((id, entity))?;
         } else {
             let mut deleted_entity = String::new();
-            deleted_entity.push(Self::DELETED_FIRST_CHAR);
+            deleted_entity.push(ARCHIVED_CHAR);
             deleted_entity.push_str(entity);
 
             let mut update_stmt =
@@ -271,12 +288,12 @@ impl Node {
         conn: &Connection,
         index: bool,
         rowid: &Option<i64>,
-        previous_fts: &Option<String>,
-        current_fts: &Option<String>,
+        old_fts_str: &Option<String>,
+        node_fts_str: &Option<String>,
     ) -> std::result::Result<(), rusqlite::Error> {
         const UPDATE_FTS_QUERY: &'static str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
         if let Some(id) = rowid {
-            if let Some(previous) = previous_fts {
+            if let Some(previous) = old_fts_str {
                 let mut delete_fts_stmt = conn.prepare_cached(
                     "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, ?)",
                 )?;
@@ -284,7 +301,7 @@ impl Node {
             }
 
             if index {
-                if let Some(current) = current_fts {
+                if let Some(current) = node_fts_str {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
                     insert_fts_stmt.execute((id, current))?;
                 }
@@ -343,7 +360,7 @@ impl Node {
             ))?;
 
             if index {
-                if let Some(current) = current_fts {
+                if let Some(current) = node_fts_str {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
                     insert_fts_stmt.execute((rowid, current))?;
                 }
@@ -543,7 +560,7 @@ mod tests {
         let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
         assert!(!node_exists);
 
-        let del_entity = format!("{}{}", Node::DELETED_FIRST_CHAR, entity);
+        let del_entity = format!("{}{}", ARCHIVED_CHAR, entity);
 
         let node_exists = Node::exist(&node.id, &del_entity, &conn).unwrap();
         assert!(node_exists);

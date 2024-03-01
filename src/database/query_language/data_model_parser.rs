@@ -1,4 +1,4 @@
-use crate::cryptography::base64_decode;
+use crate::{cryptography::base64_decode, database::node::ARCHIVED_CHAR};
 
 use super::{Error, FieldType, Value, VariableType};
 use pest::iterators::Pair;
@@ -11,17 +11,23 @@ use std::collections::HashMap;
 #[grammar = "database/query_language/data_model.pest"]
 struct PestParser;
 
-const AUTHOR_TABLE: &str = "_SysAuthor";
-const AUTHORS_FIELD: &str = "_authors";
+pub const AUTHOR_ENTITY: &str = "_User";
+pub const ROOM_ENTITY: &str = "_Room";
 
 pub const ID_FIELD: &str = "id";
-const CREATION_DATE_FIELD: &str = "cdate";
-const MODIFICATION_DATE_FIELD: &str = "mdate";
-const ENTITY_FIELD: &str = "_entity";
-const JSON_FIELD: &str = "_json";
-const BINARY_FIELD: &str = "_binary";
-const PUB_KEY_FIELD: &str = "_verifying_key";
-const SIGNATURE_FIELD: &str = "_signature";
+pub const CREATION_DATE_FIELD: &str = "cdate";
+pub const MODIFICATION_DATE_FIELD: &str = "mdate";
+pub const ENTITY_FIELD: &str = "_entity";
+pub const JSON_FIELD: &str = "_json";
+pub const BINARY_FIELD: &str = "_binary";
+pub const PUB_KEY_FIELD: &str = "_verifying_key";
+pub const SIGNATURE_FIELD: &str = "_signature";
+
+pub const AUTHORS_FIELD: &str = "_authors";
+pub const ROOMS_FIELD: &str = "_rooms";
+
+pub const AUTHORS_FIELD_SHORT: &str = "0";
+pub const ROOMS_FIELD_SHORT: &str = "1";
 
 lazy_static::lazy_static! {
     //
@@ -71,19 +77,7 @@ lazy_static::lazy_static! {
             },
         );
 
-        fields.insert(
-            AUTHORS_FIELD.to_string(),
-            Field {
-                name: AUTHORS_FIELD.to_string(),
-                short_name: AUTHORS_FIELD.to_string(),
-                field_type: FieldType::Array(AUTHOR_TABLE.to_string()),
-                default_value: None,
-                nullable: false,
-                deprecated: false,
-                mutable: false,
-                is_system: true,
-            },
-        );
+
 
        fields.insert(
             ENTITY_FIELD.to_string(),
@@ -154,19 +148,55 @@ lazy_static::lazy_static! {
                 is_system: true,
             },
         );
+
+        fields.insert(
+            AUTHORS_FIELD.to_string(),
+            Field {
+                name: AUTHORS_FIELD.to_string(),
+                short_name: AUTHORS_FIELD_SHORT.to_string(),
+                field_type: FieldType::Array(AUTHOR_ENTITY.to_string()),
+                default_value: None,
+                nullable: false,
+                deprecated: false,
+                mutable: false,
+                is_system: false,
+            },
+        );
+
+
+        fields.insert(
+            ROOMS_FIELD.to_string(),
+            Field {
+                name: ROOMS_FIELD.to_string(),
+                short_name: ROOMS_FIELD_SHORT.to_string(),
+                field_type: FieldType::Array(ROOM_ENTITY.to_string()),
+                default_value: None,
+                nullable: false,
+                deprecated: false,
+                mutable: false,
+                is_system: false,
+            },
+        );
+
+
+
+
         fields
+
     };
 }
 
 /// Reserve the first 64 short_id for system usage.
 /// This is an arbitrary value wich should be plenty enought
 /// applies to entity and field
-const RESERVED_SHORT_NAMES: usize = 32;
+pub const RESERVED_SHORT_NAMES: usize = 32;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataModel {
     model: String,
     entities: HashMap<String, Entity>,
+    entities_short: HashMap<String, String>,
+    entities_archive: HashMap<String, Entity>,
 }
 impl Default for DataModel {
     fn default() -> Self {
@@ -178,19 +208,25 @@ impl DataModel {
         Self {
             model: String::from(""),
             entities: HashMap::new(),
+            entities_short: HashMap::new(),
+            entities_archive: HashMap::new(),
         }
     }
 
-    pub fn add_entity(&mut self, entity: Entity) -> Result<(), Error> {
+    pub fn add_entity(&mut self, entity: Entity, system: bool) -> Result<(), Error> {
         if self.entities.contains_key(&entity.name) {
             return Err(Error::DuplicatedEntity(entity.name.clone()));
         }
-        self.insert(entity.name.clone(), entity)?;
+        if system {
+            self.insert(entity.name.clone(), entity, 0)?;
+        } else {
+            self.insert(entity.name.clone(), entity, RESERVED_SHORT_NAMES)?;
+        }
         Ok(())
     }
 
-    fn insert(&mut self, name: String, mut entity: Entity) -> Result<(), Error> {
-        entity.short_name = (RESERVED_SHORT_NAMES + self.entities.len()).to_string();
+    fn insert(&mut self, name: String, mut entity: Entity, name_decal: usize) -> Result<(), Error> {
+        entity.short_name = (name_decal + self.entities.len()).to_string();
         let old = self.entities.insert(name, entity);
         if old.is_some() {
             panic!("Cannot insert an existing entity in the datamodel")
@@ -199,7 +235,16 @@ impl DataModel {
     }
 
     pub fn get_entity(&self, name: &str) -> Result<&Entity, Error> {
-        if let Some(entity) = self.entities.get(name) {
+        if name.starts_with(ARCHIVED_CHAR) {
+            if let Some(entity) = self.entities_archive.get(name) {
+                Ok(entity)
+            } else {
+                Err(Error::InvalidQuery(format!(
+                    "Deletion Entity '{}' not found in the data model",
+                    name
+                )))
+            }
+        } else if let Some(entity) = self.entities.get(name) {
             Ok(entity)
         } else {
             Err(Error::InvalidQuery(format!(
@@ -210,42 +255,73 @@ impl DataModel {
     }
 
     pub fn update(&mut self, model: &str) -> Result<(), Error> {
-        let new_data_model = Self::parse(model)?;
-        self.update_with(new_data_model)?;
+        let new_data_model = Self::parse_internal(model, false)?;
+        self.update_with(new_data_model, false)?;
         Ok(())
     }
 
-    pub fn update_with(&mut self, mut new_data_model: Self) -> Result<(), Error> {
-        for entity in &mut self.entities {
-            let new_entity_op = new_data_model.entities.remove(entity.0);
-            match new_entity_op {
-                Some(new_entity) => {
-                    let old_entity = entity.1;
-                    if !old_entity.short_name.eq(&new_entity.short_name) {
-                        let mut new_pos: usize = new_entity.short_name.parse()?;
-                        new_pos -= RESERVED_SHORT_NAMES;
-                        let mut previous_pos: usize = old_entity.short_name.parse()?;
-                        previous_pos -= RESERVED_SHORT_NAMES;
+    pub fn update_system(&mut self, model: &str) -> Result<(), Error> {
+        let new_data_model = Self::parse_internal(model, true)?;
+        self.update_with(new_data_model, true)?;
+        Ok(())
+    }
 
-                        return Err(Error::InvalidEntityOrdering(
-                            String::from(&old_entity.name),
-                            new_pos,
-                            previous_pos,
-                        ));
+    pub fn update_with(&mut self, mut new_data_model: Self, system: bool) -> Result<(), Error> {
+        for entity in &mut self.entities {
+            if (system && entity.1.name.starts_with('_'))
+                || (!system && !entity.1.name.starts_with('_'))
+            {
+                let new_entity_op = new_data_model.entities.remove(entity.0);
+                match new_entity_op {
+                    Some(new_entity) => {
+                        let old_entity = entity.1;
+                        if !old_entity.short_name.eq(&new_entity.short_name) {
+                            let mut new_pos: usize = new_entity.short_name.parse()?;
+                            new_pos -= RESERVED_SHORT_NAMES;
+                            let mut previous_pos: usize = old_entity.short_name.parse()?;
+                            previous_pos -= RESERVED_SHORT_NAMES;
+
+                            return Err(Error::InvalidEntityOrdering(
+                                String::from(&old_entity.name),
+                                new_pos,
+                                previous_pos,
+                            ));
+                        }
+                        old_entity.update(new_entity)?
                     }
-                    old_entity.update(new_entity)?
+                    None => return Err(Error::MissingEntity(String::from(entity.0))),
                 }
-                None => return Err(Error::MissingEntity(String::from(entity.0))),
             }
         }
         for entity in new_data_model.entities {
-            self.entities.insert(entity.0, entity.1);
+            if (system && entity.1.name.starts_with('_'))
+                || (!system && !entity.1.name.starts_with('_'))
+            {
+                let mut deletion = entity.1.clone();
+                deletion.short_name = format!("{}{}", ARCHIVED_CHAR, deletion.short_name);
+                deletion.name = format!("{}{}", ARCHIVED_CHAR, deletion.name);
+
+                self.entities_short
+                    .insert(deletion.short_name.clone(), deletion.name.clone());
+
+                self.entities_archive
+                    .insert(deletion.name.clone(), deletion.clone());
+
+                self.entities_short
+                    .insert(entity.1.short_name.clone(), entity.1.name.clone());
+
+                self.entities.insert(entity.0, entity.1);
+            }
         }
         self.model = String::from(new_data_model.model);
         Ok(())
     }
 
-    fn parse(model: &str) -> Result<DataModel, Error> {
+    pub fn name_for(&self, short_name: &str) -> Option<&String> {
+        self.entities_short.get(short_name)
+    }
+
+    fn parse_internal(model: &str, system: bool) -> Result<DataModel, Error> {
         let mut data_model = DataModel::new();
         data_model.model = String::from(model);
         let parse = match PestParser::parse(Rule::datamodel, model) {
@@ -265,8 +341,8 @@ impl DataModel {
                 for pair in namespace_pairs.into_iter() {
                     match pair.as_rule() {
                         Rule::entity => {
-                            let entity = Self::parse_entity(pair)?;
-                            data_model.add_entity(entity)?;
+                            let entity = Self::parse_entity(pair, system)?;
+                            data_model.add_entity(entity, system)?;
                         }
                         Rule::EOI => {}
                         _ => unreachable!(),
@@ -279,7 +355,7 @@ impl DataModel {
         Ok(data_model)
     }
 
-    fn parse_entity(pair: Pair<'_, Rule>) -> Result<Entity, Error> {
+    fn parse_entity(pair: Pair<'_, Rule>, system: bool) -> Result<Entity, Error> {
         let mut entity = Entity::new();
         for entity_pair in pair.into_inner() {
             match entity_pair.as_rule() {
@@ -289,7 +365,9 @@ impl DataModel {
                             Rule::deprecated => entity.deprecated = true,
                             Rule::identifier => {
                                 let name = i.as_str();
-                                if name.starts_with('_') {
+                                if (name.starts_with('_') && !system)
+                                    || (!name.starts_with('_') && system)
+                                {
                                     return Err(Error::InvalidName(name.to_string()));
                                 }
                                 if Self::is_reserved(name) {
@@ -551,9 +629,9 @@ impl DataModel {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
-    fields: Vec<String>,
+    pub fields: Vec<String>,
 }
 
 impl Index {
@@ -594,7 +672,7 @@ impl Index {
 /// - existing fields can be changed from nullable to not nullable only if a default value is provided
 /// - new fields must provide a default value if not nullable
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub name: String,
     pub short_name: String,
@@ -813,774 +891,5 @@ impl Field {
             FieldType::Float => VariableType::Float(false),
             FieldType::String | FieldType::Json => VariableType::String(false),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use std::any::Any;
-
-    use super::*;
-
-    #[test]
-    fn parse_valid_model() {
-        let datamodel = DataModel::parse(
-            r#"
-                @deprecated Person {
-                    name : String ,
-                    surname : String nullable,
-                    child : [Person] ,
-                    mother : Person ,
-                    father : Person , 
-                    index(name, surname),
-                     
-                }
-
-                Pet {
-                    name : String default "John",
-                    surname : String NULLABLE,
-                    owners : [Person],
-                    @deprecated  age : Float NULLABLE,
-                    weight : Integer NULLABLE,
-                    is_vaccinated: Boolean NULLABLE,
-                    INDEX(weight)
-                }
-          "#,
-        )
-        .unwrap();
-
-        let pet = datamodel.entities.get("Pet").unwrap();
-        assert_eq!("Pet", pet.name);
-
-        let age = pet.fields.get("age").unwrap();
-        assert_eq!(FieldType::Float.type_id(), age.field_type.type_id());
-        assert_eq!(true, age.nullable);
-
-        let name = pet.fields.get("name").unwrap();
-        assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
-        assert_eq!(false, name.nullable);
-        if let Some(Value::String(e)) = &name.default_value {
-            assert_eq!("John", e);
-        }
-
-        let surname = pet.fields.get("surname").unwrap();
-        assert_eq!(FieldType::String.type_id(), surname.field_type.type_id());
-        assert_eq!(true, surname.nullable);
-
-        let owner = pet.fields.get("owners").unwrap();
-        match &owner.field_type {
-            FieldType::Array(e) => assert_eq!("Person", e),
-            _ => unreachable!(),
-        }
-        assert_eq!(true, owner.nullable);
-
-        let index = &pet.indexes;
-        assert_eq!(1, index.len());
-        for i in index.values() {
-            assert_eq!("weight", i.fields[0])
-        }
-
-        let weight = pet.fields.get("weight").unwrap();
-        assert_eq!(FieldType::Integer.type_id(), weight.field_type.type_id());
-        assert_eq!(true, weight.nullable);
-
-        let is_vaccinated = pet.fields.get("is_vaccinated").unwrap();
-        assert_eq!(
-            FieldType::Boolean.type_id(),
-            is_vaccinated.field_type.type_id()
-        );
-        assert_eq!(true, is_vaccinated.nullable);
-
-        let person = datamodel.entities.get("Person").unwrap();
-        assert_eq!("Person", person.name);
-        let name = person.fields.get("name").unwrap();
-        assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
-        assert_eq!(false, name.nullable);
-
-        let surname = person.fields.get("surname").unwrap();
-        assert_eq!(FieldType::String.type_id(), surname.field_type.type_id());
-        assert_eq!(true, surname.nullable);
-
-        let child = person.fields.get("child").unwrap();
-        match &child.field_type {
-            FieldType::Array(e) => assert_eq!("Person", e),
-            _ => unreachable!(),
-        }
-        assert_eq!(true, child.nullable);
-
-        let mother = person.fields.get("mother").unwrap();
-        match &mother.field_type {
-            FieldType::Entity(e) => assert_eq!("Person", e),
-            _ => unreachable!(),
-        }
-        assert_eq!(true, mother.nullable);
-
-        let father = person.fields.get("father").unwrap();
-        match &father.field_type {
-            FieldType::Entity(e) => assert_eq!("Person", e),
-            _ => unreachable!(),
-        }
-        assert_eq!(true, father.nullable);
-
-        //println!("{:#?}", datamodel)
-    }
-
-    #[test]
-    fn invalid_entity() {
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [InvalidEntity],
-                }",
-        )
-        .expect_err("InvalidEntity is not defined in the datamodel");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [Boolean],
-                }",
-        )
-        .expect_err("Cannot reference scalar field");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [integer],
-                }",
-        )
-        .expect_err("Cannot reference scalar field");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [float],
-                }",
-        )
-        .expect_err("Cannot reference scalar field");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [json],
-                }",
-        )
-        .expect_err("Cannot reference scalar field");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [base64],
-                }",
-        )
-        .expect_err("Cannot reference scalar field");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [Person],
-                }",
-        )
-        .expect("Person a valid entity");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    mother : InvalidEntity,
-                }",
-        )
-        .expect_err("InvalidEntity is not defined in the datamodel");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    mother : Person,
-                }",
-        )
-        .expect("Person is a valid entity");
-    }
-
-    #[test]
-    fn reserved_names() {
-        let _datamodel = DataModel::parse(
-            "
-                _Person {
-                    name : String,
-                }",
-        )
-        .expect_err("entity name cannot start with a _");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    _name : String,
-                }",
-        )
-        .expect_err("entity field name cannot start with a _");
-
-        let _datamodel = DataModel::parse(
-            "
-                Per_son_ {
-                    na_me_ : String,
-                }",
-        )
-        .expect("entity and field name can contain _");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    String : String,
-                }",
-        )
-        .expect_err("scalar field names are reserved");
-
-        let _datamodel = DataModel::parse(
-            "
-                json {
-                    name : String,
-                }",
-        )
-        .expect_err("scalar field names are reserved");
-        let _datamodel = DataModel::parse(
-            "
-            baSe64 {
-                name : String,
-            }",
-        )
-        .expect_err("scalar field names are reserved");
-        let _datamodel = DataModel::parse(
-            "
-        String {
-            name : String,
-        }",
-        )
-        .expect_err("scalar field names are reserved");
-        let _datamodel = DataModel::parse(
-            "
-        floAt {
-            name : String,
-        }",
-        )
-        .expect_err("scalar field names are reserved");
-        let _datamodel = DataModel::parse(
-            "
-        INTEGer {
-            name : String,
-        }",
-        )
-        .expect_err("scalar field names are reserved");
-    }
-
-    #[test]
-    fn duplicates() {
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [Person],
-                }
-
-                Person {
-                    name : String,
-                }",
-        )
-        .expect_err("Person is duplicated");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [Person],
-                }",
-        )
-        .expect("Person is not duplicated anymore");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : String,
-                    child : [Person],
-                } ",
-        )
-        .expect_err("child is duplicated");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                }",
-        )
-        .expect("child is not duplicated anymore");
-    }
-
-    #[test]
-    fn parse_invalid_string() {
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    child : [Person],
-                    name: String
-                }",
-        )
-        .expect("missing [ before person");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person @deprecated {
-                    mother : Person,
-                }",
-        )
-        .expect_err("@deprecated must be before the entity name");
-
-        let _datamodel = DataModel::parse(
-            "
-                @deprecated Person  {
-                    mother : Person,
-                }",
-        )
-        .expect("@deprecated must be before the entity name");
-    }
-
-    #[test]
-    fn default_value() {
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    is_vaccinated : Boolean default "true" ,
-                }"#,
-        )
-        .expect_err("default must be a boolean not a string");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    is_vaccinated : Boolean default false ,
-                }"#,
-        )
-        .expect("default is a boolean");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    weight : Float default true ,
-                }"#,
-        )
-        .expect_err("default must be a Float not a boolean");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    weight : Float default 12 ,
-                }"#,
-        )
-        .expect("default is an Integer which will be parsed to a Float");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    weight : Float default 12.5 ,
-                }"#,
-        )
-        .expect("default is an Float");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    age : Integer default 12.5 ,
-                }"#,
-        )
-        .expect_err("default must be a Integer not a Float");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    age : Integer default 12 ,
-                }"#,
-        )
-        .expect("default is an Integer");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String default 12.2 ,
-                }",
-        )
-        .expect_err("default must be a string not a float");
-
-        let _datamodel = DataModel::parse(
-            r#"
-                Person {
-                    name : String default "test" ,
-                }"#,
-        )
-        .expect("default is a string");
-    }
-
-    #[test]
-    fn system_field_collision() {
-        let mut entity = Entity::new();
-
-        let mut field = Field::new();
-        field.name = AUTHORS_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = AUTHORS_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = CREATION_DATE_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = ENTITY_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = BINARY_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = ID_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = JSON_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = MODIFICATION_DATE_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = PUB_KEY_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-
-        let mut field = Field::new();
-        field.name = SIGNATURE_FIELD.to_string();
-        entity
-            .add_field(field)
-            .expect_err("system field allready defined");
-    }
-
-    #[test]
-    fn index() {
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(invalid_field)
-                }",
-        )
-        .expect_err("index has an invalid field name");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(child)
-                }",
-        )
-        .expect_err("child cannot be indexed because it is not a scalar type");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(father)
-                }",
-        )
-        .expect_err("father cannot be indexed because it is not a scalar type");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(name, name)
-                }",
-        )
-        .expect_err("name is repeated twice");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(name),
-                    index(name)
-                }",
-        )
-        .expect_err("index(name) is defined twice");
-
-        let _datamodel = DataModel::parse(
-            "
-                Person {
-                    name : String,
-                    child : [Person],
-                    father: Person,
-                    index(name)
-                }",
-        )
-        .expect("index is valid");
-    }
-
-    #[test]
-    fn entity_update() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "
-                Person {
-                    name : String,
-                }",
-            )
-            .unwrap();
-
-        let person = datamodel.entities.get("Person").unwrap();
-        assert_eq!(RESERVED_SHORT_NAMES.to_string(), person.short_name);
-
-        datamodel
-            .update(
-                "
-                Pesrson {
-                    name : String,
-                }",
-            )
-            .expect_err("missing Person");
-
-        datamodel
-            .update(
-                "
-                @deprecated Pet {
-                    name : String,
-                }
-
-                Person {
-                    name : String,
-                } ",
-            )
-            .expect_err("updates must preserve entity ordering");
-
-        datamodel
-            .update(
-                "
-            @deprecated Person {
-                name : String,
-            } 
-            Pet {
-                name : String,
-            }
-
-           ",
-            )
-            .unwrap();
-
-        let person = datamodel.entities.get("Person").unwrap();
-        assert!(person.deprecated);
-        let pet = datamodel.entities.get("Pet").unwrap();
-        assert!(!pet.deprecated);
-    }
-
-    #[test]
-    fn field_update() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "Person {
-                    name : String,
-                }",
-            )
-            .unwrap();
-
-        let person = datamodel.entities.get("Person").unwrap();
-        let name = person.get_field("name").unwrap();
-        assert_eq!(RESERVED_SHORT_NAMES.to_string(), name.short_name);
-
-        datamodel
-            .update(
-                "Person {
-                name : Integer,
-            }",
-            )
-            .expect_err("Cannot change a field type");
-
-        datamodel
-            .update(
-                "Person {
-                name : String nullable,
-            }",
-            )
-            .expect("Field can be changed to nullable");
-
-        datamodel
-            .update(
-                "Person {
-                name : String,
-            }",
-            )
-            .expect_err("Field cannot be changed to not nullable without a default value");
-
-        datamodel
-            .update(
-                r#"Person {
-                name : String default "",
-            }"#,
-            )
-            .expect(
-                "Field can be changed to not nullable with a default value, even an empty string",
-            );
-
-        datamodel
-            .update(
-                r#"Person {
-                name : String default "",
-                age : Integer
-            }"#,
-            )
-            .expect_err("New Field that are not nullable must have a default value");
-
-        datamodel
-            .update(
-                r#"Person {
-                age : Integer default 0,
-                name : String default "",
-            }"#,
-            )
-            .expect_err("Field Ordering must be respected");
-
-        datamodel
-            .update(
-                r#"Person {
-                name : String default "",
-                age : Integer default 0,
-            }"#,
-            )
-            .expect("Field Ordering is respected");
-
-        let person = datamodel.entities.get("Person").unwrap();
-        let name = person.get_field("name").unwrap();
-        assert_eq!(RESERVED_SHORT_NAMES.to_string(), name.short_name);
-        let age = person.get_field("age").unwrap();
-        assert_eq!((RESERVED_SHORT_NAMES + 1).to_string(), age.short_name);
-    }
-
-    #[test]
-    fn index_update() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "Person {
-                    name : String,
-                    index(name)
-                }",
-            )
-            .unwrap();
-
-        datamodel
-            .update(
-                "Person {
-                    name : String,
-                    index(name)
-                }",
-            )
-            .unwrap();
-
-        datamodel
-            .update(
-                "Person {
-                    name : String,
-                }",
-            )
-            .unwrap();
-        let person = datamodel.get_entity("Person").unwrap();
-        assert_eq!(0, person.indexes.len());
-        assert_eq!(1, person.indexes_to_remove.len());
-    }
-
-    #[test]
-    fn base64_field() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "Person {
-                    name : Base64,
-                }",
-            )
-            .expect("valid");
-
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                r#"Person {
-                        name : Base64 default "?%&JVBQS0pP",
-                    }"#,
-            )
-            .expect_err("invalid default value");
-
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                r#"Person {
-                            name : Base64 default "JVBQS0pP",
-                        }"#,
-            )
-            .expect("valid default value");
-    }
-
-    #[test]
-    fn json_field() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "Person {
-                    name : Json,
-                }",
-            )
-            .expect("valid Json");
-
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                r#"Person {
-                        name : Json default "qsd",
-                    }"#,
-            )
-            .expect_err("invalid default value");
-
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                r#"Person {
-                            name : Json default "[1,2,3]",
-                        }"#,
-            )
-            .expect("valid default value");
     }
 }

@@ -335,12 +335,12 @@ mod tests {
             for file in paths {
                 let files = file.unwrap().path();
                 println!("Name: {}", files.display());
-                fs::remove_file(&files).unwrap();
+                let _ = fs::remove_file(&files);
             }
         }
     }
 
-    use crate::{cryptography::hash, database::query_language::parameter::ParametersAdd};
+    use crate::{cryptography::random_secret, database::query_language::parameter::ParametersAdd};
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -349,7 +349,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = hash("not so secret".as_bytes());
+        let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
         let mut app = Application::new(
             "selection app",
@@ -393,7 +393,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = hash("not so secret".as_bytes());
+        let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
         let mut app = Application::new(
             "delete app",

@@ -1,6 +1,6 @@
 use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
 
-use std::{path::PathBuf, thread, usize};
+use std::{path::PathBuf, thread, time, usize};
 use tokio::sync::{
     mpsc,
     oneshot::{self, Sender},
@@ -161,6 +161,15 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+//
+// helper function to configure sqlite
+//
+fn set_pragma(pragma: &str, value: &str, conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {}={}", pragma, value))?;
+    let _rows = stmt.query([])?;
+    Ok(())
+}
+
 ///
 /// Database main entry point
 ///
@@ -222,8 +231,17 @@ impl DatabaseReader {
     ) -> Result<Self> {
         let (sender, receiver) = flume::bounded::<QueryFn>(100);
         for _i in 0..parallelism {
+            //
+            // sleep a few milliseconds to avoid some random IO errors during tests on linux
+            // might be caused by:
+            //        - the cleanup process at the beginning of some tests (see graph_database tests)
+            //        - the rapid creation of several instance of the connection
+            //
+            let ten_millis = time::Duration::from_millis(10);
+            thread::sleep(ten_millis);
             let conn =
                 create_connection(path, secret, cache_size_in_kb, enable_memory_security).unwrap();
+
             set_pragma("query_only", "1", &conn)?;
 
             let local_receiver = receiver.clone();
@@ -307,12 +325,6 @@ impl Writeable for Optimize {
         conn.execute("PRAGMA OPTIMIZE", [])?;
         Ok(())
     }
-}
-
-pub fn set_pragma(pragma: &str, value: &str, conn: &rusqlite::Connection) -> Result<()> {
-    let mut stmt = conn.prepare(&format!("PRAGMA {}={}", pragma, value))?;
-    let _rows = stmt.query([])?;
-    Ok(())
 }
 
 /// Main entry point to insert data in the database
@@ -490,12 +502,18 @@ impl BufferedDatabaseWriter {
         Ok(())
     }
 
+    ///
+    /// send a write message a wait for the message to be processed
+    ///
     pub async fn write(&self, stmt: WriteStmt) -> Result<WriteStmt> {
         let (reply, reciev) = oneshot::channel::<Result<WriteStmt>>();
         let _ = self.sender.send(WriteMessage::WriteStmt(stmt, reply)).await;
         reciev.await?
     }
 
+    ///
+    /// send a write message without waiting for the query to finish
+    ///
     pub async fn send(&self, msg: WriteMessage) -> Result<()> {
         self.sender
             .send(msg)
@@ -503,12 +521,19 @@ impl BufferedDatabaseWriter {
             .map_err(|e| Error::DatabaseSendError(e.to_string()))
     }
 
+    ///
+    /// send a write message without waiting for the query to finish
+    ///
     pub fn send_blocking(&self, msg: WriteMessage) -> Result<()> {
         self.sender
             .blocking_send(msg)
             .map_err(|e| Error::DatabaseSendError(e.to_string()))
     }
 
+    ///
+    /// Optimize the sqlite database
+    /// should be called from time to time, and after large insertions
+    ///
     pub async fn optimize(&self) -> Result<WriteStmt> {
         self.write(Box::new(Optimize {})).await
     }
@@ -520,10 +545,10 @@ impl BufferedDatabaseWriter {
 ///
 pub const MAX_ROW_LENTGH: usize = 1024 * 1024; //1MB
 
-//min numbers of char in an id //policy
+/// min numbers of char in an id
 pub const DB_ID_MIN_SIZE: usize = 16;
 
-/// set to 33 to be able to store a public key in the id
+/// set to 33 to be allow the use of a signing key as the id
 pub const DB_ID_MAX_SIZE: usize = 33;
 
 ///
@@ -535,8 +560,8 @@ pub fn is_valid_id_len(id: &Vec<u8>) -> bool {
 }
 
 ///
-/// Sqlite function encode or decode to base64
-/// used to convert the binary identifiers into a String.
+/// Creates a Sqlite function to encode and decode base64 in sql queries
+/// Used to convert the binary identifiers into a string.
 /// Base64 is more efficient than hexadecimal
 /// the variant used is URL safe
 ///

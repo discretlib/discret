@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 ///
-/// Edge object stores relations between nodes
+/// Edge object stores relations between Nodes
 ///
 /// One of the two tables that defines the graph database
 ///
@@ -23,8 +23,8 @@ pub struct Edge {
 impl Edge {
     ///
     /// Creates the required tables and indexes
-    /// Thanks the primary key and the index, edge can be efficiently queried in the two directions: src->dest and dest->src
-    /// rowid is not required for this table and is removed
+    /// Edge can be efficiently queried in the two directions: src->dest and dest->src
+    /// rowid is is useless for this table
     ///
     pub fn create_table(conn: &Connection) -> Result<()> {
         conn.execute(

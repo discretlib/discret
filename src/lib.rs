@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod configuration;
 mod cryptography;
 mod database;
 mod message;
@@ -28,7 +29,7 @@ pub enum Error {
     #[error(transparent)]
     JSONError(#[from] serde_json::Error),
 
-    #[error("{0}")]
+    #[error(transparent)]
     SerialisationError(#[from] Box<bincode::ErrorKind>),
 
     #[error("Provider signer is not allowed to sign the datamodel")]
