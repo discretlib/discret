@@ -272,7 +272,7 @@ impl Node {
         let mut exists_stmt =
             conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
         let node: Option<i64> = exists_stmt
-            .query_row((id, entity), |row| Ok(row.get(0)?))
+            .query_row((id, entity), |row| row.get(0))
             .optional()?;
 
         Ok(node.is_some())
@@ -291,7 +291,7 @@ impl Node {
         old_fts_str: &Option<String>,
         node_fts_str: &Option<String>,
     ) -> std::result::Result<(), rusqlite::Error> {
-        const UPDATE_FTS_QUERY: &'static str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
+        static UPDATE_FTS_QUERY: &str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
         if let Some(id) = rowid {
             if let Some(previous) = old_fts_str {
                 let mut delete_fts_stmt = conn.prepare_cached(

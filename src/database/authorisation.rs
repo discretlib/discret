@@ -17,17 +17,10 @@ pub enum Error {
     InvalidCredentialDate(),
 }
 
+#[derive(Default)]
 pub struct Room {
     pub parent: Vec<u8>,
     authorisations: HashMap<String, Authorisation>,
-}
-impl Default for Room {
-    fn default() -> Self {
-        Self {
-            parent: Default::default(),
-            authorisations: Default::default(),
-        }
-    }
 }
 
 impl Room {
@@ -38,7 +31,7 @@ impl Room {
     }
 
     pub fn add_auth(&mut self, name: &str, auth: Authorisation) -> Result<()> {
-        if let Some(_) = self.authorisations.get(name) {
+        if self.authorisations.get(name).is_some() {
             return Err(Error::AuthorisationExists(name.to_string()));
         }
         self.authorisations.insert(name.to_string(), auth);
@@ -62,27 +55,18 @@ impl Room {
     pub fn can(&self, user: &Vec<u8>, entity: &str, date: i64, right: &RightType) -> bool {
         for entry in &self.authorisations {
             let auth = entry.1;
-            if auth.is_user_valid_at(user, date) {
-                if auth.can(entity, date, right) {
-                    return true;
-                }
+            if auth.is_user_valid_at(user, date) && auth.can(entity, date, right) {
+                return true;
             }
         }
         false
     }
 }
 
+#[derive(Default)]
 pub struct Authorisation {
     users: HashMap<Vec<u8>, Option<i64>>,
     credential: Vec<Credential>,
-}
-impl Default for Authorisation {
-    fn default() -> Self {
-        Self {
-            users: Default::default(),
-            credential: Default::default(),
-        }
-    }
 }
 impl Authorisation {
     pub fn new() -> Self {
@@ -102,22 +86,16 @@ impl Authorisation {
     }
 
     pub fn get_credential_at(&self, date: i64) -> Option<&Credential> {
-        for cred in self.credential.iter().rev() {
-            if cred.valid_from <= date {
-                return Some(cred);
-            }
-        }
-        None
+        self.credential
+            .iter()
+            .rev()
+            .find(|&cred| cred.valid_from <= date)
     }
 
     pub fn is_user_valid_at(&self, user: &Vec<u8>, date: i64) -> bool {
         if let Some(val) = self.users.get(user) {
             if let Some(validity) = val {
-                if *validity >= date {
-                    true
-                } else {
-                    false
-                }
+                *validity >= date
             } else {
                 true
             }
@@ -165,21 +143,12 @@ impl Authorisation {
     }
 }
 
+#[derive(Default)]
 pub struct Credential {
     pub valid_from: i64,
     pub mutate_room: bool,
     pub mutate_room_users: bool,
     pub credentials: HashMap<String, EntityRight>,
-}
-impl Default for Credential {
-    fn default() -> Self {
-        Self {
-            valid_from: Default::default(),
-            mutate_room: Default::default(),
-            mutate_room_users: Default::default(),
-            credentials: Default::default(),
-        }
-    }
 }
 impl Credential {
     pub fn new() -> Self {
@@ -188,7 +157,7 @@ impl Credential {
         }
     }
     pub fn add_entity_rights(&mut self, name: &str, entity_right: EntityRight) -> Result<()> {
-        if let Some(_) = self.credentials.get(name) {
+        if self.credentials.get(name).is_some() {
             return Err(Error::AuthorisationExists(name.to_string()));
         }
         self.credentials.insert(name.to_string(), entity_right);
@@ -269,6 +238,8 @@ mod tests {
         assert!(auth.is_user_valid_at(&user1, 1500));
 
         auth.disable_user_starting_at(&user1, 1500).unwrap();
+        auth.disable_user_starting_at(&user1, 1000)
+            .expect_err("cannot set a user validity date to a lower value than the current one");
         assert!(auth.is_user_valid_at(&user1, 1400));
         assert!(!auth.is_user_valid_at(&user1, 1501));
 
@@ -310,6 +281,17 @@ mod tests {
                 },
             )
             .unwrap();
+
+        cred1
+            .add_entity_rights(
+                "Pet",
+                EntityRight {
+                    insert: false,
+                    delete_all: false,
+                    mutate_all: false,
+                },
+            )
+            .expect_err("cannot insert twice");
 
         auth.set_credential(cred1).unwrap();
         room.add_auth("user", auth).unwrap();

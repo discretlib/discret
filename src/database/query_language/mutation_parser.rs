@@ -117,7 +117,7 @@ impl MutationParser {
         let parse = match PestParser::parse(Rule::mutation, p) {
             Err(e) => {
                 let message = format!("{}", e);
-                return Err(Error::ParserError(message));
+                return Err(Error::Parser(message));
             }
             Ok(f) => f,
         }

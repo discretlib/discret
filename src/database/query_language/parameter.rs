@@ -250,7 +250,7 @@ impl Parameters {
         let mut parse = match PestParser::parse(Rule::parameters, p) {
             Err(e) => {
                 let message = format!("{}", e);
-                return Err(Error::ParserError(message));
+                return Err(Error::Parser(message));
             }
             Ok(f) => f,
         };

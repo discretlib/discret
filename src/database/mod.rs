@@ -14,43 +14,43 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    AuthorisationError(#[from] authorisation::Error),
+    Authorisation(#[from] authorisation::Error),
 
     #[error(transparent)]
-    CryptoError(#[from] crate::cryptography::Error),
+    Cryptography(#[from] crate::cryptography::Error),
 
     #[error(transparent)]
-    DatabaseError(#[from] rusqlite::Error),
+    Database(#[from] rusqlite::Error),
 
     #[error(transparent)]
-    ParsingError(#[from] query_language::Error),
+    Parsing(#[from] query_language::Error),
 
     #[error(transparent)]
-    JSONError(#[from] serde_json::Error),
+    Json(#[from] serde_json::Error),
 
     #[error("Invalid JSON Object {0}")]
     InvalidJsonObject(String),
 
     #[error("{0}")]
-    DatabaseWriteError(String),
+    DatabaseWrite(String),
 
     #[error("{0}")]
     InvalidNode(String),
 
     #[error(transparent)]
-    IoError(#[from] std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    Utf8Error(#[from] std::str::Utf8Error),
+    Utf8(#[from] std::str::Utf8Error),
 
     #[error("{0}")]
     DatabaseRowToLong(String),
 
     #[error(transparent)]
-    AsyncRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    OneshotAsyncRecv(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error("{0}")]
-    DatabaseSendError(String),
+    DatabaseSend(String),
 
     #[error(
         "id length must be between {} and {} bytes",
@@ -72,7 +72,7 @@ pub enum Error {
     UnknownEntity(String, String),
 
     #[error("{0}")]
-    QueryError(String),
+    Query(String),
 
     #[error("Missing parameter: '{0}', Cannot build SQL query parameters")]
     MissingParameter(String),

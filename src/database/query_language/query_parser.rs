@@ -325,7 +325,7 @@ impl QueryParser {
         let parse = match PestParser::parse(Rule::query, p) {
             Err(e) => {
                 let message = format!("{}", e);
-                return Err(Error::ParserError(message));
+                return Err(Error::Parser(message));
             }
             Ok(f) => f,
         }
@@ -486,7 +486,7 @@ impl QueryParser {
                             let mut target_entity =  EntityQuery::new();
                             target_entity.name = taget_entity_name.clone();
 
-                            let target_model_field = data_model.get_entity(&taget_entity_name)?;
+                            let target_model_field = data_model.get_entity(taget_entity_name)?;
                             target_entity.short_name = target_model_field.short_name.clone();
                             target_entity.depth = depth + 1;
 
@@ -509,7 +509,7 @@ impl QueryParser {
                                 field:model_field.clone(),
                                 alias,
                                 json_selector: None,
-                                field_type: field_type
+                                field_type
                             };
                             entity.add_field(named)?;
                         }
@@ -941,7 +941,7 @@ impl QueryParser {
             },
             Err(_) => {
                 let query_field = entity.fields.iter().find(|entry| entry.name().eq(&parsed_filters.name));
-                let field = match &query_field {
+                match &query_field {
                         Some(e) => {
                             is_selected = true;
                             match e.field_type {
@@ -952,8 +952,7 @@ impl QueryParser {
                             &e.field
                         },
                         None => return Err(Error::InvalidQuery(format!("filter field '{}' does not exists", &parsed_filters.name))),
-                };
-                field
+                }
             },
         };
 
@@ -973,7 +972,7 @@ impl QueryParser {
             FieldValue::Variable(var) => {
                 if is_entity_field{
                     return Err(Error::InvalidEntityFilter(
-                        String::from(name)
+                        name
                     ))
                 }
                 let var_type = field.get_variable_type();
@@ -1073,7 +1072,7 @@ impl QueryParser {
 
        
         Ok(FilterParam {
-            name: name,
+            name,
             operation: String::from(&parsed_filters.operation),
             value,
             is_aggregate,
@@ -1103,7 +1102,7 @@ impl QueryParser {
             },
             Err(_) => {
                 let query_field = entity.fields.iter().find(|entry| entry.name().eq(&parsed_order.name));
-                let field = match &query_field {
+                match &query_field {
                         Some(e) => {
                             is_selected = true;
                             match e.field_type {
@@ -1114,8 +1113,7 @@ impl QueryParser {
                             &e.field
                         },
                         None => return Err(Error::InvalidQuery(format!("Order by field '{}' does not exists", &parsed_order.name))),
-                };
-                field
+                }
             },
         };
 

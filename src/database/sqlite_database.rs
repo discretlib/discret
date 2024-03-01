@@ -257,7 +257,7 @@ impl DatabaseReader {
     pub fn send_blocking(&self, query: QueryFn) -> Result<()> {
         self.sender
             .send(query)
-            .map_err(|e| Error::DatabaseSendError(e.to_string()))?;
+            .map_err(|e| Error::DatabaseSend(e.to_string()))?;
         Ok(())
     }
 
@@ -265,7 +265,7 @@ impl DatabaseReader {
         self.sender
             .send_async(query)
             .await
-            .map_err(|e| Error::DatabaseSendError(e.to_string()))?;
+            .map_err(|e| Error::DatabaseSend(e.to_string()))?;
         Ok(())
     }
 
@@ -451,13 +451,13 @@ impl BufferedDatabaseWriter {
                         for msg in buffer {
                             match msg {
                                 WriteMessage::DeletionQuery(_, r) => {
-                                    let _ = r.send(Err(Error::DatabaseWriteError(e.to_string())));
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::MutationQuery(_, r) => {
-                                    let _ = r.send(Err(Error::DatabaseWriteError(e.to_string())));
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::WriteStmt(_, r) => {
-                                    let _ = r.send(Err(Error::DatabaseWriteError(e.to_string())));
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                             }
                         }
@@ -518,7 +518,7 @@ impl BufferedDatabaseWriter {
         self.sender
             .send(msg)
             .await
-            .map_err(|e| Error::DatabaseSendError(e.to_string()))
+            .map_err(|e| Error::DatabaseSend(e.to_string()))
     }
 
     ///
@@ -527,7 +527,7 @@ impl BufferedDatabaseWriter {
     pub fn send_blocking(&self, msg: WriteMessage) -> Result<()> {
         self.sender
             .blocking_send(msg)
-            .map_err(|e| Error::DatabaseSendError(e.to_string()))
+            .map_err(|e| Error::DatabaseSend(e.to_string()))
     }
 
     ///

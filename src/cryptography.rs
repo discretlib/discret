@@ -19,10 +19,10 @@ pub enum Error {
     InvalidSignature(String),
 
     #[error(transparent)]
-    SignatureError(#[from] SignatureError),
+    Signature(#[from] SignatureError),
 
     #[error(transparent)]
-    DecodeError(#[from] base64::DecodeError),
+    Decode(#[from] base64::DecodeError),
 }
 
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation

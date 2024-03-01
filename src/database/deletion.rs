@@ -30,7 +30,7 @@ impl DeletionQuery {
         deletion: Arc<DeletionParser>,
         _: &rusqlite::Connection,
     ) -> Result<Self> {
-        deletion.variables.validate_params(&parameters)?;
+        deletion.variables.validate_params(parameters)?;
         let mut deletion_query = Self {
             nodes: Vec::new(),
             edges: Vec::new(),

@@ -43,44 +43,41 @@ impl Application {
         let mut service = ApplicationService::open(name, model, key_material, data_folder, config)?;
 
         tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Some(msg) => match msg {
-                        Message::Query(query, parameters, reply) => {
-                            let q = service.get_cached_query(&query);
-                            match q {
-                                Ok(cache) => {
-                                    service.query(cache.0, cache.1, parameters, reply).await;
-                                }
-                                Err(err) => {
-                                    let _ = reply.send(Err(err));
-                                }
+            while let Some(msg) = receiver.recv().await {
+                match msg {
+                    Message::Query(query, parameters, reply) => {
+                        let q = service.get_cached_query(&query);
+                        match q {
+                            Ok(cache) => {
+                                service.query(cache.0, cache.1, parameters, reply).await;
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err));
                             }
                         }
-                        Message::Mutate(mutation, parameters, reply) => {
-                            let mutation = service.get_cached_mutation(&mutation);
-                            match mutation {
-                                Ok(cache) => {
-                                    service.mutate(cache, parameters, reply).await;
-                                }
-                                Err(err) => {
-                                    let _ = reply.send(Err(err));
-                                }
+                    }
+                    Message::Mutate(mutation, parameters, reply) => {
+                        let mutation = service.get_cached_mutation(&mutation);
+                        match mutation {
+                            Ok(cache) => {
+                                service.mutate(cache, parameters, reply).await;
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err));
                             }
                         }
-                        Message::Delete(deletion, parameters, reply) => {
-                            let deletion = service.get_cached_deletion(&deletion);
-                            match deletion {
-                                Ok(cache) => {
-                                    service.delete(cache, parameters, reply).await;
-                                }
-                                Err(err) => {
-                                    let _ = reply.send(Err(err));
-                                }
+                    }
+                    Message::Delete(deletion, parameters, reply) => {
+                        let deletion = service.get_cached_deletion(&deletion);
+                        match deletion {
+                            Ok(cache) => {
+                                service.delete(cache, parameters, reply).await;
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err));
                             }
                         }
-                    },
-                    None => break,
+                    }
                 }
             }
         });
@@ -95,11 +92,7 @@ impl Application {
     ) -> Result<DeletionQuery> {
         let (send, recieve) = oneshot::channel::<Result<DeletionQuery>>();
 
-        let msg = Message::Delete(
-            deletion.to_string(),
-            parameters.unwrap_or(Parameters::new()),
-            send,
-        );
+        let msg = Message::Delete(deletion.to_string(), parameters.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
         recieve.await?
@@ -112,11 +105,7 @@ impl Application {
     ) -> Result<MutationQuery> {
         let (send, recieve) = oneshot::channel::<Result<MutationQuery>>();
 
-        let msg = Message::Mutate(
-            mutation.to_string(),
-            parameters.unwrap_or(Parameters::new()),
-            send,
-        );
+        let msg = Message::Mutate(mutation.to_string(), parameters.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
         recieve.await?
@@ -124,11 +113,7 @@ impl Application {
 
     pub async fn query(&mut self, query: &str, parameters: Option<Parameters>) -> Result<String> {
         let (send, recieve) = oneshot::channel::<Result<String>>();
-        let msg = Message::Query(
-            query.to_string(),
-            parameters.unwrap_or(Parameters::new()),
-            send,
-        );
+        let msg = Message::Query(query.to_string(), parameters.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
         recieve.await?
     }
@@ -151,7 +136,7 @@ impl ApplicationService {
         data_folder: PathBuf,
         config: Configuration,
     ) -> Result<Self> {
-        let database_secret = derive_key(&base64_encode(&name.as_bytes()), key_material);
+        let database_secret = derive_key(&base64_encode(name.as_bytes()), key_material);
 
         let database_name = derive_key("DATABASE_NAME", &database_secret);
 
@@ -211,7 +196,7 @@ impl ApplicationService {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let mutation_query = MutationQuery::build(&parameters, mutation, &conn);
+                let mutation_query = MutationQuery::build(&parameters, mutation, conn);
                 match mutation_query {
                     Ok(muta) => {
                         let query = WriteMessage::MutationQuery(muta, reply);
@@ -290,7 +275,7 @@ impl ApplicationService {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let deletion_query = DeletionQuery::build(&parameters, deletion, &conn);
+                let deletion_query = DeletionQuery::build(&parameters, deletion, conn);
                 match deletion_query {
                     Ok(del) => {
                         let query = WriteMessage::DeletionQuery(del, reply);

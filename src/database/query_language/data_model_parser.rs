@@ -313,7 +313,7 @@ impl DataModel {
                 self.entities.insert(entity.0, entity.1);
             }
         }
-        self.model = String::from(new_data_model.model);
+        self.model = new_data_model.model;
         Ok(())
     }
 
@@ -327,7 +327,7 @@ impl DataModel {
         let parse = match PestParser::parse(Rule::datamodel, model) {
             Err(e) => {
                 let message = format!("{}", e);
-                return Err(Error::ParserError(message));
+                return Err(Error::Parser(message));
             }
             Ok(f) => f,
         }
@@ -418,10 +418,10 @@ impl DataModel {
     }
 
     fn is_reserved(value: &str) -> bool {
-        match value.to_lowercase().as_str() {
-            "boolean" | "float" | "integer" | "string" | "base64" | "json" => true,
-            _ => false,
-        }
+        matches!(
+            value.to_lowercase().as_str(),
+            "boolean" | "float" | "integer" | "string" | "base64" | "json"
+        )
     }
 
     fn parse_field_type(entity_pair: Pair<'_, Rule>) -> Result<Field, Error> {
@@ -607,7 +607,7 @@ impl DataModel {
                 match &field.field_type {
                     FieldType::Array(e) => {
                         if !self.entities.contains_key(e) {
-                            return Err(Error::ParserError(format!(
+                            return Err(Error::Parser(format!(
                             "entity {} does not exist. Please check the definition of the {}.{}:[{}] field",
                             e, entity.name, field.name, e
                         )));
@@ -615,7 +615,7 @@ impl DataModel {
                     }
                     FieldType::Entity(e) => {
                         if !self.entities.contains_key(e) {
-                            return Err(Error::ParserError(format!(
+                            return Err(Error::Parser(format!(
                         "entity {} does not exist. Please check the definition of the {}.{}:{} field",
                         e, entity.name, field.name, e
                     )));

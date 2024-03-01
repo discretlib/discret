@@ -155,7 +155,7 @@ impl MutationQuery {
                     let val = serde_json::from_str(e)?;
                     let mut previous = String::new();
                     extract_json(&val, &mut previous)?;
-                    if previous.len() > 0 {
+                    if !previous.is_empty() {
                         node_insert.old_fts_str = Some(previous);
                     }
 
@@ -192,7 +192,7 @@ impl MutationQuery {
                                         node_insert.id.clone(),
                                         field.short_name.to_string(),
                                         target_id.clone(),
-                                        &conn,
+                                        conn,
                                     )? {
                                         let edge = Edge {
                                             src: node_insert.id.clone(),
@@ -303,15 +303,13 @@ impl MutationQuery {
             }
             if !node_uptaded {
                 node_insert.node = None;
-            } else {
-                if let Some(node) = &mut node_insert.node {
-                    let json_data = serde_json::to_string(&json)?;
-                    node._json = Some(json_data);
-                    node.mdate = now();
-                    let mut current = String::new();
-                    extract_json(&json, &mut current)?;
-                    node_insert.node_fts_str = Some(current);
-                }
+            } else if let Some(node) = &mut node_insert.node {
+                let json_data = serde_json::to_string(&json)?;
+                node._json = Some(json_data);
+                node.mdate = now();
+                let mut current = String::new();
+                extract_json(&json, &mut current)?;
+                node_insert.node_fts_str = Some(current);
             }
         }
         query.node = node_insert;
@@ -329,16 +327,16 @@ impl MutationQuery {
             Some(id_field) => {
                 let id: Vec<u8> = Self::retrieve_id(id_field, parameters)?.unwrap();
                 if entity.fields.len() == 1 {
-                    if Node::exist(&id, entity_short, &conn)? {
+                    if Node::exist(&id, entity_short, conn)? {
                         Ok(NodeToInsert {
                             id,
                             ..Default::default()
                         })
                     } else {
-                        return Err(Error::UnknownEntity(
+                        Err(Error::UnknownEntity(
                             String::from(entity_name),
                             base64_encode(&id),
-                        ));
+                        ))
                     }
                 } else {
                     let mut stmt = conn.prepare(NodeToInsert::NODE_INSERT_QUERY)?;
@@ -392,7 +390,7 @@ impl MutationQuery {
         let inserts = &self.insert_entities;
 
         if mutas.len() != inserts.len() {
-            return Err(Error::QueryError(String::from(
+            return Err(Error::Query(String::from(
                 "mutation query and InsertEntity result lenght are not equal",
             )));
         }
@@ -466,7 +464,7 @@ impl InsertEntity {
 
     pub fn to_json(&self, mutation: &EntityMutation) -> Result<serde_json::Value> {
         let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        Self::fill_json(self, &mutation, &mut map)?;
+        Self::fill_json(self, mutation, &mut map)?;
 
         let mut final_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         final_map.insert(String::from(&self.name), serde_json::Value::Object(map));
@@ -507,7 +505,7 @@ impl InsertEntity {
                 match &field.field_value {
                     MutationFieldValue::Array(mutations) => {
                         if sub.1.len() != mutations.len() {
-                            return Err(Error::QueryError(String::from(
+                            return Err(Error::Query(String::from(
                                 "inserts tree does not match with mutation tree",
                             )));
                         }
@@ -526,7 +524,7 @@ impl InsertEntity {
                         let mut sub_map: serde_json::Map<String, serde_json::Value> =
                             serde_json::Map::new();
                         if sub.1.len() != 1 {
-                            return Err(Error::QueryError(String::from(
+                            return Err(Error::Query(String::from(
                                 "inserts tree does not match with mutation tree",
                             )));
                         }
@@ -558,7 +556,7 @@ impl Default for InsertEntity {
 fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
     match val {
         serde_json::Value::String(v) => {
-            buff.push_str(&v);
+            buff.push_str(v);
             buff.push(' ');
             Ok(())
         }

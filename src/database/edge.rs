@@ -82,7 +82,7 @@ impl Edge {
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.src);
-        hasher.update(&self.label.as_bytes());
+        hasher.update(self.label.as_bytes());
         hasher.update(&self.dest);
         hasher.update(&self.cdate.to_le_bytes());
         hasher.update(&self.verifying_key);
@@ -94,7 +94,7 @@ impl Edge {
     ///
     pub fn verify(&self) -> Result<()> {
         let size = self.len();
-        if size > MAX_ROW_LENTGH.try_into().unwrap() {
+        if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Edge {}-{}-{} is too long {} bytes instead of {}",
                 base64_encode(&self.src),
@@ -134,7 +134,7 @@ impl Edge {
         self.verifying_key = signing_key.export_verifying_key();
 
         let size = self.len();
-        if size > MAX_ROW_LENTGH.try_into().unwrap() {
+        if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Edge {}-{}-{} is too long {} bytes instead of {}",
                 base64_encode(&self.src),
@@ -237,7 +237,7 @@ impl Edge {
                 dest = ?",
         )?;
         let node: Option<i64> = exists_stmt
-            .query_row((src, label, dest), |row| Ok(row.get(0)?))
+            .query_row((src, label, dest), |row| row.get(0))
             .optional()?;
 
         Ok(node.is_some())

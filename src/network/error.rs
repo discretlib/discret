@@ -3,22 +3,22 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    IoError(#[from] io::Error),
+    Io(#[from] io::Error),
 
     #[error(transparent)]
-    ConnError(#[from] quinn::ConnectError),
+    QuinnConnect(#[from] quinn::ConnectError),
 
     #[error(transparent)]
-    ConnectionError(#[from] quinn::ConnectionError),
+    QuinnConnection(#[from] quinn::ConnectionError),
 
     #[error(transparent)]
-    SerialisationError(#[from] Box<bincode::ErrorKind>),
+    Serialisation(#[from] Box<bincode::ErrorKind>),
 
     #[error(transparent)]
-    SocketWriteError(#[from] quinn::WriteError),
+    SocketWrite(#[from] quinn::WriteError),
 
     #[error(transparent)]
-    SocketReadError(#[from] quinn::ReadExactError),
+    SocketRead(#[from] quinn::ReadExactError),
 
     #[error("Message size {0} is to long and is ignored. Maximum allowed: {1}")]
     MsgSerialisationToLong(usize, usize),

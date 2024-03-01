@@ -162,7 +162,7 @@ impl fmt::Display for FieldType {
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("{0}")]
-    ParserError(String),
+    Parser(String),
 
     #[error("{0}")]
     InvalidQuery(String),
@@ -207,13 +207,13 @@ pub enum Error {
     InvalidEntityOrdering(String, usize, usize),
 
     #[error(transparent)]
-    BoolParsingError(#[from] std::str::ParseBoolError),
+    BoolParsing(#[from] std::str::ParseBoolError),
 
     #[error(transparent)]
-    IntParsingError(#[from] std::num::ParseIntError),
+    IntParsing(#[from] std::num::ParseIntError),
 
     #[error(transparent)]
-    FloatParsingError(#[from] std::num::ParseFloatError),
+    FloatParsing(#[from] std::num::ParseFloatError),
 
     #[error("filter on entity {0} can only use operations 'is null' of 'is not null' ")]
     InvalidEntityFilter(String),

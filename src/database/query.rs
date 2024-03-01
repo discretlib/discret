@@ -16,21 +16,13 @@ pub struct Param {
     value: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SingleQuery {
     pub name: String,
     pub var_order: Vec<Param>,
     pub sql_query: String,
 }
-impl Default for SingleQuery {
-    fn default() -> Self {
-        Self {
-            name: Default::default(),
-            var_order: Default::default(),
-            sql_query: Default::default(),
-        }
-    }
-}
+
 impl SingleQuery {
     fn add_param(&mut self, value: String, internal: bool) -> String {
         if internal {
@@ -112,7 +104,7 @@ pub fn get_entity_query(
     let mut q = String::new();
     tab(&mut q, t);
     q.push_str("SELECT \n");
-    let selection = get_fields(&entity, prepared_query, &entity.aliased_name(), t);
+    let selection = get_fields(entity, prepared_query, &entity.aliased_name(), t);
     tab(&mut q, t);
     q.push_str(&selection);
     q.push_str(" as value\n");
@@ -171,7 +163,7 @@ pub fn get_sub_group_array(
     q.push_str(&sub);
     q.push('\n');
     tab(&mut q, t);
-    q.push_str(")");
+    q.push(')');
     q.push('\n');
     tab(&mut q, t);
     q
@@ -189,7 +181,7 @@ pub fn get_sub_entity_query(
     let mut q = String::new();
     tab(&mut q, t);
     q.push_str("SELECT \n");
-    let selection = get_fields(&entity, prepared_query, field_name, t);
+    let selection = get_fields(entity, prepared_query, field_name, t);
     tab(&mut q, t);
     q.push_str(&selection);
     q.push_str(" as value \n");
@@ -270,7 +262,7 @@ pub fn get_end_select_query(
     let paging = get_paging(&entity.params, prepared_query);
     q.push_str(&paging);
 
-    if entity.params.order_by.len() > 0 || entity.params.fulltext_search.is_some() {
+    if !entity.params.order_by.is_empty() || entity.params.fulltext_search.is_some() {
         q.push('\n');
         tab(&mut q, t);
         let order_by = get_order(&entity.params);
@@ -314,27 +306,26 @@ fn get_fields(
             QueryFieldType::Scalar => {
                 if field.field.is_system {
                     q.push_str(&format!("'{}', {}", &field.name(), &field.field.short_name,));
+                } else if let Some(val) = &field.field.default_value {
+                    let default = match val {
+                        Value::Boolean(b) => b.to_string(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::String(s) => prepared_query.add_param(String::from(s), true),
+                        Value::Null => unreachable!(),
+                    };
+                    q.push_str(&format!(
+                        "'{}',Ifnull({},{})",
+                        &field.name(),
+                        js_field(&field.field.short_name),
+                        default
+                    ))
                 } else {
-                    if let Some(val) = &field.field.default_value {
-                        let default = match val {
-                            Value::Boolean(b) => b.to_string(),
-                            Value::Integer(i) => i.to_string(),
-                            Value::Float(f) => f.to_string(),
-                            Value::String(s) => prepared_query.add_param(String::from(s), true),
-                            Value::Null => unreachable!(),
-                        };
-                        q.push_str(&format!(
-                            "'{}',{}",
-                            &field.name(),
-                            format!("Ifnull({},{})", js_field(&field.field.short_name), default)
-                        ))
-                    } else {
-                        q.push_str(&format!(
-                            "'{}',{}",
-                            &field.name(),
-                            js_field(&field.field.short_name)
-                        ))
-                    }
+                    q.push_str(&format!(
+                        "'{}',{}",
+                        &field.name(),
+                        js_field(&field.field.short_name)
+                    ))
                 }
             }
 
@@ -355,9 +346,10 @@ fn get_fields(
                         Value::Null => unreachable!(),
                     };
                     q.push_str(&format!(
-                        "'{}',{}",
+                        "'{}', Ifnull({},{}",
                         &field.name(),
-                        format!("Ifnull({},{})", select, default)
+                        select,
+                        default
                     ))
                 } else {
                     q.push_str(&format!("'{}',{}", &field.name(), select))
@@ -367,7 +359,7 @@ fn get_fields(
             QueryFieldType::EntityQuery(field_entity, _) => {
                 q.push_str(&format!("'{}', (\n", &field.name()));
                 let query = get_sub_entity_query(
-                    &field_entity,
+                    field_entity,
                     prepared_query,
                     parent_table,
                     &field.name(),
@@ -384,7 +376,7 @@ fn get_fields(
             QueryFieldType::EntityArrayQuery(field_entity, _) => {
                 q.push_str(&format!("'{}', (\n", &field.name()));
                 let query = get_sub_group_array(
-                    &field_entity,
+                    field_entity,
                     prepared_query,
                     parent_table,
                     &field.name(),
@@ -437,7 +429,7 @@ fn get_fields(
             }
         }
 
-        if !it.peek().is_none() {
+        if it.peek().is_some() {
             q.push(',');
         }
     }
@@ -448,7 +440,7 @@ fn get_fields(
 fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t: usize) -> String {
     let mut q = String::new();
 
-    if params.filters.len() > 0 {
+    if !params.filters.is_empty() {
         q.push_str("AND ");
         q.push('\n');
         tab(&mut q, t);
@@ -507,13 +499,13 @@ fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t:
                 }
             }
 
-            if !it.peek().is_none() {
+            if it.peek().is_some() {
                 q.push_str(" AND\n");
                 tab(&mut q, t);
             }
         }
     }
-    if params.json_filters.len() > 0 {
+    if !params.json_filters.is_empty() {
         q.push_str("AND ");
         q.push('\n');
         tab(&mut q, t);
@@ -548,7 +540,7 @@ fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t:
                 value
             ));
 
-            if !it.peek().is_none() {
+            if it.peek().is_some() {
                 q.push_str(" AND\n");
                 tab(&mut q, t);
             }
@@ -587,7 +579,7 @@ fn get_having_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t
             &filter.name, operation, &value
         ));
 
-        if !it.peek().is_none() {
+        if it.peek().is_some() {
             q.push_str(" AND\n");
             tab(&mut q, t);
         }
@@ -619,7 +611,7 @@ pub fn get_order(params: &EntityParams) -> String {
                 ));
             }
 
-            if !it.peek().is_none() {
+            if it.peek().is_some() {
                 query.push_str(", ");
             }
         }
@@ -674,7 +666,7 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> St
         &params.after
     };
 
-    if paging.len() > 0 {
+    if !paging.is_empty() {
         q.push('(');
     }
     for i in 0..paging.len() {
@@ -763,7 +755,7 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> St
             q.push_str(" OR ")
         }
     }
-    if paging.len() > 0 {
+    if !paging.is_empty() {
         q.push_str(") ");
     }
 
@@ -809,12 +801,11 @@ fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
     let mut v = Vec::new();
 
     for field in fields {
-        match &field.field_type {
-            QueryFieldType::Scalar => v.push(field.field.short_name.clone()),
-            _ => {}
+        if let QueryFieldType::Scalar = &field.field_type {
+            v.push(field.field.short_name.clone())
         }
     }
-    if v.len() > 0 {
+    if !v.is_empty() {
         q.push('\n');
         tab(&mut q, t);
         q.push_str("GROUP BY ")
@@ -823,7 +814,7 @@ fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
     let it = &mut v.iter().peekable();
     while let Some(field) = it.next() {
         q.push_str(&format!("_json->>'$.{}'", field));
-        if !it.peek().is_none() {
+        if it.peek().is_some() {
             q.push(',');
         }
     }
@@ -840,7 +831,7 @@ impl PreparedQueries {
     pub fn build(parser: &QueryParser) -> Result<Self> {
         let mut sql_queries = Vec::new();
         for query in &parser.queries {
-            sql_queries.push(SingleQuery::build(&query)?);
+            sql_queries.push(SingleQuery::build(query)?);
         }
         Ok(Self {
             name: String::from(&parser.name),
@@ -869,8 +860,7 @@ impl Query {
             let sql = &query.sql_query;
             let mut stmt = conn.prepare_cached(sql)?;
             let params = rusqlite::params_from_iter(&params_vec);
-            let query_res: Option<String> =
-                stmt.query_row(params, |row| Ok(row.get(0)?)).optional()?;
+            let query_res: Option<String> = stmt.query_row(params, |row| row.get(0)).optional()?;
             let result = match query_res {
                 Some(e) => e,
                 None => String::from("[]"),
