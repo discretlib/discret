@@ -3,10 +3,10 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::cryptography::{base64_decode, base64_encode, now, SigningKey};
 
 use super::{
+    configuration::{ID_FIELD, ROOMS_FIELD_SHORT},
     edge::Edge,
     node::Node,
     query_language::{
-        data_model_parser::{ID_FIELD, ROOMS_FIELD_SHORT},
         mutation_parser::{EntityMutation, MutationField, MutationFieldValue, MutationParser},
         parameter::Parameters,
         FieldType,
@@ -14,16 +14,20 @@ use super::{
     sqlite_database::{RowMappingFn, Writeable},
     Error, Result,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 #[derive(Debug)]
 pub struct NodeToInsert {
     pub id: Vec<u8>,
+    pub entity: String,
     pub node: Option<Node>,
     pub index: bool,
     pub node_fts_str: Option<String>,
     pub old_node: Option<Node>,
-    pub old_rooms: Option<Vec<Vec<u8>>>,
+    pub rooms: HashSet<Vec<u8>>,
     pub old_rowid: Option<i64>,
     pub old_fts_str: Option<String>,
 }
@@ -56,11 +60,12 @@ impl NodeToInsert {
     const NODE_INSERT_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(NodeToInsert {
             id: row.get(0)?,
+            entity: "".to_string(),
             node_fts_str: None,
             index: true,
             node: None,
             old_fts_str: None,
-            old_rooms: None,
+            rooms: HashSet::new(),
             old_rowid: row.get(8)?,
             old_node: Some(Node {
                 id: row.get(0)?,
@@ -79,13 +84,14 @@ impl Default for NodeToInsert {
     fn default() -> Self {
         Self {
             id: Vec::new(),
+            entity: "".to_string(),
             old_rowid: None,
             index: true,
             old_fts_str: None,
             node_fts_str: None,
             node: None,
             old_node: None,
-            old_rooms: None,
+            rooms: HashSet::new(),
         }
     }
 }
@@ -111,7 +117,7 @@ impl MutationQuery {
         mutation.variables.validate_params(parameters)?;
         let mut insert_queries = vec![];
         for entity in &mutation.mutations {
-            let query = Self::get_insert_query(entity, parameters, conn)?;
+            let query = Self::get_insert_query(entity, parameters, conn, HashSet::new())?;
             insert_queries.push(query);
         }
         let query = MutationQuery {
@@ -142,13 +148,14 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
+        rooms: HashSet<Vec<u8>>,
     ) -> Result<InsertEntity> {
         let mut query = InsertEntity {
             name: entity.aliased_name(),
             ..Default::default()
         };
 
-        let mut node_insert = Self::create_node_to_insert(entity, parameters, conn)?;
+        let mut node_insert = Self::create_node_to_insert(entity, parameters, conn, rooms.clone())?;
         let mut json = if let Some(old_node) = &mut node_insert.old_node {
             match &old_node._json {
                 Some(e) => {
@@ -183,10 +190,14 @@ impl MutationQuery {
                             MutationFieldValue::Array(mutations) => {
                                 let mut insert_queries = vec![];
                                 for mutation in mutations {
-                                    let insert_query =
-                                        Self::get_insert_query(mutation, parameters, conn)?;
+                                    let insert_query = Self::get_insert_query(
+                                        mutation,
+                                        parameters,
+                                        conn,
+                                        node_insert.rooms.clone(),
+                                    )?;
 
-                                    let target_id = insert_query.node.id.clone();
+                                    let target_id = insert_query.node_insert.id.clone();
 
                                     if !Edge::exists(
                                         node_insert.id.clone(),
@@ -201,11 +212,14 @@ impl MutationQuery {
                                             cdate: now(),
                                             ..Default::default()
                                         };
-                                        query.edge_insertions.push(EdgeToInsert {
-                                            label: field.name.clone(),
-                                            edge,
-                                        });
+                                        query.edge_insertions.push(edge);
                                     }
+                                    if field.short_name.eq(ROOMS_FIELD_SHORT) {
+                                        node_insert
+                                            .rooms
+                                            .insert(insert_query.node_insert.id.clone());
+                                    }
+
                                     insert_queries.push(insert_query);
                                 }
                                 query
@@ -217,10 +231,7 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(EdgeToInsert {
-                                        label: field.name.clone(),
-                                        edge: *e,
-                                    });
+                                    query.edge_deletions.push(*e);
                                 }
                             }
                             _ => unreachable!(),
@@ -230,15 +241,16 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(EdgeToInsert {
-                                        label: field.name.clone(),
-                                        edge: *e,
-                                    });
+                                    query.edge_deletions.push(*e);
                                 }
-                                let insert_query =
-                                    Self::get_insert_query(mutation, parameters, conn)?;
+                                let insert_query = Self::get_insert_query(
+                                    mutation,
+                                    parameters,
+                                    conn,
+                                    node_insert.rooms.clone(),
+                                )?;
 
-                                let target_id = insert_query.node.id.clone();
+                                let target_id = insert_query.node_insert.id.clone();
                                 let edge = Edge {
                                     src: node_insert.id.clone(),
                                     label: field.short_name.to_string(),
@@ -246,10 +258,7 @@ impl MutationQuery {
                                     cdate: now(),
                                     ..Default::default()
                                 };
-                                query.edge_insertions.push(EdgeToInsert {
-                                    label: field.name.clone(),
-                                    edge,
-                                });
+                                query.edge_insertions.push(edge);
                                 query
                                     .sub_nodes
                                     .insert(String::from(&field.name), vec![insert_query]);
@@ -259,10 +268,7 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_insert.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(EdgeToInsert {
-                                        label: field.name.clone(),
-                                        edge: *e,
-                                    });
+                                    query.edge_deletions.push(*e);
                                 }
                             }
                             _ => unreachable!(),
@@ -281,6 +287,7 @@ impl MutationQuery {
                                 _ => unreachable!(),
                             };
                             obj.insert(String::from(&field.short_name), value);
+
                             node_uptaded = true;
                         }
                         FieldType::Json => {
@@ -312,7 +319,7 @@ impl MutationQuery {
                 node_insert.node_fts_str = Some(current);
             }
         }
-        query.node = node_insert;
+        query.node_insert = node_insert;
         Ok(query)
     }
 
@@ -320,6 +327,7 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
+        mut rooms: HashSet<Vec<u8>>,
     ) -> Result<NodeToInsert> {
         let entity_name = &entity.name;
         let entity_short = &entity.short_name;
@@ -330,6 +338,7 @@ impl MutationQuery {
                     if Node::exist(&id, entity_short, conn)? {
                         Ok(NodeToInsert {
                             id,
+                            entity: entity_name.clone(),
                             ..Default::default()
                         })
                     } else {
@@ -343,7 +352,7 @@ impl MutationQuery {
                     let results = stmt
                         .query_row((&id, entity_short), NodeToInsert::NODE_INSERT_MAPPING)
                         .optional()?;
-                    let node: NodeToInsert = match results {
+                    let mut node: NodeToInsert = match results {
                         Some(mut node) => {
                             let rooms_query = format!(
                                 "SELECT dest FROM _edge WHERE src=? AND label={}",
@@ -352,13 +361,12 @@ impl MutationQuery {
                             let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;
                             let par = base64_encode(&node.id);
                             let mut rows = rooms_stmt.query([par])?;
-                            let mut rooms: Vec<Vec<u8>> = Vec::new();
 
                             while let Some(row) = rows.next()? {
-                                rooms.push(row.get(0)?);
+                                rooms.insert(row.get(0)?);
                             }
-                            node.old_rooms = Some(rooms);
                             node.node = node.old_node.clone();
+                            node.rooms = rooms;
                             *node
                         }
                         None => {
@@ -368,6 +376,7 @@ impl MutationQuery {
                             ))
                         }
                     };
+                    node.entity = entity_name.clone();
                     Ok(node)
                 }
             }
@@ -378,6 +387,7 @@ impl MutationQuery {
                 };
                 Ok(NodeToInsert {
                     id: node.id.clone(),
+                    entity: entity_name.clone(),
                     node: Some(node),
                     ..Default::default()
                 })
@@ -414,17 +424,11 @@ impl MutationQuery {
 }
 
 #[derive(Debug)]
-pub struct EdgeToInsert {
-    label: String,
-    edge: Edge,
-}
-
-#[derive(Debug)]
 pub struct InsertEntity {
     pub name: String,
-    pub node: NodeToInsert,
-    pub edge_deletions: Vec<EdgeToInsert>,
-    pub edge_insertions: Vec<EdgeToInsert>,
+    pub node_insert: NodeToInsert,
+    pub edge_deletions: Vec<Edge>,
+    pub edge_insertions: Vec<Edge>,
     pub sub_nodes: HashMap<String, Vec<InsertEntity>>,
 }
 impl InsertEntity {
@@ -434,13 +438,13 @@ impl InsertEntity {
                 insert.write(conn)?;
             }
         }
-        self.node.write(conn)?;
+        self.node_insert.write(conn)?;
 
         for edge in &self.edge_deletions {
-            edge.edge.delete(conn)?
+            edge.delete(conn)?
         }
         for edge in &self.edge_insertions {
-            edge.edge.write(conn)?;
+            edge.write(conn)?;
         }
 
         Ok(())
@@ -453,10 +457,10 @@ impl InsertEntity {
             }
         }
 
-        self.node.sign(signing_key)?;
+        self.node_insert.sign(signing_key)?;
 
         for edge in &mut self.edge_insertions {
-            edge.edge.sign(signing_key)?;
+            edge.sign(signing_key)?;
         }
 
         Ok(())
@@ -477,7 +481,7 @@ impl InsertEntity {
         mutation: &EntityMutation,
         json_map: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
-        let node = &query.node;
+        let node = &query.node_insert;
 
         json_map.insert(
             String::from(ID_FIELD),
@@ -543,7 +547,7 @@ impl Default for InsertEntity {
     fn default() -> Self {
         Self {
             name: String::from(""),
-            node: NodeToInsert {
+            node_insert: NodeToInsert {
                 ..Default::default()
             },
             edge_deletions: Vec::new(),

@@ -68,3 +68,66 @@ impl Default for Configuration {
         }
     }
 }
+
+//name of the system entities
+pub const ROOM_ENT: &str = "_Room";
+pub const AUTHORISATION_ENT: &str = "_Authorisation";
+
+pub const USER_AUTH_ENT: &str = "_UserAuth";
+pub const CREDENTIAL_ENT: &str = "_Credential";
+pub const ENTITY_RIGHT_ENT: &str = "_EntityRight";
+pub const AUTHOR_ENT: &str = "_User";
+
+//name of the system fields
+pub const ID_FIELD: &str = "id";
+pub const CREATION_DATE_FIELD: &str = "cdate";
+pub const MODIFICATION_DATE_FIELD: &str = "mdate";
+pub const ENTITY_FIELD: &str = "_entity";
+pub const JSON_FIELD: &str = "_json";
+pub const BINARY_FIELD: &str = "_binary";
+pub const PUB_KEY_FIELD: &str = "_verifying_key";
+pub const SIGNATURE_FIELD: &str = "_signature";
+
+//name of the entity fields
+pub const AUTHORS_FIELD: &str = "_authors";
+pub const AUTHORS_FIELD_SHORT: &str = "0";
+
+pub const ROOMS_FIELD: &str = "_rooms";
+pub const ROOMS_FIELD_SHORT: &str = "1";
+
+//names of some authentication fields used during auth validation
+pub const AUTH_CRED_FIELD: &str = "credentials";
+pub const AUTH_USER_FIELD: &str = "users";
+
+pub const SYSTEM_DATA_MODEL: &str = "    
+    _Room {
+        name: String,
+        type: String,
+        ext: Json nullable,
+        authorisations:[_Authorisation],
+    }
+    
+    _Authorisation {
+        name: String,
+        credentials:[_Credential] ,
+        users:[_UserAuth],
+    }
+    
+    _UserAuth{
+        user: Base64,
+        valid_before:Integer nullable,
+    }
+
+    _Credential {
+        valid_from: Integer,
+        mutate_room: Boolean,
+        mutate_room_users: Boolean,
+        entity_right:[_EntityRight],
+    }
+    
+    _EntityRight {
+        entity: String,
+        insert: Boolean,
+        mutate_all: Boolean,
+        delete_all: Boolean,
+    }";

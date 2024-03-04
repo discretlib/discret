@@ -1,4 +1,14 @@
-use crate::{cryptography::base64_decode, database::node::ARCHIVED_CHAR};
+use crate::{
+    cryptography::base64_decode,
+    database::{
+        configuration::{
+            AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
+            ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD,
+            ROOMS_FIELD, ROOMS_FIELD_SHORT, ROOM_ENT, SIGNATURE_FIELD,
+        },
+        node::ARCHIVED_CHAR,
+    },
+};
 
 use super::{Error, FieldType, Value, VariableType};
 use pest::iterators::Pair;
@@ -10,24 +20,6 @@ use std::collections::HashMap;
 #[derive(Parser)]
 #[grammar = "database/query_language/data_model.pest"]
 struct PestParser;
-
-pub const AUTHOR_ENTITY: &str = "_User";
-pub const ROOM_ENTITY: &str = "_Room";
-
-pub const ID_FIELD: &str = "id";
-pub const CREATION_DATE_FIELD: &str = "cdate";
-pub const MODIFICATION_DATE_FIELD: &str = "mdate";
-pub const ENTITY_FIELD: &str = "_entity";
-pub const JSON_FIELD: &str = "_json";
-pub const BINARY_FIELD: &str = "_binary";
-pub const PUB_KEY_FIELD: &str = "_verifying_key";
-pub const SIGNATURE_FIELD: &str = "_signature";
-
-pub const AUTHORS_FIELD: &str = "_authors";
-pub const ROOMS_FIELD: &str = "_rooms";
-
-pub const AUTHORS_FIELD_SHORT: &str = "0";
-pub const ROOMS_FIELD_SHORT: &str = "1";
 
 lazy_static::lazy_static! {
     //
@@ -154,7 +146,7 @@ lazy_static::lazy_static! {
             Field {
                 name: AUTHORS_FIELD.to_string(),
                 short_name: AUTHORS_FIELD_SHORT.to_string(),
-                field_type: FieldType::Array(AUTHOR_ENTITY.to_string()),
+                field_type: FieldType::Array(AUTHOR_ENT.to_string()),
                 default_value: None,
                 nullable: false,
                 deprecated: false,
@@ -169,11 +161,11 @@ lazy_static::lazy_static! {
             Field {
                 name: ROOMS_FIELD.to_string(),
                 short_name: ROOMS_FIELD_SHORT.to_string(),
-                field_type: FieldType::Array(ROOM_ENTITY.to_string()),
+                field_type: FieldType::Array(ROOM_ENT.to_string()),
                 default_value: None,
-                nullable: false,
+                nullable: true,
                 deprecated: false,
-                mutable: false,
+                mutable: true,
                 is_system: false,
             },
         );

@@ -9,7 +9,12 @@ use tokio::sync::{
 use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
-    deletion::DeletionQuery, edge::Edge, mutation_query::MutationQuery, node::Node, Error, Result,
+    authorisation::{AuthorisationMessage, RoomMutationQuery},
+    deletion::DeletionQuery,
+    edge::Edge,
+    mutation_query::MutationQuery,
+    node::Node,
+    Error, Result,
 };
 
 pub type RowMappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
@@ -28,6 +33,7 @@ pub trait Writeable {
 pub enum WriteMessage {
     DeletionQuery(DeletionQuery, Sender<Result<DeletionQuery>>),
     MutationQuery(MutationQuery, Sender<Result<MutationQuery>>),
+    RoomMutationQuery(RoomMutationQuery, mpsc::Sender<AuthorisationMessage>),
     WriteStmt(WriteStmt, Sender<Result<WriteStmt>>),
 }
 
@@ -257,7 +263,7 @@ impl DatabaseReader {
     pub fn send_blocking(&self, query: QueryFn) -> Result<()> {
         self.sender
             .send(query)
-            .map_err(|e| Error::DatabaseSend(e.to_string()))?;
+            .map_err(|e| Error::ChannelSend(e.to_string()))?;
         Ok(())
     }
 
@@ -265,7 +271,7 @@ impl DatabaseReader {
         self.sender
             .send_async(query)
             .await
-            .map_err(|e| Error::DatabaseSend(e.to_string()))?;
+            .map_err(|e| Error::ChannelSend(e.to_string()))?;
         Ok(())
     }
 
@@ -441,6 +447,11 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::MutationQuery(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
+
+                                WriteMessage::RoomMutationQuery(q, r) => {
+                                    let _ =
+                                        r.send(AuthorisationMessage::RoomMutationQuery(Ok(()), q));
+                                }
                                 WriteMessage::WriteStmt(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
@@ -455,6 +466,12 @@ impl BufferedDatabaseWriter {
                                 }
                                 WriteMessage::MutationQuery(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
+                                }
+                                WriteMessage::RoomMutationQuery(q, r) => {
+                                    let _ = r.send(AuthorisationMessage::RoomMutationQuery(
+                                        Err(Error::DatabaseWrite(e.to_string())),
+                                        q,
+                                    ));
                                 }
                                 WriteMessage::WriteStmt(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
@@ -490,6 +507,12 @@ impl BufferedDatabaseWriter {
                         return Err(e);
                     }
                 }
+                WriteMessage::RoomMutationQuery(query, _) => {
+                    if let Err(e) = query.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                }
                 WriteMessage::WriteStmt(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {
                         conn.execute("ROLLBACK", [])?;
@@ -518,7 +541,7 @@ impl BufferedDatabaseWriter {
         self.sender
             .send(msg)
             .await
-            .map_err(|e| Error::DatabaseSend(e.to_string()))
+            .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
     ///
@@ -527,7 +550,7 @@ impl BufferedDatabaseWriter {
     pub fn send_blocking(&self, msg: WriteMessage) -> Result<()> {
         self.sender
             .blocking_send(msg)
-            .map_err(|e| Error::DatabaseSend(e.to_string()))
+            .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
     ///

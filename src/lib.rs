@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-mod configuration;
 mod cryptography;
 mod database;
 mod message;

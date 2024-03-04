@@ -3,7 +3,13 @@ mod tests {
 
     use std::any::Any;
 
-    use crate::database::query_language::{data_model_parser::*, FieldType, Value};
+    use crate::database::{
+        configuration::{
+            AUTHORS_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
+            MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, SIGNATURE_FIELD,
+        },
+        query_language::{data_model_parser::*, FieldType, Value},
+    };
 
     #[test]
     fn parse_valid_model() {

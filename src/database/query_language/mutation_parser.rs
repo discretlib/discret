@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::cryptography::base64_decode;
+use crate::{cryptography::base64_decode, database::configuration::ID_FIELD};
 
 use super::{
-    data_model_parser::{DataModel, Entity, Field, ID_FIELD},
+    data_model_parser::{DataModel, Entity, Field},
     parameter::Variables,
     Error, FieldType, Value,
 };

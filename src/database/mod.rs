@@ -14,9 +14,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    Authorisation(#[from] authorisation::Error),
-
-    #[error(transparent)]
     Cryptography(#[from] crate::cryptography::Error),
 
     #[error(transparent)]
@@ -50,7 +47,7 @@ pub enum Error {
     OneshotAsyncRecv(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error("{0}")]
-    DatabaseSend(String),
+    ChannelSend(String),
 
     #[error(
         "id length must be between {} and {} bytes",
@@ -76,4 +73,34 @@ pub enum Error {
 
     #[error("Missing parameter: '{0}', Cannot build SQL query parameters")]
     MissingParameter(String),
+
+    #[error("Authorisation allready exists for this room")]
+    AuthorisationExists(),
+
+    #[error("This reference does not belong to this room")]
+    NotBelongsTo(),
+
+    #[error("Rights allreday exits for entity '{0}'")]
+    RightsExists(String),
+
+    #[error("User is already disabled at a later date")]
+    UserAlreadyDisabled(),
+
+    #[error("credential validity date is set before an existing credential validity")]
+    InvalidCredentialDate(),
+
+    #[error("system entity '{0}' cannot be mutated ouside a Room mutation")]
+    InvalidAuthorisationMutation(String),
+
+    #[error("not enough right to mutate entity '{0}' in room '{1}' ")]
+    AuthorisationRejected(String, String),
+
+    #[error("Authorisation model forbids deletion of {0} in entity {1}")]
+    CannotRemove(String, String),
+
+    #[error("Unknown room id {0} ")]
+    UnknownRoom(String),
+
+    #[error("User '{0}' does not belong to the parent rooms of room '{1}' ")]
+    UserNotInParentRoom(String, String),
 }

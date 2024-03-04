@@ -3,6 +3,8 @@ use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{mpsc, oneshot};
 
+use super::authorisation::{AuthorisationMessage, AuthorisationService};
+use super::configuration;
 use super::deletion::DeletionQuery;
 use super::query_language::deletion_parser::DeletionParser;
 use super::{
@@ -27,11 +29,11 @@ enum Message {
 }
 
 #[derive(Clone)]
-struct Application {
+struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
 }
-impl Application {
-    pub fn new(
+impl GraphDatabaseService {
+    pub fn start(
         name: &str,
         model: &str,
         key_material: &[u8; 32],
@@ -40,7 +42,7 @@ impl Application {
     ) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
-        let mut service = ApplicationService::open(name, model, key_material, data_folder, config)?;
+        let mut service = GraphDatabase::open(name, model, key_material, data_folder, config)?;
 
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
@@ -82,7 +84,7 @@ impl Application {
             }
         });
 
-        Ok(Application { sender })
+        Ok(GraphDatabaseService { sender })
     }
 
     pub async fn delete(
@@ -119,16 +121,16 @@ impl Application {
     }
 }
 
-struct ApplicationService {
+struct GraphDatabase {
     data_model: DataModel,
+    auth_service: AuthorisationService,
     graph_database: Database,
     database_path: PathBuf,
-    signing_key: Arc<Ed25519SigningKey>,
     mutation_cache: LruCache<String, Arc<MutationParser>>,
     query_cache: LruCache<String, QueryCacheEntry>,
     deletion_cache: LruCache<String, Arc<DeletionParser>>,
 }
-impl ApplicationService {
+impl GraphDatabase {
     pub fn open(
         name: &str,
         model: &str,
@@ -142,7 +144,7 @@ impl ApplicationService {
 
         let signature_key = derive_key("SIGNING_KEY", key_material);
 
-        let signing_key = Arc::new(Ed25519SigningKey::create_from(&signature_key));
+        let signing_key = Ed25519SigningKey::create_from(&signature_key);
 
         let database_path = build_path(data_folder, &base64_encode(&database_name))?;
 
@@ -159,17 +161,31 @@ impl ApplicationService {
         let mutation_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
         let query_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
         let deletion_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
+
+        //
+        //TODO load from database
+        //
         let mut data_model = DataModel::new();
+        data_model.update_system(configuration::SYSTEM_DATA_MODEL)?;
+
         data_model.update(model)?;
+
+        let auth_service = AuthorisationService::start(signing_key);
+
         Ok(Self {
             data_model,
+            auth_service,
             graph_database,
             database_path,
-            signing_key,
             mutation_cache,
             query_cache,
             deletion_cache,
         })
+    }
+
+    pub async fn update_data_model(&mut self, model: &str) -> Result<()> {
+        self.data_model.update(model)?;
+        Ok(())
     }
 
     pub fn get_cached_mutation(&mut self, mutation: &str) -> Result<Arc<MutationParser>> {
@@ -191,16 +207,19 @@ impl ApplicationService {
         parameters: Parameters,
         reply: Sender<Result<MutationQuery>>,
     ) {
+        let auth_service = self.auth_service.clone();
         let writer = self.graph_database.writer.clone();
+
         let _ = self
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
                 let mutation_query = MutationQuery::build(&parameters, mutation, conn);
+
                 match mutation_query {
                     Ok(muta) => {
-                        let query = WriteMessage::MutationQuery(muta, reply);
-                        let _ = writer.send_blocking(query);
+                        let msg = AuthorisationMessage::MutationQuery(muta, writer, reply);
+                        let _ = auth_service.send_blocking(msg);
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
@@ -288,8 +307,6 @@ impl ApplicationService {
             }))
             .await;
     }
-
-    //pub fn delete(deletion: &str, parameters: &Parameters) {}
 }
 
 struct QueryCacheEntry {
@@ -319,7 +336,7 @@ mod tests {
             let paths = fs::read_dir(dir).unwrap();
             for file in paths {
                 let files = file.unwrap().path();
-                println!("Name: {}", files.display());
+                // println!("Name: {}", files.display());
                 let _ = fs::remove_file(&files);
             }
         }
@@ -336,7 +353,7 @@ mod tests {
 
         let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
-        let mut app = Application::new(
+        let mut app = GraphDatabaseService::start(
             "selection app",
             data_model,
             &secret,
@@ -380,7 +397,7 @@ mod tests {
 
         let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
-        let mut app = Application::new(
+        let mut app = GraphDatabaseService::start(
             "delete app",
             data_model,
             &secret,
@@ -401,7 +418,7 @@ mod tests {
             .await
             .unwrap();
 
-        let e = &res.insert_entities[0].node.id;
+        let e = &res.insert_entities[0].node_insert.id;
 
         let mut param = Parameters::new();
         param.add("id", base64_encode(e)).unwrap();
