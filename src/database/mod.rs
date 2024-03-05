@@ -1,4 +1,5 @@
 pub mod authorisation;
+pub mod authorisation_test;
 pub mod configuration;
 pub mod deletion;
 pub mod edge;
@@ -103,4 +104,10 @@ pub enum Error {
 
     #[error("User '{0}' does not belong to the parent rooms of room '{1}' ")]
     UserNotInParentRoom(String, String),
+
+    #[error("Entity rights cannot be updated to preserve history, only inserts can be performed ")]
+    EntityRightCannotBeUpdated(),
+
+    #[error("Entity right is missing an entity name")]
+    EntityRightMissingName(),
 }

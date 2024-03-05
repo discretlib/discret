@@ -99,6 +99,18 @@ pub const ROOMS_FIELD_SHORT: &str = "1";
 pub const AUTH_CRED_FIELD: &str = "credentials";
 pub const AUTH_USER_FIELD: &str = "users";
 
+//names of some authentication fields used during auth validation
+pub const CRED_MUTATE_ROOM_SHORT: &str = "32";
+pub const CRED_MUTATE_ROOM_USERS_SHORT: &str = "33";
+
+pub const USER_VERIFYING_KEY_SHORT: &str = "32";
+pub const USER_VALID_BEFORE_SHORT: &str = "33";
+
+pub const RIGHT_ENTITY_SHORT: &str = "32";
+pub const RIGHT_INSERT_SHORT: &str = "33";
+pub const RIGHT_MUTATE_SHORT: &str = "34";
+pub const RIGHT_DELETE_SHORT: &str = "35";
+
 pub const SYSTEM_DATA_MODEL: &str = "    
     _Room {
         name: String,
@@ -114,15 +126,14 @@ pub const SYSTEM_DATA_MODEL: &str = "
     }
     
     _UserAuth{
-        user: Base64,
+        verifying_key: Base64,
         valid_before:Integer nullable,
     }
 
     _Credential {
-        valid_from: Integer,
         mutate_room: Boolean,
         mutate_room_users: Boolean,
-        entity_right:[_EntityRight],
+        rights:[_EntityRight],
     }
     
     _EntityRight {

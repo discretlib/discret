@@ -1,6 +1,9 @@
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::cryptography::{base64_decode, base64_encode, now, SigningKey};
+use crate::{
+    cryptography::{base64_decode, base64_encode, now, SigningKey},
+    database::configuration::ROOMS_FIELD,
+};
 
 use super::{
     configuration::{ID_FIELD, ROOMS_FIELD_SHORT},
@@ -41,10 +44,11 @@ impl NodeToInsert {
                 &self.old_fts_str,
                 &self.node_fts_str,
             )?;
-        }
-        //archive the old node
-        if let Some(old_node) = &self.old_node {
-            old_node.write(conn, false, &None, &None, &None)?;
+            //archive the old node
+
+            if let Some(old_node) = &self.old_node {
+                old_node.archive(conn)?;
+            }
         }
         Ok(())
     }
@@ -117,7 +121,7 @@ impl MutationQuery {
         mutation.variables.validate_params(parameters)?;
         let mut insert_queries = vec![];
         for entity in &mutation.mutations {
-            let query = Self::get_insert_query(entity, parameters, conn, HashSet::new())?;
+            let query = Self::get_insert_query(entity, parameters, conn)?;
             insert_queries.push(query);
         }
         let query = MutationQuery {
@@ -148,14 +152,13 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
-        rooms: HashSet<Vec<u8>>,
     ) -> Result<InsertEntity> {
         let mut query = InsertEntity {
             name: entity.aliased_name(),
             ..Default::default()
         };
 
-        let mut node_insert = Self::create_node_to_insert(entity, parameters, conn, rooms.clone())?;
+        let mut node_insert = Self::create_node_to_insert(entity, parameters, conn)?;
         let mut json = if let Some(old_node) = &mut node_insert.old_node {
             match &old_node._json {
                 Some(e) => {
@@ -181,7 +184,7 @@ impl MutationQuery {
                 None => return Err(Error::InvalidJsonObject(json.to_string())),
             };
 
-            let mut node_uptaded = false;
+            let mut node_updated = false;
             for field_entry in &entity.fields {
                 let field = field_entry.1;
                 if !field.name.eq(ID_FIELD) {
@@ -190,12 +193,8 @@ impl MutationQuery {
                             MutationFieldValue::Array(mutations) => {
                                 let mut insert_queries = vec![];
                                 for mutation in mutations {
-                                    let insert_query = Self::get_insert_query(
-                                        mutation,
-                                        parameters,
-                                        conn,
-                                        node_insert.rooms.clone(),
-                                    )?;
+                                    let insert_query =
+                                        Self::get_insert_query(mutation, parameters, conn)?;
 
                                     let target_id = insert_query.node_insert.id.clone();
 
@@ -214,12 +213,11 @@ impl MutationQuery {
                                         };
                                         query.edge_insertions.push(edge);
                                     }
-                                    if field.short_name.eq(ROOMS_FIELD_SHORT) {
+                                    if field.name.eq(ROOMS_FIELD) {
                                         node_insert
                                             .rooms
                                             .insert(insert_query.node_insert.id.clone());
                                     }
-
                                     insert_queries.push(insert_query);
                                 }
                                 query
@@ -243,12 +241,8 @@ impl MutationQuery {
                                 for e in edges {
                                     query.edge_deletions.push(*e);
                                 }
-                                let insert_query = Self::get_insert_query(
-                                    mutation,
-                                    parameters,
-                                    conn,
-                                    node_insert.rooms.clone(),
-                                )?;
+                                let insert_query =
+                                    Self::get_insert_query(mutation, parameters, conn)?;
 
                                 let target_id = insert_query.node_insert.id.clone();
                                 let edge = Edge {
@@ -288,7 +282,7 @@ impl MutationQuery {
                             };
                             obj.insert(String::from(&field.short_name), value);
 
-                            node_uptaded = true;
+                            node_updated = true;
                         }
                         FieldType::Json => {
                             let value = match &field.field_value {
@@ -303,12 +297,12 @@ impl MutationQuery {
                                 _ => unreachable!(),
                             };
                             obj.insert(String::from(&field.short_name), value);
-                            node_uptaded = true;
+                            node_updated = true;
                         }
                     }
                 }
             }
-            if !node_uptaded {
+            if !node_updated {
                 node_insert.node = None;
             } else if let Some(node) = &mut node_insert.node {
                 let json_data = serde_json::to_string(&json)?;
@@ -327,10 +321,10 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
-        mut rooms: HashSet<Vec<u8>>,
     ) -> Result<NodeToInsert> {
         let entity_name = &entity.name;
         let entity_short = &entity.short_name;
+
         match entity.fields.get(ID_FIELD) {
             Some(id_field) => {
                 let id: Vec<u8> = Self::retrieve_id(id_field, parameters)?.unwrap();
@@ -361,7 +355,7 @@ impl MutationQuery {
                             let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;
                             let par = base64_encode(&node.id);
                             let mut rows = rooms_stmt.query([par])?;
-
+                            let mut rooms = HashSet::new();
                             while let Some(row) = rows.next()? {
                                 rooms.insert(row.get(0)?);
                             }
@@ -377,6 +371,7 @@ impl MutationQuery {
                         }
                     };
                     node.entity = entity_name.clone();
+
                     Ok(node)
                 }
             }
@@ -591,7 +586,10 @@ mod tests {
     use rusqlite::Connection;
 
     use crate::database::{
-        query_language::{data_model_parser::DataModel, parameter::ParametersAdd},
+        query::{PreparedQueries, Query},
+        query_language::{
+            data_model_parser::DataModel, parameter::ParametersAdd, query_parser::QueryParser,
+        },
         sqlite_database::prepare_connection,
     };
 
@@ -762,5 +760,116 @@ mod tests {
         let insert_ent = &mutation_query.insert_entities[0];
         assert_eq!(5, insert_ent.edge_insertions.len());
         assert_eq!(3, insert_ent.sub_nodes.len());
+    }
+
+    #[test]
+    fn update_sub_entity() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                pet: [Pet] ,
+            }
+
+            Pet {
+                name : String,
+                age: Integer
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "Me"
+                    pet: [  
+                        {name:"kiki" age:12} 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+
+        mutation_query.write(&conn).unwrap();
+
+        let insert_entity = &mutation_query.insert_entities[0];
+
+        let person_id = base64_encode(&insert_entity.node_insert.id);
+        //println!("{}", person_id);
+        let pet_id = base64_encode(
+            &insert_entity.sub_nodes.get("pet").unwrap()[0]
+                .node_insert
+                .id,
+        );
+        // println!("{}", pet_id);
+
+        let mut param = Parameters::new();
+        param.add("person_id", person_id).unwrap();
+        param.add("pet_id", pet_id).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id:$person_id
+                    pet: [  
+                        {
+                            id:$pet_id
+                            name:"koko"
+                        } 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        //  println!("{:#?}", mutation_query);
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (
+                        name = "Me",
+                    ) {
+                    name
+                    pet {name age}
+                }                
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        // println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
+        let result = sql.read(&conn).unwrap();
+        let expected =
+            "{\n\"Person\":[{\"name\":\"Me\",\"pet\":[{\"name\":\"koko\",\"age\":12}]}]\n}";
+        assert_eq!(expected, result);
+
+        //println!("{:#?}", result);
     }
 }

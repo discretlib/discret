@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::{cryptography::base64_decode, database::configuration::ID_FIELD};
+use crate::{
+    cryptography::base64_decode,
+    database::configuration::{ID_FIELD, ROOMS_FIELD},
+};
 
 use super::{
     data_model_parser::{DataModel, Entity, Field},
@@ -18,7 +21,7 @@ use pest_derive::Parser;
 #[grammar = "database/query_language/mutation.pest"]
 struct PestParser;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntityMutation {
     pub name: String,
     pub alias: Option<String>,
@@ -58,7 +61,7 @@ impl EntityMutation {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MutationFieldValue {
     Variable(String),
     Value(Value),
@@ -66,7 +69,7 @@ pub enum MutationFieldValue {
     Entity(EntityMutation),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MutationField {
     pub name: String,
     pub short_name: String,
@@ -183,12 +186,54 @@ impl MutationParser {
 
         let entity_model = data_model.get_entity(&entity.name)?;
         entity.short_name = entity_model.short_name.clone();
+        Self::propagate_room(&mut entity)?;
         Self::fill_not_nullable(&mut entity, entity_model)?;
         Ok(entity)
     }
 
     //
-    // fill mutation with default values for nullable fields
+    //
+    //propagate the room definition to sub entities to avoid having to write the room everywhere in the query
+    //
+    fn propagate_room(entity: &mut EntityMutation) -> Result<(), Error> {
+        let room_field = match entity.fields.get(ROOMS_FIELD) {
+            Some(e) => Some(e.clone()),
+            None => None,
+        };
+
+        for field in &mut entity.fields {
+            if !field.0.eq(ROOMS_FIELD) {
+                let field = field.1;
+                match &mut field.field_value {
+                    MutationFieldValue::Array(inners) => {
+                        for inner in inners {
+                            if inner.fields.get(ROOMS_FIELD).is_none() {
+                                if let Some(room_field) = room_field.clone() {
+                                    let room_field = room_field;
+                                    inner.add_field(room_field)?;
+                                }
+                            }
+                            Self::propagate_room(inner)?;
+                        }
+                    }
+                    MutationFieldValue::Entity(inner) => {
+                        if inner.fields.get(ROOMS_FIELD).is_none() {
+                            if let Some(room_field) = room_field.clone() {
+                                let room_field = room_field;
+                                inner.add_field(room_field)?;
+                            }
+                        }
+                        Self::propagate_room(inner)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    //
+    // fill mutation with default values for not nullable fields
     // only happens if the id is not provided, which means that the mutation will create the entity
     // it ensures backward compatibility in case of model change
     //
@@ -217,10 +262,20 @@ impl MutationParser {
                             .fields
                             .insert(mutation_field.name.clone(), mutation_field);
                     } else {
-                        return Err(Error::MissingUpdateField(
-                            String::from(&entity_model.name),
-                            String::from(&model_field.name),
-                        ));
+                        match model_field.field_type {
+                            FieldType::Array(_) | FieldType::Entity(_) => {}
+                            FieldType::Boolean
+                            | FieldType::Float
+                            | FieldType::Base64
+                            | FieldType::Integer
+                            | FieldType::String
+                            | FieldType::Json => {
+                                return Err(Error::MissingUpdateField(
+                                    String::from(&entity_model.name),
+                                    String::from(&model_field.name),
+                                ))
+                            }
+                        }
                     }
                 }
             }
@@ -551,7 +606,17 @@ impl MutationParser {
         if field.nullable {
             mutation_field.field_value = MutationFieldValue::Value(Value::Null);
         } else {
-            return Err(Error::NotNullable(field.name.clone()));
+            match field.field_type {
+                FieldType::Array(_) | FieldType::Entity(_) => {
+                    mutation_field.field_value = MutationFieldValue::Value(Value::Null);
+                }
+                FieldType::Boolean
+                | FieldType::Float
+                | FieldType::Base64
+                | FieldType::Integer
+                | FieldType::String
+                | FieldType::Json => return Err(Error::NotNullable(field.name.clone())),
+            }
         }
         mutation_field.field_type = field.field_type.clone();
 
@@ -1169,5 +1234,104 @@ mod tests {
             &data_model,
         )
         .expect("valid Base64");
+    }
+
+    #[test]
+    fn update() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                surname : String,
+                some_person : Person ,
+                parents : [Person] 
+            }
+        
+        ",
+            )
+            .unwrap();
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    surname : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("missing name");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id: $id
+                    surname : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("this is an update");
+    }
+
+    #[test]
+    fn fill_default() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                age : Integer default 4,
+                parents : [Person] 
+            }
+        
+        ",
+            )
+            .unwrap();
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    age : $age
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("missing name");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "hello"
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("ok");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "hello"
+                    parents : [{name:"world"}]
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("ok");
+
+        println!("{:#?}", _mutation);
     }
 }

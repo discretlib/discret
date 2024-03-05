@@ -296,11 +296,30 @@ fn get_fields(
 
         match &field.field_type {
             QueryFieldType::Binary => {
-                q.push_str(&format!(
-                    "'{}', base64_encode({})",
-                    &field.name(),
-                    &field.field.short_name,
-                ));
+                if field.field.is_system {
+                    q.push_str(&format!(
+                        "'{}', base64_encode({})",
+                        &field.name(),
+                        &field.field.short_name,
+                    ));
+                } else if let Some(val) = &field.field.default_value {
+                    let default = match val {
+                        Value::String(s) => prepared_query.add_param(String::from(s), true),
+                        _ => unreachable!(),
+                    };
+                    q.push_str(&format!(
+                        "'{}',Ifnull({},{})",
+                        &field.name(),
+                        js_field(&field.field.short_name),
+                        default
+                    ))
+                } else {
+                    q.push_str(&format!(
+                        "'{}',{}",
+                        &field.name(),
+                        js_field(&field.field.short_name)
+                    ))
+                }
             }
 
             QueryFieldType::Scalar => {

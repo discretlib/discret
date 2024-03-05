@@ -982,7 +982,7 @@ impl QueryParser {
             FieldValue::Value(val) => {
                 match val{
                     Value::Null => {
-                        if field.nullable {
+                        if field.nullable  | is_entity_field{
                             parsed_filters.value
                         } else {
                             return Err(Error::NotNullable(name));

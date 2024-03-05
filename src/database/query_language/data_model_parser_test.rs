@@ -63,7 +63,7 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(true, owner.nullable);
+        assert_eq!(false, owner.nullable);
 
         let index = &pet.indexes;
         assert_eq!(1, index.len());
@@ -97,21 +97,21 @@ mod tests {
             FieldType::Array(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(true, child.nullable);
+        assert_eq!(false, child.nullable);
 
         let mother = person.fields.get("mother").unwrap();
         match &mother.field_type {
             FieldType::Entity(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(true, mother.nullable);
+        assert_eq!(false, mother.nullable);
 
         let father = person.fields.get("father").unwrap();
         match &father.field_type {
             FieldType::Entity(e) => assert_eq!("Person", e),
             _ => unreachable!(),
         }
-        assert_eq!(true, father.nullable);
+        assert_eq!(false, father.nullable);
 
         //println!("{:#?}", datamodel)
     }

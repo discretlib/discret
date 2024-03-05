@@ -18,7 +18,7 @@ use super::{
     sqlite_database::{Database, WriteMessage},
     Error, Result,
 };
-use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey};
+use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
 
 const LRU_SIZE: usize = 128;
 
@@ -29,8 +29,9 @@ enum Message {
 }
 
 #[derive(Clone)]
-struct GraphDatabaseService {
+pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
+    verifying_key: Vec<u8>,
 }
 impl GraphDatabaseService {
     pub fn start(
@@ -43,7 +44,7 @@ impl GraphDatabaseService {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
         let mut service = GraphDatabase::open(name, model, key_material, data_folder, config)?;
-
+        let verifying_key = service.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
@@ -51,6 +52,7 @@ impl GraphDatabaseService {
                         let q = service.get_cached_query(&query);
                         match q {
                             Ok(cache) => {
+                                //     println!("{}", &cache.1.sql_queries[0].sql_query);
                                 service.query(cache.0, cache.1, parameters, reply).await;
                             }
                             Err(err) => {
@@ -84,11 +86,18 @@ impl GraphDatabaseService {
             }
         });
 
-        Ok(GraphDatabaseService { sender })
+        Ok(GraphDatabaseService {
+            sender,
+            verifying_key,
+        })
+    }
+
+    pub fn verifying_key(&self) -> &Vec<u8> {
+        &self.verifying_key
     }
 
     pub async fn delete(
-        &mut self,
+        &self,
         deletion: &str,
         parameters: Option<Parameters>,
     ) -> Result<DeletionQuery> {
@@ -101,7 +110,7 @@ impl GraphDatabaseService {
     }
 
     pub async fn mutate(
-        &mut self,
+        &self,
         mutation: &str,
         parameters: Option<Parameters>,
     ) -> Result<MutationQuery> {
@@ -113,7 +122,7 @@ impl GraphDatabaseService {
         recieve.await?
     }
 
-    pub async fn query(&mut self, query: &str, parameters: Option<Parameters>) -> Result<String> {
+    pub async fn query(&self, query: &str, parameters: Option<Parameters>) -> Result<String> {
         let (send, recieve) = oneshot::channel::<Result<String>>();
         let msg = Message::Query(query.to_string(), parameters.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
@@ -129,6 +138,7 @@ struct GraphDatabase {
     mutation_cache: LruCache<String, Arc<MutationParser>>,
     query_cache: LruCache<String, QueryCacheEntry>,
     deletion_cache: LruCache<String, Arc<DeletionParser>>,
+    verifying_key: Vec<u8>,
 }
 impl GraphDatabase {
     pub fn open(
@@ -145,7 +155,7 @@ impl GraphDatabase {
         let signature_key = derive_key("SIGNING_KEY", key_material);
 
         let signing_key = Ed25519SigningKey::create_from(&signature_key);
-
+        let verifying_key = signing_key.export_verifying_key();
         let database_path = build_path(data_folder, &base64_encode(&database_name))?;
 
         let graph_database = Database::new(
@@ -180,6 +190,7 @@ impl GraphDatabase {
             mutation_cache,
             query_cache,
             deletion_cache,
+            verifying_key,
         })
     }
 
@@ -325,7 +336,7 @@ fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<Pat
 #[cfg(test)]
 mod tests {
 
-    const DATA_PATH: &str = "test/data/application/";
+    const DATA_PATH: &str = "test/data/database/graph_database/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
@@ -353,7 +364,7 @@ mod tests {
 
         let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
-        let mut app = GraphDatabaseService::start(
+        let app = GraphDatabaseService::start(
             "selection app",
             data_model,
             &secret,
@@ -397,7 +408,7 @@ mod tests {
 
         let secret = random_secret();
         let path: PathBuf = DATA_PATH.into();
-        let mut app = GraphDatabaseService::start(
+        let app = GraphDatabaseService::start(
             "delete app",
             data_model,
             &secret,

@@ -449,8 +449,9 @@ impl BufferedDatabaseWriter {
                                 }
 
                                 WriteMessage::RoomMutationQuery(q, r) => {
-                                    let _ =
-                                        r.send(AuthorisationMessage::RoomMutationQuery(Ok(()), q));
+                                    let _ = r.blocking_send(
+                                        AuthorisationMessage::RoomMutationQuery(Ok(()), q),
+                                    );
                                 }
                                 WriteMessage::WriteStmt(q, r) => {
                                     let _ = r.send(Ok(q));
@@ -468,10 +469,11 @@ impl BufferedDatabaseWriter {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::RoomMutationQuery(q, r) => {
-                                    let _ = r.send(AuthorisationMessage::RoomMutationQuery(
-                                        Err(Error::DatabaseWrite(e.to_string())),
-                                        q,
-                                    ));
+                                    let _ =
+                                        r.blocking_send(AuthorisationMessage::RoomMutationQuery(
+                                            Err(Error::DatabaseWrite(e.to_string())),
+                                            q,
+                                        ));
                                 }
                                 WriteMessage::WriteStmt(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
@@ -541,7 +543,8 @@ impl BufferedDatabaseWriter {
         self.sender
             .send(msg)
             .await
-            .map_err(|e| Error::ChannelSend(e.to_string()))
+            .map_err(|e| Error::ChannelSend(e.to_string()))?;
+        Ok(())
     }
 
     ///

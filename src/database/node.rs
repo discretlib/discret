@@ -73,7 +73,7 @@ impl Node {
 
         //allows for more efficient "entity full scan" for example when loading all rooms for the authorisation feature
         conn.execute(
-            "CREATE UNIQUE INDEX _node__entity_id__mdate_idx ON _node (_entity, id)",
+            "CREATE INDEX _node__entity_id__mdate_idx ON _node (_entity, id)",
             [],
         )?;
 
@@ -262,6 +262,40 @@ impl Node {
                 conn.prepare_cached("UPDATE _node SET _entity=? WHERE id=? AND _entity=?")?;
             update_stmt.execute((deleted_entity, id, entity))?;
         }
+        Ok(())
+    }
+
+    ///
+    /// archive the node by appending '$' to its entity name
+    /// every mutation query that updates a generates an archived version
+    ///
+    pub fn archive(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT INTO _node ( 
+                    id,
+                    cdate,
+                    mdate,
+                    _entity,
+                    _json,
+                    _binary,
+                    _verifying_key,
+                    _signature
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?
+                )",
+        )?;
+        let archived_entity = format!("{}{}", ARCHIVED_CHAR, &self._entity);
+        let _ = insert_stmt.insert((
+            &self.id,
+            &self.cdate,
+            &self.mdate,
+            &archived_entity,
+            &self._json,
+            &self._binary,
+            &self._verifying_key,
+            &self._signature,
+        ))?;
+
         Ok(())
     }
 
