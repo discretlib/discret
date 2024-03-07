@@ -5,8 +5,9 @@ use std::{
 
 use tokio::sync::{mpsc, oneshot::Sender};
 
-use crate::cryptography::{
-    base64_decode, base64_encode, new_id, now, Ed25519SigningKey, SigningKey,
+use crate::{
+    cryptography::{base64_decode, base64_encode, now, Ed25519SigningKey, SigningKey},
+    database::configuration::{ID_FIELD, MODIFICATION_DATE_FIELD, ROOMS_FIELD},
 };
 
 use super::{
@@ -72,8 +73,16 @@ impl Room {
 }
 
 #[derive(Default, Clone, Debug)]
+pub struct User {
+    pub verifying_key: Vec<u8>,
+    pub date: i64,
+    pub enabled: bool,
+}
+
+#[derive(Default, Clone, Debug)]
 pub struct Authorisation {
-    users: HashMap<Vec<u8>, Option<i64>>,
+    id: Vec<u8>,
+    users: HashMap<Vec<u8>, Vec<User>>,
     credential: Vec<Credential>,
 }
 
@@ -96,18 +105,6 @@ impl Authorisation {
             .find(|&cred| cred.valid_from <= date)
     }
 
-    pub fn is_user_valid_at(&self, user: &Vec<u8>, date: i64) -> bool {
-        if let Some(val) = self.users.get(user) {
-            if let Some(validity) = val {
-                *validity >= date
-            } else {
-                true
-            }
-        } else {
-            false
-        }
-    }
-
     pub fn has_user(&self, user: &Vec<u8>) -> bool {
         if let Some(_) = self.users.get(user) {
             true
@@ -116,32 +113,31 @@ impl Authorisation {
         }
     }
 
-    pub fn set_user(&mut self, user: Vec<u8>, date: Option<i64>) -> Result<()> {
-        match date {
-            Some(date) => {
-                self.disable_user_starting_at(user, date)?;
-            }
-            None => {
-                self.enable_user(user);
+    pub fn set_user(&mut self, user: User) -> Result<()> {
+        let entry = self
+            .users
+            .entry(user.verifying_key.clone())
+            .or_insert(Vec::new());
+
+        if let Some(last_user) = entry.last() {
+            if last_user.date >= user.date {
+                return Err(Error::InvalidUserDate());
             }
         }
+        entry.push(user);
         Ok(())
     }
 
-    pub fn disable_user_starting_at(&mut self, user: Vec<u8>, date: i64) -> Result<()> {
-        if let Some(u) = self.users.get(&user) {
-            if let Some(old) = u {
-                if *old > date {
-                    return Err(Error::UserAlreadyDisabled());
-                }
+    pub fn is_user_valid_at(&self, user: &Vec<u8>, date: i64) -> bool {
+        if let Some(val) = self.users.get(user) {
+            let user_opt = val.iter().rev().find(|&user| user.date <= date);
+            match user_opt {
+                Some(user) => user.enabled,
+                None => false,
             }
+        } else {
+            false
         }
-        self.users.insert(user, Some(date));
-        Ok(())
-    }
-
-    pub fn enable_user(&mut self, user: Vec<u8>) {
-        self.users.insert(user, None);
     }
 
     pub fn can(&self, entity: &str, date: i64, right: &RightType) -> bool {
@@ -169,7 +165,6 @@ impl Authorisation {
 
 #[derive(Default, Clone, Debug)]
 pub struct Credential {
-    pub id: Vec<u8>,
     pub valid_from: i64,
     pub mutate_room: bool,
     pub mutate_room_users: bool,
@@ -214,6 +209,7 @@ pub enum AuthorisationMessage {
         Sender<super::Result<MutationQuery>>,
     ),
     RoomMutationQuery(Result<()>, RoomMutationQuery),
+    Load(String, Sender<super::Result<()>>),
 }
 pub struct RoomMutationQuery {
     mutation_query: MutationQuery,
@@ -230,12 +226,9 @@ pub struct AuthorisationService {
     sender: mpsc::Sender<AuthorisationMessage>,
 }
 impl AuthorisationService {
-    pub fn start(signing_key: Ed25519SigningKey) -> Self {
+    pub fn start(mut auth: RoomAuthorisations) -> Self {
         let (sender, mut receiver) = mpsc::channel::<AuthorisationMessage>(100);
-        let mut auth = RoomAuthorisations {
-            signing_key,
-            rooms: HashMap::new(),
-        };
+
         let self_sender = sender.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
@@ -278,7 +271,7 @@ impl AuthorisationService {
                             match auth.validate_mutation(&mut query.mutation_query) {
                                 Ok(rooms) => {
                                     for room in rooms {
-                                        auth.rooms.insert(room.id.clone(), room);
+                                        auth.add_room(room);
                                     }
                                     let _ = query.reply.send(Ok(query.mutation_query));
                                 }
@@ -291,6 +284,10 @@ impl AuthorisationService {
                             let _ = query.reply.send(Err(e));
                         }
                     },
+                    AuthorisationMessage::Load(rooms, reply) => {
+                        let res = auth.load(&rooms);
+                        let _ = reply.send(res);
+                    }
                 }
             }
         });
@@ -318,17 +315,21 @@ impl AuthorisationService {
     }
 }
 
-struct RoomAuthorisations {
-    signing_key: Ed25519SigningKey,
-    rooms: HashMap<Vec<u8>, Room>,
+pub struct RoomAuthorisations {
+    pub signing_key: Ed25519SigningKey,
+    pub rooms: HashMap<Vec<u8>, Room>,
 }
 impl RoomAuthorisations {
+    pub fn add_room(&mut self, room: Room) {
+        self.rooms.insert(room.id.clone(), room);
+    }
+
     pub fn validate_mutation(&mut self, mutation_query: &mut MutationQuery) -> Result<Vec<Room>> {
         mutation_query.sign_all(&self.signing_key)?;
 
         let verifying_key = self.signing_key.export_verifying_key();
         let mut rooms = Vec::new();
-        for insert_entity in &mutation_query.insert_entities {
+        for insert_entity in &mut mutation_query.insert_entities {
             let mut rooms_ent = self.validate_insert_entity(insert_entity, &verifying_key)?;
             rooms.append(&mut rooms_ent);
         }
@@ -337,7 +338,7 @@ impl RoomAuthorisations {
 
     pub fn validate_insert_entity(
         &self,
-        insert_entity: &InsertEntity,
+        insert_entity: &mut InsertEntity,
         verifying_key: &Vec<u8>,
     ) -> Result<Vec<Room>> {
         let to_insert = &insert_entity.node_insert;
@@ -418,7 +419,7 @@ impl RoomAuthorisations {
                         }
                     }
 
-                    for entry in &insert_entity.sub_nodes {
+                    for entry in &mut insert_entity.sub_nodes {
                         for insert_entity in entry.1 {
                             let mut room_ent =
                                 self.validate_insert_entity(insert_entity, verifying_key)?;
@@ -434,7 +435,7 @@ impl RoomAuthorisations {
 
     pub fn validate_room_mutation(
         &self,
-        insert_entity: &InsertEntity,
+        insert_entity: &mut InsertEntity,
         verifying_key: &Vec<u8>,
     ) -> Result<Option<Room>> {
         let node_insert = &insert_entity.node_insert;
@@ -488,7 +489,7 @@ impl RoomAuthorisations {
         let mut need_room_mutation = false;
         let mut need_user_mutation = false;
 
-        for authorisation in &insert_entity.sub_nodes {
+        for authorisation in &mut insert_entity.sub_nodes {
             for auth in authorisation.1 {
                 let rigigt = self.validate_authorisation_mutation(&mut room, auth)?;
                 if rigigt.0 {
@@ -499,9 +500,11 @@ impl RoomAuthorisations {
                 }
             }
         }
-        // println!("{:#?}", room);
+
+        //println!("{:#?}", room);
         //check if user can mutate the room after inserti
         if need_room_mutation {
+            //   println!("need_room_mutation {}", need_room_mutation);
             if !room.can(&verifying_key, "", now(), &RightType::MutateRoom) {
                 return Err(Error::AuthorisationRejected(
                     node_insert.entity.clone(),
@@ -511,6 +514,7 @@ impl RoomAuthorisations {
         }
 
         if need_user_mutation {
+            //     println!("need_user_mutation {}", need_user_mutation);
             if !room.can(&verifying_key, "", now(), &RightType::MutateRoomUsers) {
                 return Err(Error::AuthorisationRejected(
                     node_insert.entity.clone(),
@@ -524,7 +528,7 @@ impl RoomAuthorisations {
     fn validate_authorisation_mutation(
         &self,
         room: &mut Room,
-        insert_entity: &InsertEntity,
+        insert_entity: &mut InsertEntity,
     ) -> Result<(bool, bool)> {
         if !insert_entity.edge_deletions.is_empty() {
             return Err(Error::CannotRemove(
@@ -562,7 +566,7 @@ impl RoomAuthorisations {
             match entry.0.as_str() {
                 AUTH_CRED_FIELD => {
                     need_room_mutation = true;
-                    //cred exists check validity
+
                     for insert_entity in entry.1 {
                         if !insert_entity.edge_deletions.is_empty() {
                             return Err(Error::CannotRemove(
@@ -571,48 +575,17 @@ impl RoomAuthorisations {
                             ));
                         }
                         let node_insert = &insert_entity.node_insert;
-                        if authorisation.credential.is_empty() {
-                            if node_insert.node.is_none() || node_insert.old_node.is_some() {
-                                return Err(Error::NotBelongsTo());
-                            }
-                            if let Some(node) = &node_insert.node {
-                                if let Some(json) = &node._json {
-                                    let mut credential = Credential::default();
-                                    credential.valid_from = node.mdate;
-                                    credential.id = node.id.clone();
-                                    credential_from(json, &mut credential)?;
-                                    self.validate_entity_rigths(insert_entity, &mut credential)?;
-                                    authorisation.set_credential(credential)?;
-                                }
-                            }
-                        } else {
-                            let last_auth = authorisation.credential.last().unwrap();
-                            if !last_auth.id.eq(&node_insert.id) {
-                                return Err(Error::NotBelongsTo());
-                            }
-                            match &node_insert.node {
-                                Some(node) => {
-                                    if let Some(json) = &node._json {
-                                        let mut credential = last_auth.clone();
-                                        credential.valid_from = node.mdate;
-                                        credential.id = node.id.clone();
-                                        credential_from(json, &mut credential)?;
 
-                                        self.validate_entity_rigths(
-                                            insert_entity,
-                                            &mut credential,
-                                        )?;
-
-                                        authorisation.set_credential(credential)?;
-                                    }
-                                }
-                                None => {
-                                    let mut credential = last_auth.clone();
-                                    credential.valid_from = now();
-                                    credential.id = new_id();
-                                    self.validate_entity_rigths(insert_entity, &mut credential)?;
-                                    authorisation.set_credential(credential)?;
-                                }
+                        if node_insert.node.is_none() || node_insert.old_node.is_some() {
+                            return Err(Error::UpdateNotAllowed());
+                        }
+                        if let Some(node) = &node_insert.node {
+                            if let Some(json) = &node._json {
+                                let mut credential = Credential::default();
+                                credential.valid_from = node.mdate;
+                                credential_from(json, &mut credential)?;
+                                self.validate_entity_rigths(insert_entity, &mut credential)?;
+                                authorisation.set_credential(credential)?;
                             }
                         }
                     }
@@ -625,6 +598,11 @@ impl RoomAuthorisations {
                                 "_UserAuth".to_string(),
                                 ROOM_ENT.to_string(),
                             ));
+                        }
+                        if insert_entity.node_insert.node.is_none()
+                            || insert_entity.node_insert.old_node.is_some()
+                        {
+                            return Err(Error::UpdateNotAllowed());
                         }
                         self.validate_user(insert_entity, room_user, authorisation)?;
                     }
@@ -646,25 +624,24 @@ impl RoomAuthorisations {
         let node_insert = &insert_entity.node_insert;
         if let Some(node) = &node_insert.node {
             if let Some(json) = &node._json {
-                let user = user_from(json)?;
-                if let Some(u) = user.0 {
-                    if room_user.has_user(&u) {
-                        authorisation.set_user(u, user.1)?;
-                    } else if room_user.parent.is_empty() {
-                        authorisation.set_user(u, user.1)?;
+                let user = user_from(json, node.mdate)?;
+                if let Some(u) = user {
+                    if room_user.has_user(&u.verifying_key) || room_user.parent.is_empty() {
+                        authorisation.set_user(u)?;
                     } else {
                         let mut found = false;
                         for parent_id in &room_user.parent {
                             if let Some(parent) = self.rooms.get(parent_id) {
-                                if parent.has_user(&u) {
-                                    authorisation.set_user(u.clone(), user.1)?;
+                                if parent.has_user(&u.verifying_key) {
+                                    authorisation.set_user(u.clone())?;
                                     found = true;
+                                    break;
                                 }
                             }
                         }
                         if !found {
                             return Err(Error::UserNotInParentRoom(
-                                base64_encode(&u),
+                                base64_encode(&u.verifying_key),
                                 base64_encode(&room_user.id),
                             ));
                         }
@@ -690,7 +667,7 @@ impl RoomAuthorisations {
             for insert_entity in entry.1 {
                 let node_insert = &insert_entity.node_insert;
                 if node_insert.node.is_none() || node_insert.old_node.is_some() {
-                    return Err(Error::EntityRightCannotBeUpdated());
+                    return Err(Error::UpdateNotAllowed());
                 }
                 if let Some(node) = &node_insert.node {
                     if let Some(json) = &node._json {
@@ -706,26 +683,195 @@ impl RoomAuthorisations {
         }
         Ok(())
     }
+
+    pub const LOAD_QUERY: &'static str = "
+        query LOAD_ROOMS{
+            _Room{
+                id
+                _rooms{ id }
+                authorisations{
+                    id
+                    credentials(order_by(mdate desc)){
+                        mdate
+                        mutate_room
+                        mutate_room_users
+                        rights{
+                            entity
+                            insert
+                            mutate_all
+                            delete_all
+                        }
+                    }
+                    users(order_by(mdate desc)){
+                        mdate
+                        verifying_key
+                        enabled
+                    }
+                }
+            }
+        }
+    ";
+
+    pub fn load(&mut self, result: &str) -> Result<()> {
+        let object: serde_json::Value = serde_json::from_str(result)?;
+        let rooms = object
+            .as_object()
+            .unwrap()
+            .get(ROOM_ENT)
+            .unwrap()
+            .as_array()
+            .unwrap();
+        for room_value in rooms {
+            let room_map = room_value.as_object().unwrap();
+
+            let id = base64_decode(room_map.get(ID_FIELD).unwrap().as_str().unwrap().as_bytes())?;
+
+            let mut parent = HashSet::new();
+            let parent_array = room_map.get(ROOMS_FIELD).unwrap().as_array().unwrap();
+            for parent_value in parent_array {
+                let parent_map = parent_value.as_object().unwrap();
+                let parent_id = base64_decode(
+                    parent_map
+                        .get(ID_FIELD)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .as_bytes(),
+                )?;
+                parent.insert(parent_id);
+            }
+
+            let mut authorisations = HashMap::new();
+            let auth_array = room_map.get("authorisations").unwrap().as_array().unwrap();
+            for auth_value in auth_array {
+                let auth = load_authorisation(auth_value)?;
+                authorisations.insert(auth.id.clone(), auth);
+            }
+
+            let room = Room {
+                id,
+                parent,
+                authorisations,
+            };
+            self.add_room(room);
+        }
+
+        // println!("{}", serde_json::to_string_pretty(&object)?);
+        Ok(())
+    }
 }
 
-fn user_from(json: &String) -> Result<(Option<Vec<u8>>, Option<i64>)> {
+fn load_authorisation(value: &serde_json::Value) -> Result<Authorisation> {
+    let auth_map = value.as_object().unwrap();
+    let id = base64_decode(auth_map.get(ID_FIELD).unwrap().as_str().unwrap().as_bytes())?;
+
+    let mut authorisation = Authorisation {
+        id,
+        users: HashMap::new(),
+        credential: Vec::new(),
+    };
+
+    let user_array = auth_map.get(AUTH_USER_FIELD).unwrap().as_array().unwrap();
+    for user_value in user_array {
+        let user_map = user_value.as_object().unwrap();
+        let date = user_map
+            .get(MODIFICATION_DATE_FIELD)
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        let enabled = user_map.get("enabled").unwrap().as_bool().unwrap();
+        let verifying_key = base64_decode(
+            user_map
+                .get("verifying_key")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .as_bytes(),
+        )?;
+
+        let user = User {
+            verifying_key,
+            date,
+            enabled,
+        };
+
+        authorisation.set_user(user)?;
+    }
+
+    let cred_array = auth_map.get(AUTH_CRED_FIELD).unwrap().as_array().unwrap();
+    for cred_value in cred_array {
+        let cred_map = cred_value.as_object().unwrap();
+        let valid_from = cred_map
+            .get(MODIFICATION_DATE_FIELD)
+            .unwrap()
+            .as_i64()
+            .unwrap();
+
+        let mutate_room = cred_map.get("mutate_room").unwrap().as_bool().unwrap();
+        let mutate_room_users = cred_map
+            .get("mutate_room_users")
+            .unwrap()
+            .as_bool()
+            .unwrap();
+
+        let mut rights = HashMap::new();
+        let rights_array = cred_map.get("rights").unwrap().as_array().unwrap();
+        for right_value in rights_array {
+            let right_map = right_value.as_object().unwrap();
+            let entity = right_map
+                .get("entity")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            let insert = right_map.get("insert").unwrap().as_bool().unwrap();
+            let mutate_all = right_map.get("mutate_all").unwrap().as_bool().unwrap();
+            let delete_all = right_map.get("delete_all").unwrap().as_bool().unwrap();
+            let right = EntityRight {
+                entity,
+                insert,
+                delete_all,
+                mutate_all,
+            };
+            rights.insert(right.entity.clone(), right);
+        }
+
+        let credential = Credential {
+            valid_from,
+            mutate_room,
+            mutate_room_users,
+            rights,
+        };
+        authorisation.set_credential(credential)?;
+    }
+
+    Ok(authorisation)
+}
+
+fn user_from(json: &String, date: i64) -> Result<Option<User>> {
     let value: serde_json::Value = serde_json::from_str(json)?;
     if let Some(map) = value.as_object() {
         if let Some(verifying_key) = map.get(configuration::USER_VERIFYING_KEY_SHORT) {
             if let Some(base64) = verifying_key.as_str() {
                 let verifying_key = base64_decode(base64.as_bytes())?;
-                let valid = match map.get(configuration::USER_VALID_BEFORE_SHORT) {
-                    Some(value) => match value.as_i64() {
-                        Some(v) => Some(v),
-                        None => None,
+                let enabled = match map.get(configuration::USER_ENABLED_SHORT) {
+                    Some(value) => match value.as_bool() {
+                        Some(v) => v,
+                        None => true,
                     },
-                    None => None,
+                    None => true,
                 };
-                return Ok((Some(verifying_key), valid));
+                let user = User {
+                    verifying_key,
+                    date,
+                    enabled,
+                };
+
+                return Ok(Some(user));
             }
         }
     }
-    Ok((None, None))
+    Ok(None)
 }
 
 fn credential_from(json: &String, credential: &mut Credential) -> Result<()> {

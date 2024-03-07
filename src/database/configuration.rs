@@ -104,7 +104,7 @@ pub const CRED_MUTATE_ROOM_SHORT: &str = "32";
 pub const CRED_MUTATE_ROOM_USERS_SHORT: &str = "33";
 
 pub const USER_VERIFYING_KEY_SHORT: &str = "32";
-pub const USER_VALID_BEFORE_SHORT: &str = "33";
+pub const USER_ENABLED_SHORT: &str = "33";
 
 pub const RIGHT_ENTITY_SHORT: &str = "32";
 pub const RIGHT_INSERT_SHORT: &str = "33";
@@ -113,10 +113,9 @@ pub const RIGHT_DELETE_SHORT: &str = "35";
 
 pub const SYSTEM_DATA_MODEL: &str = "    
     _Room {
-        name: String,
         type: String,
-        ext: Json nullable,
         authorisations:[_Authorisation],
+        index(type)
     }
     
     _Authorisation {
@@ -127,12 +126,12 @@ pub const SYSTEM_DATA_MODEL: &str = "
     
     _UserAuth{
         verifying_key: Base64,
-        valid_before:Integer nullable,
+        enabled: Boolean default true,
     }
 
     _Credential {
-        mutate_room: Boolean,
-        mutate_room_users: Boolean,
+        mutate_room: Boolean default false,
+        mutate_room_users: Boolean default false,
         rights:[_EntityRight],
     }
     

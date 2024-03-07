@@ -84,8 +84,8 @@ pub enum Error {
     #[error("Rights allreday exits for entity '{0}'")]
     RightsExists(String),
 
-    #[error("User is already disabled at a later date")]
-    UserAlreadyDisabled(),
+    #[error("A more recent User definition exists")]
+    InvalidUserDate(),
 
     #[error("credential validity date is set before an existing credential validity")]
     InvalidCredentialDate(),
@@ -105,8 +105,8 @@ pub enum Error {
     #[error("User '{0}' does not belong to the parent rooms of room '{1}' ")]
     UserNotInParentRoom(String, String),
 
-    #[error("Entity rights cannot be updated to preserve history, only inserts can be performed ")]
-    EntityRightCannotBeUpdated(),
+    #[error("Updates not allowed, Only inserts can be performed for this entity")]
+    UpdateNotAllowed(),
 
     #[error("Entity right is missing an entity name")]
     EntityRightMissingName(),

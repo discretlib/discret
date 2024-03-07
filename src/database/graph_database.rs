@@ -1,9 +1,10 @@
 use lru::LruCache;
+use std::collections::HashMap;
 use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{mpsc, oneshot};
 
-use super::authorisation::{AuthorisationMessage, AuthorisationService};
+use super::authorisation::{AuthorisationMessage, AuthorisationService, RoomAuthorisations};
 use super::configuration;
 use super::deletion::DeletionQuery;
 use super::query_language::deletion_parser::DeletionParser;
@@ -34,7 +35,7 @@ pub struct GraphDatabaseService {
     verifying_key: Vec<u8>,
 }
 impl GraphDatabaseService {
-    pub fn start(
+    pub async fn start(
         name: &str,
         model: &str,
         key_material: &[u8; 32],
@@ -44,6 +45,8 @@ impl GraphDatabaseService {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
         let mut service = GraphDatabase::open(name, model, key_material, data_folder, config)?;
+        service.initialise_authorisations().await?;
+
         let verifying_key = service.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
@@ -180,9 +183,14 @@ impl GraphDatabase {
 
         data_model.update(model)?;
 
-        let auth_service = AuthorisationService::start(signing_key);
+        let auth = RoomAuthorisations {
+            signing_key,
+            rooms: HashMap::new(),
+        };
 
-        Ok(Self {
+        let auth_service = AuthorisationService::start(auth);
+
+        let database = Self {
             data_model,
             auth_service,
             graph_database,
@@ -191,11 +199,27 @@ impl GraphDatabase {
             query_cache,
             deletion_cache,
             verifying_key,
-        })
+        };
+        Ok(database)
     }
 
     pub async fn update_data_model(&mut self, model: &str) -> Result<()> {
         self.data_model.update(model)?;
+        Ok(())
+    }
+
+    pub async fn initialise_authorisations(&mut self) -> Result<()> {
+        let (send, recieve) = oneshot::channel::<Result<String>>();
+        let cache = self.get_cached_query(&RoomAuthorisations::LOAD_QUERY)?;
+        let parameters = Parameters::default();
+        self.query(cache.0, cache.1, parameters, send).await;
+        let result = recieve.await??;
+
+        let (send, recieve) = oneshot::channel::<Result<()>>();
+        let msg = AuthorisationMessage::Load(result, send);
+        self.auth_service.send(msg).await?;
+
+        recieve.await??;
         Ok(())
     }
 
@@ -371,6 +395,7 @@ mod tests {
             path,
             Configuration::default(),
         )
+        .await
         .unwrap();
 
         app.mutate(
@@ -415,6 +440,7 @@ mod tests {
             path,
             Configuration::default(),
         )
+        .await
         .unwrap();
 
         let res = app
