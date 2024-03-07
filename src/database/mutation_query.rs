@@ -349,7 +349,7 @@ impl MutationQuery {
                     let mut node: NodeToInsert = match results {
                         Some(mut node) => {
                             let rooms_query = format!(
-                                "SELECT dest FROM _edge WHERE src=? AND label={}",
+                                "SELECT dest FROM _edge WHERE src=? AND label='{}'",
                                 ROOMS_FIELD_SHORT
                             );
                             let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;

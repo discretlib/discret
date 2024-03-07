@@ -108,6 +108,9 @@ pub enum Error {
     #[error("Updates not allowed, Only inserts can be performed for this entity")]
     UpdateNotAllowed(),
 
+    #[error("Deletes not allowed, Only inserts can be performed for this entity")]
+    DeleteNotAllowed(),
+
     #[error("Entity right is missing an entity name")]
     EntityRightMissingName(),
 }

@@ -1,23 +1,45 @@
-use std::sync::Arc;
-
 use crate::cryptography::base64_decode;
+use std::{collections::HashSet, sync::Arc};
 
 use super::{
+    configuration::ROOMS_FIELD_SHORT,
     edge::Edge,
     node::Node,
     query_language::{deletion_parser::DeletionParser, parameter::Parameters},
+    sqlite_database::RowMappingFn,
     Result,
 };
 
 pub struct NodeDelete {
-    id: Vec<u8>,
-    name: String,
+    pub id: Vec<u8>,
+    pub name: String,
+    pub short_name: String,
+    pub rooms: HashSet<Vec<u8>>,
+    pub verifying_key: Vec<u8>,
+    pub mdate: i64,
 }
 
 pub struct EdgeDelete {
-    src: Vec<u8>,
-    label: String,
-    dest: Vec<u8>,
+    pub src: Vec<u8>,
+    pub label: String,
+    pub dest: Vec<u8>,
+    pub rooms: HashSet<Vec<u8>>,
+    pub source_entity: String,
+    pub verifying_key: Vec<u8>,
+    pub mdate: i64,
+}
+
+struct NodeInfo {
+    mdate: i64,
+    verifying_key: Vec<u8>,
+}
+impl NodeInfo {
+    pub const MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(NodeInfo {
+            mdate: row.get(0)?,
+            verifying_key: row.get(1)?,
+        }))
+    };
 }
 
 pub struct DeletionQuery {
@@ -28,7 +50,7 @@ impl DeletionQuery {
     pub fn build(
         parameters: &Parameters,
         deletion: Arc<DeletionParser>,
-        _: &rusqlite::Connection,
+        conn: &rusqlite::Connection,
     ) -> Result<Self> {
         deletion.variables.validate_params(parameters)?;
         let mut deletion_query = Self {
@@ -43,12 +65,34 @@ impl DeletionQuery {
                 .as_string()
                 .unwrap();
 
+            let rooms_query = format!(
+                "SELECT dest FROM _edge WHERE src=? AND label='{}'",
+                ROOMS_FIELD_SHORT
+            );
+            let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;
+
+            let mut rows = rooms_stmt.query([src])?;
+            let mut rooms = HashSet::new();
+            while let Some(row) = rows.next()? {
+                rooms.insert(row.get(0)?);
+            }
+
             let src = base64_decode(src.as_bytes())?;
+
+            let verifying_key_query =
+                "SELECT mdate, _verifying_key FROM _node WHERE id = ? AND _entity = ?";
+            let mut verifying_key_stmt = conn.prepare_cached(verifying_key_query)?;
+            let node_info =
+                verifying_key_stmt.query_row((&src, &del.short_name), NodeInfo::MAPPING)?;
 
             if del.references.is_empty() {
                 deletion_query.nodes.push(NodeDelete {
                     id: src,
-                    name: del.short_name.clone(),
+                    name: del.name.clone(),
+                    short_name: del.short_name.clone(),
+                    rooms: rooms.clone(),
+                    verifying_key: node_info.verifying_key.clone(),
+                    mdate: node_info.mdate,
                 })
             } else {
                 for edge in &del.references {
@@ -64,6 +108,10 @@ impl DeletionQuery {
                         src: src.clone(),
                         label: edge.label.clone(),
                         dest,
+                        rooms: rooms.clone(),
+                        source_entity: edge.entity_name.clone(),
+                        verifying_key: node_info.verifying_key.clone(),
+                        mdate: node_info.mdate,
                     });
                 }
             }
@@ -76,7 +124,7 @@ impl DeletionQuery {
             Edge::delete_edge(&edg.src, &edg.label, &edg.dest, conn)?;
         }
         for nod in &self.nodes {
-            Node::delete(&nod.id, &nod.name, conn)?;
+            Node::delete(&nod.id, &nod.short_name, conn)?;
         }
         Ok(())
     }

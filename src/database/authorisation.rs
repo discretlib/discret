@@ -12,6 +12,7 @@ use crate::{
 
 use super::{
     configuration::{self, AUTH_CRED_FIELD, AUTH_USER_FIELD, ROOM_ENT},
+    deletion::DeletionQuery,
     mutation_query::{InsertEntity, MutationQuery},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
@@ -209,6 +210,11 @@ pub enum AuthorisationMessage {
         Sender<super::Result<MutationQuery>>,
     ),
     RoomMutationQuery(Result<()>, RoomMutationQuery),
+    DeletionQuery(
+        DeletionQuery,
+        BufferedDatabaseWriter,
+        Sender<super::Result<DeletionQuery>>,
+    ),
     Load(String, Sender<super::Result<()>>),
 }
 pub struct RoomMutationQuery {
@@ -284,9 +290,22 @@ impl AuthorisationService {
                             let _ = query.reply.send(Err(e));
                         }
                     },
+
                     AuthorisationMessage::Load(rooms, reply) => {
                         let res = auth.load(&rooms);
                         let _ = reply.send(res);
+                    }
+
+                    AuthorisationMessage::DeletionQuery(deletion_query, database_writer, reply) => {
+                        match auth.validate_deletion(&deletion_query) {
+                            Ok(_) => {
+                                let query = WriteMessage::DeletionQuery(deletion_query, reply);
+                                let _ = database_writer.send(query).await;
+                            }
+                            Err(e) => {
+                                let _ = reply.send(Err(e));
+                            }
+                        }
                     }
                 }
             }
@@ -322,6 +341,90 @@ pub struct RoomAuthorisations {
 impl RoomAuthorisations {
     pub fn add_room(&mut self, room: Room) {
         self.rooms.insert(room.id.clone(), room);
+    }
+
+    pub fn validate_deletion(&self, deletion_query: &DeletionQuery) -> Result<()> {
+        let _verifying_key = self.signing_key.export_verifying_key();
+        for node in &deletion_query.nodes {
+            match node.name.as_str() {
+                configuration::ROOM_ENT
+                | configuration::AUTHORISATION_ENT
+                | configuration::CREDENTIAL_ENT
+                | configuration::ENTITY_RIGHT_ENT
+                | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
+                _ => {
+                    for room_id in &node.rooms {
+                        match self.rooms.get(room_id) {
+                            Some(room) => {
+                                let can = if node.verifying_key.eq(&_verifying_key) {
+                                    room.can(
+                                        &_verifying_key,
+                                        &node.name,
+                                        node.mdate,
+                                        &RightType::Insert,
+                                    )
+                                } else {
+                                    room.can(
+                                        &_verifying_key,
+                                        &node.name,
+                                        node.mdate,
+                                        &RightType::DeleteAll,
+                                    )
+                                };
+                                if !can {
+                                    return Err(Error::AuthorisationRejected(
+                                        node.name.clone(),
+                                        base64_encode(&room_id),
+                                    ));
+                                }
+                            }
+                            None => return Err(Error::UnknownRoom(base64_encode(room_id))),
+                        }
+                    }
+                }
+            }
+        }
+        for edge in &deletion_query.edges {
+            match edge.source_entity.as_str() {
+                configuration::ROOM_ENT
+                | configuration::AUTHORISATION_ENT
+                | configuration::CREDENTIAL_ENT
+                | configuration::ENTITY_RIGHT_ENT
+                | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
+                _ => {
+                    for room_id in &edge.rooms {
+                        match self.rooms.get(room_id) {
+                            Some(room) => {
+                                let can = if edge.verifying_key.eq(&_verifying_key) {
+                                    room.can(
+                                        &_verifying_key,
+                                        &edge.source_entity,
+                                        edge.mdate,
+                                        &RightType::Insert,
+                                    )
+                                } else {
+                                    room.can(
+                                        &_verifying_key,
+                                        &edge.source_entity,
+                                        edge.mdate,
+                                        &RightType::DeleteAll,
+                                    )
+                                };
+                                if !can {
+                                    return Err(Error::AuthorisationRejected(
+                                        edge.source_entity.clone(),
+                                        base64_encode(&room_id),
+                                    ));
+                                }
+                            }
+                            None => return Err(Error::UnknownRoom(base64_encode(room_id))),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn validate_mutation(&mut self, mutation_query: &mut MutationQuery) -> Result<Vec<Room>> {

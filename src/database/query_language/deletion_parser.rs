@@ -42,6 +42,7 @@ impl EntityDeletion {
 
 #[derive(Debug)]
 pub struct ReferenceDeletion {
+    pub entity_name: String,
     pub label: String,
     pub dest_param: String,
 }
@@ -158,6 +159,7 @@ impl DeletionParser {
                         entity.references.push(ReferenceDeletion {
                             label: model_field.short_name.clone(),
                             dest_param: id_param,
+                            entity_name: entity_name.to_string(),
                         });
                     }
                 }

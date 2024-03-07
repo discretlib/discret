@@ -16,7 +16,7 @@ use super::{
         data_model_parser::DataModel, mutation_parser::MutationParser, parameter::Parameters,
         query_parser::QueryParser,
     },
-    sqlite_database::{Database, WriteMessage},
+    sqlite_database::Database,
     Error, Result,
 };
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
@@ -324,7 +324,9 @@ impl GraphDatabase {
         parameters: Parameters,
         reply: Sender<Result<DeletionQuery>>,
     ) {
+        let auth_service = self.auth_service.clone();
         let writer = self.graph_database.writer.clone();
+
         let _ = self
             .graph_database
             .reader
@@ -332,8 +334,8 @@ impl GraphDatabase {
                 let deletion_query = DeletionQuery::build(&parameters, deletion, conn);
                 match deletion_query {
                     Ok(del) => {
-                        let query = WriteMessage::DeletionQuery(del, reply);
-                        let _ = writer.send_blocking(query);
+                        let query = AuthorisationMessage::DeletionQuery(del, writer, reply);
+                        let _ = auth_service.send_blocking(query);
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
