@@ -110,7 +110,6 @@ pub fn get_entity_query(
     q.push_str(" as value\n");
     tab(&mut q, t);
     q.push_str(&format!("FROM _node {}", entity.aliased_name()));
-
     let search = get_search_join(&entity.params, &entity.aliased_name(), t);
     q.push_str(&search);
 
@@ -124,6 +123,9 @@ pub fn get_entity_query(
         &entity.short_name
     ));
 
+    let exists = get_exists_query(entity, prepared_query, &entity.aliased_name(), t);
+    q.push_str(&exists);
+
     let end = get_end_select_query(entity, prepared_query, t);
     q.push_str(&end);
 
@@ -132,6 +134,67 @@ pub fn get_entity_query(
     let limit = get_limit(&entity.params, prepared_query);
     q.push_str(&limit);
 
+    q
+}
+
+pub fn get_exists_query(
+    entity: &EntityQuery,
+    prepared_query: &mut SingleQuery,
+    parent_table: &str,
+    t: usize,
+) -> String {
+    let mut q = String::new();
+    for field in &entity.fields {
+        let field_name = &field.name();
+        let field_short = &field.field.short_name;
+        match &field.field_type {
+            QueryFieldType::EntityArrayQuery(sub_entity, nullable) => {
+                if !nullable {
+                    if !entity.params.nullable.contains(field_name) {
+                        tab(&mut q, t);
+                        q.push_str("AND EXISTS (\n");
+                        let sub = get_sub_entity_query(
+                            sub_entity,
+                            prepared_query,
+                            parent_table,
+                            field_name,
+                            field_short,
+                            t + 1,
+                            false,
+                        );
+                        q.push_str(&sub);
+                        q.push('\n');
+                        tab(&mut q, t);
+                        q.push(')');
+                        q.push('\n');
+                    }
+                }
+            }
+            QueryFieldType::EntityQuery(sub_entity, nullable) => {
+                if !nullable {
+                    if !entity.params.nullable.contains(field_name) {
+                        tab(&mut q, t);
+                        q.push_str("AND EXISTS (\n");
+                        let sub = get_sub_entity_query(
+                            sub_entity,
+                            prepared_query,
+                            parent_table,
+                            field_name,
+                            field_short,
+                            t + 1,
+                            true,
+                        );
+                        q.push_str(&sub);
+                        q.push('\n');
+                        tab(&mut q, t);
+                        q.push(')');
+                        q.push('\n');
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     q
 }
 
@@ -144,7 +207,6 @@ pub fn get_sub_group_array(
     t: usize,
 ) -> String {
     let mut q = String::new();
-
     tab(&mut q, t);
     q.push_str("SELECT \n");
     tab(&mut q, t);
@@ -204,6 +266,9 @@ pub fn get_sub_entity_query(
     ));
     tab(&mut q, t);
     q.push_str(&format!("_edge.src={}.id ", &parent_table));
+
+    let exists = get_exists_query(entity, prepared_query, field_name, t);
+    q.push_str(&exists);
 
     let end = get_end_select_query(entity, prepared_query, t);
     q.push_str(&end);

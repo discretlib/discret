@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{cryptography::base64_decode, database::query_language::VariableType};
 
 use super::{
@@ -67,6 +69,7 @@ pub struct EntityParams {
    pub order_by: Vec<OrderBy>,
    pub first: FieldValue,
    pub skip: Option<FieldValue>,
+   pub nullable : HashSet<String>
 }
 impl Default for EntityParams{
     fn default() -> Self {
@@ -82,9 +85,10 @@ impl EntityParams {
             fulltext_search: None,
             before: Vec::new(),
             after: Vec::new(),
-            first: FieldValue::Value(Value::Integer(DEFAULT_LIMIT)),
+            first: FieldValue::Value(Value::Integer(0)),
             order_by: Vec::new(),
             skip: None,
+            nullable: HashSet::new()
         }
     }
 }
@@ -576,7 +580,21 @@ impl QueryParser {
                 parameters.order_by.push(ord);
             }
         }
-      
+        
+        for nullable_field in &parameters.nullable{
+            match entity.fields.iter().find(|f| f.name().eq(nullable_field)){
+                Some(field) => {
+                    match field.field.field_type{
+                        FieldType::Array(_) |
+                        FieldType::Entity(_) => {},
+                      _=> return Err(Error::InvalidNullableField(nullable_field.to_string(), field.field.field_type.to_string())),
+                    }
+
+                },
+                None => return Err(Error::UnknownNullableField(nullable_field.to_string())),
+            }
+        }
+
         entity.params = parameters;
         
         entity.finalize(variables)?;
@@ -888,6 +906,12 @@ impl QueryParser {
                             let filter = JsonFilter{ selector, operation, value, field:field.clone() };
                             parameters.json_filters.push(filter);
 
+                        }
+                        Rule::nullable => {
+                            let values = pair.into_inner();
+                            for value in values {
+                                parameters.nullable.insert(value.as_str().to_string());
+                            }
                         }
                         _ => unreachable!(),
                         

@@ -338,7 +338,7 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+      //  println!("{}", sql.sql_queries.sql_queries[0].sql_query);
 
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"}],\"pet\":{\"name\":\"Truffle\"},\"remps_pets\":[{\"name\":\"World\",\"pet\":{\"name\":\"kiki\"}}]}]\n}";
@@ -539,7 +539,7 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        println!("{}", &query.sql_queries[0].sql_query);
+       // println!("{}", &query.sql_queries[0].sql_query);
 
         let sql = Query {
             parameters: Parameters::new(),
@@ -1182,4 +1182,232 @@ mod tests {
         // println!("{:#?}", result);
 
     }
+
+
+    #[test]
+    fn entity_not_null_selection() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                parents : [Person] ,
+                pet: Pet ,
+            }
+
+            Pet {
+                name : String
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P1: Person {
+                    name : "John"
+                    parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
+                    pet: { name:"Truffle"}
+                }
+                P2: Person {
+                    name : "Ada"
+                    parents:  [ {name : "Ada Mother" pet:{ name:"Lulu" }} ,{ name:"Ada Father" pet:{ name:"Waf" }}]
+                } 
+
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let  param = Parameters::new();
+    
+
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (order_by(name asc)) {
+                    name
+                    parents (order_by(name asc)){
+                        name
+                    }
+                    pet {name}
+                    parents_pets : parents (order_by(name asc)) {
+                        name
+                        pet {name}
+                    }
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+        let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"pet\":{\"name\":\"Truffle\"},\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
+        assert_eq!(expected, result);
+        
+        
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (order_by(name asc)) {
+                    name
+                    parents (order_by(name asc)){
+                        name
+                    }
+                    
+                    parents_pets : parents (order_by(name asc)) {
+                        name
+                        pet {name}
+                    }
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+         //   println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        let result = sql.read(&conn).unwrap();
+        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}],\"parents_pets\":[{\"name\":\"Ada Father\",\"pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"pet\":{\"name\":\"Lulu\"}}]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
+        assert_eq!(expected, result);
+
+        // println!("{:#?}", result);
+        // let res:serde_json::Value = serde_json::from_str(&result).unwrap();
+        // println!("{}", serde_json::to_string_pretty(&res).unwrap());
+        
+    }
+
+    #[test]
+    fn entity_nullable_selection() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                parents : [Person] nullable,
+                pet: Pet ,
+            }
+
+            Pet {
+                name : String
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P1: Person {
+                    name : "John"
+                    parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
+                    pet: { name:"Truffle"}
+                }
+                P2: Person {
+                    name : "Ada"
+                    parents:  [ {name : "Ada Mother" pet:{ name:"Lulu" }} ,{ name:"Ada Father" pet:{ name:"Waf" }}]
+                } 
+
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let  param = Parameters::new();
+    
+
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (order_by(name asc)) {
+                    name
+                    parents (order_by(name asc)) {name}
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}]},{\"name\":\"Ada Father\",\"parents\":[]},{\"name\":\"Ada Mother\",\"parents\":[]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}]},{\"name\":\"John Father\",\"parents\":[]},{\"name\":\"John Mother\",\"parents\":[]}]\n}";
+        assert_eq!(expected, result);
+        
+        
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person (order_by(name asc), nullable(has_pet) ) {
+                    name
+                    has_pet: pet {name}
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"has_pet\":null},{\"name\":\"Ada Father\",\"has_pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"has_pet\":{\"name\":\"Lulu\"}},{\"name\":\"John\",\"has_pet\":{\"name\":\"Truffle\"}},{\"name\":\"John Father\",\"has_pet\":{\"name\":\"Kiki\"}},{\"name\":\"John Mother\",\"has_pet\":null}]\n}";
+        assert_eq!(expected, result);
+
+
+        // println!("{:#?}", result);
+        // let res:serde_json::Value = serde_json::from_str(&result).unwrap();
+        // println!("{}", serde_json::to_string_pretty(&res).unwrap());
+        
+    }
+
 }

@@ -103,7 +103,7 @@ mod tests {
                 "Person",
                 EntityRight {
                     entity: "Person".to_string(),
-                    insert: true,
+                    mutate_self: true,
                     delete_all: true,
                     mutate_all: true,
                 },
@@ -114,7 +114,7 @@ mod tests {
                 "Pet",
                 EntityRight {
                     entity: "Pet".to_string(),
-                    insert: false,
+                    mutate_self: false,
                     delete_all: false,
                     mutate_all: false,
                 },
@@ -126,7 +126,7 @@ mod tests {
                 "Pet",
                 EntityRight {
                     entity: "Pet".to_string(),
-                    insert: false,
+                    mutate_self: false,
                     delete_all: false,
                     mutate_all: false,
                 },
@@ -138,20 +138,20 @@ mod tests {
         room.add_auth(authorisation_id, auth).unwrap();
 
         assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::DeleteAll));
-        assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::Insert));
+        assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::MutateSelf));
         assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::MutateAll));
 
         assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::DeleteAll));
-        assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::Insert));
+        assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::MutateSelf));
         assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::MutateAll));
 
         assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::DeleteAll));
-        assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::Insert));
+        assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateSelf));
         assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateAll));
 
         let user2 = random_secret().to_vec();
         assert!(!room.can(&user2, "Person", 1000, &RightType::DeleteAll));
-        assert!(!room.can(&user2, "Person", 1000, &RightType::Insert));
+        assert!(!room.can(&user2, "Person", 1000, &RightType::MutateSelf));
         assert!(!room.can(&user2, "Person", 1000, &RightType::MutateAll));
     }
 
@@ -205,7 +205,7 @@ mod tests {
                                 mutate_room_users:true
                                 rights:[{
                                     entity:"Person"
-                                    insert:true
+                                    mutate_self:true
                                     delete_all:true
                                     mutate_all:true
                                 }]
@@ -234,7 +234,7 @@ mod tests {
                                 mutate_room_users
                                 rights{
                                     entity
-                                    insert
+                                    mutate_self
                                     delete_all
                                     mutate_all
                                 }
@@ -250,7 +250,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"mutate_room\":true,\"mutate_room_users\":true,\"rights\":[{\"entity\":\"Person\",\"insert\":true,\"delete_all\":true,\"mutate_all\":true}]}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"mutate_room\":true,\"mutate_room_users\":true,\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}]}],\"users\":[{\"enabled\":true}]}]}]\n}";
         assert_eq!(result, expected);
         // println!("{:#?}", result);
     }
@@ -298,7 +298,7 @@ mod tests {
                                 mutate_room_users:true
                                 rights:[{
                                     entity:"Person"
-                                    insert:true
+                                    mutate_self:true
                                     delete_all:true
                                     mutate_all:true
                                 }]
@@ -385,7 +385,7 @@ mod tests {
                             mutate_room_users:true
                             rights:[{
                                 entity:"Pet"
-                                insert:true
+                                mutate_self:true
                                 delete_all:true
                                 mutate_all:true
                             }]
@@ -454,7 +454,8 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = "{\n\"Person\":[{\"name\":\"another me\",\"pets\":[{\"name\":\"kiki\"}]},{\"name\":\"me\",\"pets\":[]}]\n}";
+        let expected =
+            "{\n\"Person\":[{\"name\":\"another me\",\"pets\":[{\"name\":\"kiki\"}]}]\n}";
         assert_eq!(result, expected);
         //println!("{:#?}", result);
         //println!("{}", result);
@@ -490,7 +491,7 @@ mod tests {
                             mutate_room_users:true
                             rights:[{
                                 entity:"Person"
-                                insert:true
+                                mutate_self:true
                                 delete_all:true
                                 mutate_all:true
                             }]
@@ -512,7 +513,7 @@ mod tests {
                         mutate_room_users:true
                         rights:[{
                             entity:"Person"
-                            insert:true
+                            mutate_self:true
                             delete_all:true
                             mutate_all:true
                         }]
@@ -527,7 +528,7 @@ mod tests {
             r#"mutation mut {
                     _EntityRight {
                         entity:"Person"
-                        insert:true
+                        mutate_self:true
                         delete_all:true
                         mutate_all:true
                     }
@@ -592,7 +593,7 @@ mod tests {
                                 mutate_room_users:true
                                 rights:[{
                                     entity:"Person"
-                                    insert:true
+                                    mutate_self:true
                                     delete_all:true
                                     mutate_all:true
                                 }]
@@ -648,7 +649,7 @@ mod tests {
                             id:$cred_id
                             rights:[{
                                 entity:"Person"
-                                insert:true
+                                mutate_self:true
                                 delete_all:false
                                 mutate_all:false
                             }]
@@ -674,7 +675,7 @@ mod tests {
                         credentials: [{
                             rights:[{
                                 entity:"Person"
-                                insert:true
+                                mutate_self:true
                                 delete_all:false
                                 mutate_all:false
                             }]
@@ -702,7 +703,7 @@ mod tests {
                             mutate_room_users:true
                             rights:[{
                                 entity:"Person"
-                                insert:false
+                                mutate_self:false
                                 delete_all:false
                                 mutate_all:false
                             }]
@@ -741,7 +742,7 @@ mod tests {
                             credentials(order_by(mdate desc)){
                                 rights {
                                     entity
-                                    insert
+                                    mutate_self
                                     mutate_all
                                     delete_all
                                 }
@@ -754,7 +755,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"rights\":[{\"entity\":\"Person\",\"insert\":false,\"mutate_all\":false,\"delete_all\":false}]},{\"rights\":[{\"entity\":\"Person\",\"insert\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false}]},{\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]}]\n}";
         assert_eq!(result, expected);
     }
 
@@ -1105,7 +1106,7 @@ mod tests {
                                 mutate_room_users:true
                                 rights:[{
                                     entity:"Person"
-                                    insert:true
+                                    mutate_self:true
                                     delete_all:true
                                     mutate_all:true
                                 }]
@@ -1139,7 +1140,7 @@ mod tests {
                                 mutate_room_users:true
                                 rights:[{
                                     entity:"Pet"
-                                    insert:true
+                                    mutate_self:true
                                     delete_all:true
                                     mutate_all:true
                                 }]
@@ -1247,5 +1248,234 @@ mod tests {
         .expect("can insert a Pet in the second room");
 
         //println!("{:#?}", result);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletion_auth() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random_secret();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        type: "whatever"
+                        authorisations:[{
+                            name:"admin"
+                            credentials: [{
+                                mutate_room:true
+                                mutate_room_users:true
+                                rights:[{
+                                    entity:"Person"
+                                    mutate_self:true
+                                    delete_all:true
+                                    mutate_all:true
+                                }]
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.insert_entities[0];
+        let room_id = base64_encode(&room_insert.node_insert.id);
+
+        let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
+        let auth_id = base64_encode(&authorisation_insert.node_insert.id);
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+
+        let mutat = app
+            .mutate(
+                r#"mutation mut {
+                P1: Person{
+                    _rooms: [{id:$room_id}]
+                    name: "me"
+                    parents:[{name:"father"},{name:"mother"}]
+                }
+                P2: Person{
+                    _rooms: [{id:$room_id}]
+                    name: "another me"
+                }
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("can insert");
+
+        let ent = &mutat.insert_entities[0];
+        assert_eq!("P1", ent.name);
+        let id1 = base64_encode(&ent.node_insert.id);
+        let parents = ent.sub_nodes.get("parents").unwrap();
+
+        let father_id = base64_encode(&parents[0].node_insert.id);
+        let mother_id = base64_encode(&parents[1].node_insert.id);
+
+        let ent = &mutat.insert_entities[1];
+        assert_eq!("P2", ent.name);
+        let id2 = base64_encode(&ent.node_insert.id);
+
+        let mut param = Parameters::default();
+        param.add("id", id2).unwrap();
+
+        app.delete(
+            "deletion delete_person {
+            Person { $id  }
+        }",
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let result = app
+            .query(
+                "query q{
+               Person(order_by(name asc)){
+                    name
+               }
+            }",
+                None,
+            )
+            .await
+            .unwrap();
+        let expected =
+            "{\n\"Person\":[{\"name\":\"father\"},{\"name\":\"me\"},{\"name\":\"mother\"}]\n}";
+        assert_eq!(result, expected);
+
+        let mut param = Parameters::default();
+        param.add("id", id1.clone()).unwrap();
+        param.add("father_id", father_id).unwrap();
+        app.delete(
+            "deletion delete_person {
+            Person { 
+                $id
+                parents[$father_id]
+            }
+        }",
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let result = app
+            .query(
+                "query q{
+           Person(order_by(name asc)){
+                name
+                parents{name}
+           }
+        }",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let expected = "{\n\"Person\":[{\"name\":\"me\",\"parents\":[{\"name\":\"mother\"}]}]\n}";
+        assert_eq!(result, expected);
+
+        let mut param = Parameters::default();
+        param.add("id", room_id.clone()).unwrap();
+        param.add("auth_id", auth_id).unwrap();
+        app.mutate(
+            r#"mutation mut {
+                _Room{
+                    id:$id
+                    authorisations:[{
+                        id:$auth_id
+                        credentials: [{
+                            mutate_room:true
+                            mutate_room_users:true
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:false
+                                delete_all:true
+                                mutate_all:true
+                            }]
+                        }]
+                        
+                    }]
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let mut param = Parameters::default();
+        param.add("id", id1.clone()).unwrap();
+        param.add("mother_id", mother_id).unwrap();
+        app.delete(
+            "deletion delete_person {
+            Person { 
+                $id
+                parents[$mother_id]
+            }
+        }",
+            Some(param),
+        )
+        .await
+        .expect_err("cannot mutate anymore");
+
+        let mut param = Parameters::default();
+        param.add("id", id1.clone()).unwrap();
+
+        app.delete(
+            "deletion delete_person {
+            Person { 
+                $id
+            }
+        }",
+            Some(param),
+        )
+        .await
+        .expect_err("cannot mutate anymore");
+
+        let result = app
+            .query(
+                "query q{
+           Person(order_by(name asc)){
+                name
+                parents{name}
+           }
+        }",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let expected = "{\n\"Person\":[{\"name\":\"me\",\"parents\":[{\"name\":\"mother\"}]}]\n}";
+        assert_eq!(result, expected);
+        //println!("{:#?}", result);
+        //println!("{}", result);
     }
 }

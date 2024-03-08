@@ -573,7 +573,11 @@ impl DataModel {
                 }
 
                 field.field_type = FieldType::Entity(String::from(name));
-                field.nullable = false;
+                if entity_field.next().is_some() {
+                    field.nullable = true;
+                } else {
+                    field.nullable = false;
+                }
             }
             Rule::entity_array => {
                 let mut entity_field = field_type.into_inner();
@@ -583,7 +587,11 @@ impl DataModel {
                 }
 
                 field.field_type = FieldType::Array(String::from(name));
-                field.nullable = false;
+                if entity_field.next().is_some() {
+                    field.nullable = true;
+                } else {
+                    field.nullable = false;
+                }
             }
 
             _ => unreachable!(),

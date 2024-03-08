@@ -147,12 +147,12 @@ impl Authorisation {
                 match right {
                     RightType::MutateRoom => return cred.mutate_room,
                     RightType::MutateRoomUsers => return cred.mutate_room_users,
-                    RightType::Insert | RightType::DeleteAll | RightType::MutateAll => {}
+                    RightType::MutateSelf | RightType::DeleteAll | RightType::MutateAll => {}
                 }
 
                 if let Some(cred) = cred.rights.get(entity) {
                     match right {
-                        RightType::Insert => return cred.insert,
+                        RightType::MutateSelf => return cred.mutate_self,
                         RightType::DeleteAll => return cred.delete_all,
                         RightType::MutateAll => return cred.mutate_all,
                         RightType::MutateRoom | RightType::MutateRoomUsers => {}
@@ -184,14 +184,14 @@ impl Credential {
 #[derive(Default, Clone, Debug)]
 pub struct EntityRight {
     pub entity: String,
-    pub insert: bool,
+    pub mutate_self: bool,
     pub delete_all: bool,
     pub mutate_all: bool,
 }
 
 #[derive(Debug)]
 pub enum RightType {
-    Insert,
+    MutateSelf,
     DeleteAll,
     MutateAll,
     MutateRoom,
@@ -360,14 +360,14 @@ impl RoomAuthorisations {
                                     room.can(
                                         &_verifying_key,
                                         &node.name,
-                                        node.mdate,
-                                        &RightType::Insert,
+                                        now(),
+                                        &RightType::MutateSelf,
                                     )
                                 } else {
                                     room.can(
                                         &_verifying_key,
                                         &node.name,
-                                        node.mdate,
+                                        now(),
                                         &RightType::DeleteAll,
                                     )
                                 };
@@ -399,14 +399,14 @@ impl RoomAuthorisations {
                                     room.can(
                                         &_verifying_key,
                                         &edge.source_entity,
-                                        edge.mdate,
-                                        &RightType::Insert,
+                                        now(),
+                                        &RightType::MutateSelf,
                                     )
                                 } else {
                                     room.can(
                                         &_verifying_key,
                                         &edge.source_entity,
-                                        edge.mdate,
+                                        now(),
                                         &RightType::DeleteAll,
                                     )
                                 };
@@ -474,7 +474,7 @@ impl RoomAuthorisations {
                                             &node._verifying_key,
                                             &to_insert.entity,
                                             node.mdate,
-                                            &RightType::Insert,
+                                            &RightType::MutateSelf,
                                         )
                                     } else {
                                         room.can(
@@ -507,7 +507,7 @@ impl RoomAuthorisations {
                                         &node._verifying_key,
                                         &to_insert.entity,
                                         node.mdate,
-                                        &RightType::Insert,
+                                        &RightType::MutateSelf,
                                     );
                                     if !can {
                                         return Err(Error::AuthorisationRejected(
@@ -571,7 +571,7 @@ impl RoomAuthorisations {
                 }
                 for room_id in &node_insert.rooms {
                     if let Some(room) = self.rooms.get(room_id) {
-                        if !room.can(&verifying_key, ROOM_ENT, now(), &RightType::Insert) {
+                        if !room.can(&verifying_key, ROOM_ENT, now(), &RightType::MutateSelf) {
                             return Err(Error::AuthorisationRejected(
                                 node_insert.entity.clone(),
                                 base64_encode(&room_id),
@@ -800,7 +800,7 @@ impl RoomAuthorisations {
                         mutate_room_users
                         rights{
                             entity
-                            insert
+                            mutate_self
                             mutate_all
                             delete_all
                         }
@@ -927,12 +927,12 @@ fn load_authorisation(value: &serde_json::Value) -> Result<Authorisation> {
                 .as_str()
                 .unwrap()
                 .to_string();
-            let insert = right_map.get("insert").unwrap().as_bool().unwrap();
+            let mutate_self = right_map.get("mutate_self").unwrap().as_bool().unwrap();
             let mutate_all = right_map.get("mutate_all").unwrap().as_bool().unwrap();
             let delete_all = right_map.get("delete_all").unwrap().as_bool().unwrap();
             let right = EntityRight {
                 entity,
-                insert,
+                mutate_self,
                 delete_all,
                 mutate_all,
             };
@@ -1005,9 +1005,9 @@ fn entity_right_from(json: &String) -> Result<EntityRight> {
                 entity_right.entity = entity.to_string();
             }
         }
-        if let Some(insert) = map.get(configuration::RIGHT_INSERT_SHORT) {
-            if let Some(insert) = insert.as_bool() {
-                entity_right.insert = insert;
+        if let Some(mutate_self) = map.get(configuration::RIGHT_MUTATE_SELF_SHORT) {
+            if let Some(mutate_self) = mutate_self.as_bool() {
+                entity_right.mutate_self = mutate_self;
             }
         }
 

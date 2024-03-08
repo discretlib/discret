@@ -1023,4 +1023,77 @@ mod tests {
         )
         .expect_err("name is not a json_type");
     }
+
+    #[test]
+    fn nullable_filter() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String,
+                parent: [Person],
+                someone: Person,
+            } 
+
+        ",
+            )
+            .unwrap();
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   nullable(parent)
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("parent is not in the query fields");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   nullable(name)
+                ) {
+                    name
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("name is not an entity type");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   nullable(parent, someone)
+                ) {
+                    name
+                    parent{ name }
+                    someone{ name }
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person (
+                   nullable(parent, some)
+                ) {
+                    name
+                    parent{ name }
+                    some : someone{ name }
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("aliases are supported");
+    }
 }

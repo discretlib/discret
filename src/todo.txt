@@ -1,13 +1,10 @@
 
 DataModel: 
-    *change mutation query
+   
     load system DataModel
-    process mutation query in the auth
-        intercept authorisation updates
-    revert data_model 
-        - make entity field not nullable by default
-        - allow non nullable entity ref when updating model
     
+   
+   
     //rinf for flutter
     test allow selection of archived entity(starting with $)
     undelete entity through a mutation

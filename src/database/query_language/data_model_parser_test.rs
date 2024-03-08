@@ -622,6 +622,61 @@ mod tests {
     }
 
     #[test]
+    fn nullable_entity() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+                Person {
+                    name : String,
+                    parent: [Person] nullable,
+                    other: Person nullable,
+                }",
+            )
+            .unwrap();
+
+        let field = datamodel
+            .get_entity("Person")
+            .unwrap()
+            .get_field("parent")
+            .unwrap();
+        assert!(field.nullable);
+
+        let field = datamodel
+            .get_entity("Person")
+            .unwrap()
+            .get_field("other")
+            .unwrap();
+        assert!(field.nullable);
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+                Person {
+                    name : String,
+                    parent: [Person],
+                    other: Person ,
+                }",
+            )
+            .unwrap();
+
+        let field = datamodel
+            .get_entity("Person")
+            .unwrap()
+            .get_field("parent")
+            .unwrap();
+        assert!(!field.nullable);
+
+        let field = datamodel
+            .get_entity("Person")
+            .unwrap()
+            .get_field("other")
+            .unwrap();
+        assert!(!field.nullable);
+    }
+
+    #[test]
     fn entity_update() {
         let mut datamodel = DataModel::new();
         datamodel

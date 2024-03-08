@@ -18,7 +18,7 @@ entity_param = {
   | "(" ~ param ~ (comma ~ param)* ~ comma? ~ ")"
 }
 
-param = { search | order_by | first | skip | before | after | json_filter | filter }
+param = { search | order_by | first | skip | before | after | nullable | json_filter | filter }
 
 search       = { "search" ~ "(" ~ search_value ~ ")" }
 search_value = { variable | string }
@@ -34,6 +34,8 @@ limit_value = { unsigned_int | variable }
 before       = { "before" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ ")" }
 after        = { "after" ~ "(" ~ before_value ~ ("," ~ before_value)* ~ ","? ~ ")" }
 before_value = { variable | float | string | integer | boolean }
+
+nullable = { "nullable" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ","? ~ ")" }
 
 filter = {
     identifier ~ (gt_eq | neq | lt_eq | eq | gt | lt) ~ filter_value

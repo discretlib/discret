@@ -252,4 +252,10 @@ pub enum Error {
 
     #[error("'after' and 'before' parameters cannot be used on aggregate queries")]
     InvalidPagingQuery(),
+
+    #[error("Nullable field '{0}' not found in the query")]
+    UnknownNullableField(String),
+
+    #[error("Field '{0}' has the type '{1}' and nullable is only valid for types that references an entity ")]
+    InvalidNullableField(String, String),
 }

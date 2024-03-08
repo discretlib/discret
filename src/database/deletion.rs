@@ -6,19 +6,17 @@ use super::{
     edge::Edge,
     node::Node,
     query_language::{deletion_parser::DeletionParser, parameter::Parameters},
-    sqlite_database::RowMappingFn,
     Result,
 };
-
+#[derive(Debug)]
 pub struct NodeDelete {
     pub id: Vec<u8>,
     pub name: String,
     pub short_name: String,
     pub rooms: HashSet<Vec<u8>>,
     pub verifying_key: Vec<u8>,
-    pub mdate: i64,
 }
-
+#[derive(Debug)]
 pub struct EdgeDelete {
     pub src: Vec<u8>,
     pub label: String,
@@ -26,22 +24,8 @@ pub struct EdgeDelete {
     pub rooms: HashSet<Vec<u8>>,
     pub source_entity: String,
     pub verifying_key: Vec<u8>,
-    pub mdate: i64,
 }
-
-struct NodeInfo {
-    mdate: i64,
-    verifying_key: Vec<u8>,
-}
-impl NodeInfo {
-    pub const MAPPING: RowMappingFn<Self> = |row| {
-        Ok(Box::new(NodeInfo {
-            mdate: row.get(0)?,
-            verifying_key: row.get(1)?,
-        }))
-    };
-}
-
+#[derive(Debug)]
 pub struct DeletionQuery {
     pub nodes: Vec<NodeDelete>,
     pub edges: Vec<EdgeDelete>,
@@ -65,25 +49,23 @@ impl DeletionQuery {
                 .as_string()
                 .unwrap();
 
+            let src = base64_decode(src.as_bytes())?;
             let rooms_query = format!(
                 "SELECT dest FROM _edge WHERE src=? AND label='{}'",
                 ROOMS_FIELD_SHORT
             );
             let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;
-
-            let mut rows = rooms_stmt.query([src])?;
+            let mut rows = rooms_stmt.query([&src])?;
             let mut rooms = HashSet::new();
             while let Some(row) = rows.next()? {
                 rooms.insert(row.get(0)?);
             }
 
-            let src = base64_decode(src.as_bytes())?;
-
             let verifying_key_query =
-                "SELECT mdate, _verifying_key FROM _node WHERE id = ? AND _entity = ?";
+                "SELECT _verifying_key FROM _node WHERE id = ? AND _entity = ?";
             let mut verifying_key_stmt = conn.prepare_cached(verifying_key_query)?;
-            let node_info =
-                verifying_key_stmt.query_row((&src, &del.short_name), NodeInfo::MAPPING)?;
+            let verifying_key: Vec<u8> =
+                verifying_key_stmt.query_row((&src, &del.short_name), |row| row.get(0))?;
 
             if del.references.is_empty() {
                 deletion_query.nodes.push(NodeDelete {
@@ -91,8 +73,7 @@ impl DeletionQuery {
                     name: del.name.clone(),
                     short_name: del.short_name.clone(),
                     rooms: rooms.clone(),
-                    verifying_key: node_info.verifying_key.clone(),
-                    mdate: node_info.mdate,
+                    verifying_key: verifying_key.clone(),
                 })
             } else {
                 for edge in &del.references {
@@ -110,8 +91,7 @@ impl DeletionQuery {
                         dest,
                         rooms: rooms.clone(),
                         source_entity: edge.entity_name.clone(),
-                        verifying_key: node_info.verifying_key.clone(),
-                        mdate: node_info.mdate,
+                        verifying_key: verifying_key.clone(),
                     });
                 }
             }
@@ -359,7 +339,7 @@ mod tests {
         };
 
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[]}]\n}";
+        let expected = "{\n\"Person\":[]\n}";
         assert_eq!(result, expected);
 
         //println!("{:#?}", result);
