@@ -2,13 +2,26 @@
 DataModel: 
    
     load system DataModel
-    
+    index
+    disable no_archiving, no_full_text_index
    
    
     //rinf for flutter
     test allow selection of archived entity(starting with $)
     undelete entity through a mutation
 
+    - update room definitions
+
+    - get daily node log for each rooms
+    - compare
+        add new
+        if missing lines
+            get deletion log for date and compare 
+                if diff might be an update
+            update more recent load
+        
+    - get todays log
+    - recompare
 
 // let instance_map = 
 //     .map

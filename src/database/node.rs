@@ -247,9 +247,11 @@ impl Node {
     pub fn delete(
         id: &Vec<u8>,
         entity: &str,
+        mdate: i64,
+        enable_archives: bool,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        if entity.starts_with(ARCHIVED_CHAR) {
+        if entity.starts_with(ARCHIVED_CHAR) || !enable_archives {
             let mut delete_stmt =
                 conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
             delete_stmt.execute((id, entity))?;
@@ -258,9 +260,9 @@ impl Node {
             deleted_entity.push(ARCHIVED_CHAR);
             deleted_entity.push_str(entity);
 
-            let mut update_stmt =
-                conn.prepare_cached("UPDATE _node SET _entity=? WHERE id=? AND _entity=?")?;
-            update_stmt.execute((deleted_entity, id, entity))?;
+            let mut update_stmt = conn
+                .prepare_cached("UPDATE _node SET _entity=?, mdate=? WHERE id=? AND _entity=?")?;
+            update_stmt.execute((deleted_entity, mdate, id, entity))?;
         }
         Ok(())
     }
@@ -573,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn node_database() {
+    fn node_with_archive() {
         let conn = Connection::open_in_memory().unwrap();
         Node::create_table(&conn).unwrap();
 
@@ -590,7 +592,7 @@ mod tests {
         let new_node = Node::get(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
 
-        Node::delete(&node.id, entity, &conn).unwrap();
+        Node::delete(&node.id, entity, now(), true, &conn).unwrap();
         let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
         assert!(!node_exists);
 
@@ -600,7 +602,39 @@ mod tests {
         assert!(node_exists);
 
         //deleting an entity results in a hard delete
-        Node::delete(&node.id, &del_entity, &conn).unwrap();
+        Node::delete(&node.id, &del_entity, now(), true, &conn).unwrap();
+
+        let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
+        let num_nodes: i64 = exists_stmt.query_row([], |row| Ok(row.get(0)?)).unwrap();
+        assert_eq!(0, num_nodes);
+    }
+
+    #[test]
+    fn node_without_archive() {
+        let conn = Connection::open_in_memory().unwrap();
+        Node::create_table(&conn).unwrap();
+
+        let signing_key = Ed25519SigningKey::new();
+        let entity = "Pet";
+
+        let mut node = Node {
+            _entity: String::from(entity),
+            ..Default::default()
+        };
+        node.sign(&signing_key).unwrap();
+        node.write(&conn, false, &None, &None, &None).unwrap();
+
+        let new_node = Node::get(&node.id, entity, &conn).unwrap();
+        assert!(new_node.is_some());
+
+        Node::delete(&node.id, entity, now(), false, &conn).unwrap();
+        let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
+        assert!(!node_exists);
+
+        let del_entity = format!("{}{}", ARCHIVED_CHAR, entity);
+
+        let node_exists = Node::exist(&node.id, &del_entity, &conn).unwrap();
+        assert!(!node_exists);
 
         let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
         let num_nodes: i64 = exists_stmt.query_row([], |row| Ok(row.get(0)?)).unwrap();

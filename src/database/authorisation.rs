@@ -360,7 +360,7 @@ impl RoomAuthorisations {
                                     room.can(
                                         &_verifying_key,
                                         &node.name,
-                                        now(),
+                                        node.date,
                                         &RightType::MutateSelf,
                                     )
                                 } else {
@@ -399,7 +399,7 @@ impl RoomAuthorisations {
                                     room.can(
                                         &_verifying_key,
                                         &edge.source_entity,
-                                        now(),
+                                        edge.date,
                                         &RightType::MutateSelf,
                                     )
                                 } else {

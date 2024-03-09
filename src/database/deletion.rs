@@ -1,4 +1,4 @@
-use crate::cryptography::base64_decode;
+use crate::cryptography::{base64_decode, now};
 use std::{collections::HashSet, sync::Arc};
 
 use super::{
@@ -15,6 +15,8 @@ pub struct NodeDelete {
     pub short_name: String,
     pub rooms: HashSet<Vec<u8>>,
     pub verifying_key: Vec<u8>,
+    pub date: i64,
+    pub enable_archives: bool,
 }
 #[derive(Debug)]
 pub struct EdgeDelete {
@@ -24,6 +26,7 @@ pub struct EdgeDelete {
     pub rooms: HashSet<Vec<u8>>,
     pub source_entity: String,
     pub verifying_key: Vec<u8>,
+    pub date: i64,
 }
 #[derive(Debug)]
 pub struct DeletionQuery {
@@ -36,6 +39,7 @@ impl DeletionQuery {
         deletion: Arc<DeletionParser>,
         conn: &rusqlite::Connection,
     ) -> Result<Self> {
+        let date = now();
         deletion.variables.validate_params(parameters)?;
         let mut deletion_query = Self {
             nodes: Vec::new(),
@@ -74,6 +78,8 @@ impl DeletionQuery {
                     short_name: del.short_name.clone(),
                     rooms: rooms.clone(),
                     verifying_key: verifying_key.clone(),
+                    date,
+                    enable_archives: del.enable_archives,
                 })
             } else {
                 for edge in &del.references {
@@ -92,6 +98,7 @@ impl DeletionQuery {
                         rooms: rooms.clone(),
                         source_entity: edge.entity_name.clone(),
                         verifying_key: verifying_key.clone(),
+                        date,
                     });
                 }
             }
@@ -104,7 +111,13 @@ impl DeletionQuery {
             Edge::delete_edge(&edg.src, &edg.label, &edg.dest, conn)?;
         }
         for nod in &self.nodes {
-            Node::delete(&nod.id, &nod.short_name, conn)?;
+            Node::delete(
+                &nod.id,
+                &nod.short_name,
+                nod.date,
+                nod.enable_archives,
+                conn,
+            )?;
         }
         Ok(())
     }

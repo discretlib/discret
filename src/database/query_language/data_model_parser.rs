@@ -371,6 +371,22 @@ impl DataModel {
                         }
                     }
                 }
+                Rule::entity_param => {
+                    for pair in entity_pair.into_inner() {
+                        match pair.as_rule() {
+                            Rule::disable_feature => {
+                                let disable = pair.into_inner().next().unwrap();
+                                match disable.as_rule() {
+                                    Rule::no_archiving => entity.enable_archives = false,
+                                    Rule::no_full_text_index => entity.enable_full_text = false,
+                                    _ => unreachable!(),
+                                }
+                            }
+                            Rule::comma => {}
+                            _ => unreachable!(),
+                        }
+                    }
+                }
                 Rule::entry => {
                     for i in entity_pair.into_inner() {
                         match i.as_rule() {
@@ -680,6 +696,8 @@ pub struct Entity {
     pub indexes: HashMap<String, Index>,
     pub indexes_to_remove: HashMap<String, Index>,
     pub deprecated: bool,
+    pub enable_full_text: bool,
+    pub enable_archives: bool,
 }
 impl Default for Entity {
     fn default() -> Self {
@@ -695,6 +713,8 @@ impl Entity {
             indexes: HashMap::new(),
             indexes_to_remove: HashMap::new(),
             deprecated: false,
+            enable_full_text: true,
+            enable_archives: true,
         }
     }
 

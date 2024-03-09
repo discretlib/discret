@@ -935,6 +935,68 @@ mod tests {
         //println!("{}", result.as_str().unwrap());
     }
 
+
+    #[test]
+    fn disable_search() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person (no_full_text_index){
+                name : String,
+                comment : String,
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P1: Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
+                P2: Person { name:"Alice" comment:"Lorem lorem ipsum " }
+                P3: Person { name:"Bob" comment:"A completely different comment" }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                Person(search("ames")) {
+                    name
+                    comment
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        let result = sql.read(&conn).unwrap();
+
+        let expected = "{\n\"Person\":[]\n}";
+        assert_eq!(expected, result);
+        // println!("{:#?}", result.as_str().unwrap());
+        //println!("{}", result.as_str().unwrap());
+    }
+
     #[test]
     fn default_value() {
         let mut data_model = DataModel::new();

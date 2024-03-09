@@ -988,4 +988,21 @@ mod tests {
         let name = datamodel.name_for("$33").unwrap();
         assert_eq!("$Pet", name);
     }
+
+    #[test]
+    fn disable_feature() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "Person(no_archive, no_full_text_index) {
+                    name : String,
+                }
+                ",
+            )
+            .unwrap();
+
+        let person = datamodel.get_entity("Person").unwrap();
+        assert!(!person.enable_archives);
+        assert!(!person.enable_full_text);
+    }
 }

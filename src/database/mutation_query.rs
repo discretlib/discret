@@ -27,27 +27,30 @@ pub struct NodeToInsert {
     pub id: Vec<u8>,
     pub entity: String,
     pub node: Option<Node>,
-    pub index: bool,
     pub node_fts_str: Option<String>,
     pub old_node: Option<Node>,
     pub rooms: HashSet<Vec<u8>>,
     pub old_rowid: Option<i64>,
     pub old_fts_str: Option<String>,
+    pub enable_archives: bool,
+    pub enable_full_text: bool,
 }
 impl NodeToInsert {
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         if let Some(node) = &self.node {
+            // println!("{}", self.enable_full_text);
             node.write(
                 conn,
-                self.index,
+                self.enable_full_text,
                 &self.old_rowid,
                 &self.old_fts_str,
                 &self.node_fts_str,
             )?;
             //archive the old node
-
             if let Some(old_node) = &self.old_node {
-                old_node.archive(conn)?;
+                if self.enable_archives {
+                    old_node.archive(conn)?;
+                }
             }
         }
         Ok(())
@@ -66,10 +69,11 @@ impl NodeToInsert {
             id: row.get(0)?,
             entity: "".to_string(),
             node_fts_str: None,
-            index: true,
             node: None,
             old_fts_str: None,
             rooms: HashSet::new(),
+            enable_archives: true,
+            enable_full_text: true,
             old_rowid: row.get(8)?,
             old_node: Some(Node {
                 id: row.get(0)?,
@@ -90,12 +94,13 @@ impl Default for NodeToInsert {
             id: Vec::new(),
             entity: "".to_string(),
             old_rowid: None,
-            index: true,
             old_fts_str: None,
             node_fts_str: None,
             node: None,
             old_node: None,
             rooms: HashSet::new(),
+            enable_archives: true,
+            enable_full_text: true,
         }
     }
 }
@@ -333,6 +338,8 @@ impl MutationQuery {
                         Ok(NodeToInsert {
                             id,
                             entity: entity_name.clone(),
+                            enable_archives: entity.enable_archives,
+                            enable_full_text: entity.enable_full_text,
                             ..Default::default()
                         })
                     } else {
@@ -371,7 +378,8 @@ impl MutationQuery {
                         }
                     };
                     node.entity = entity_name.clone();
-
+                    node.enable_archives = entity.enable_archives;
+                    node.enable_full_text = entity.enable_full_text;
                     Ok(node)
                 }
             }
@@ -383,6 +391,8 @@ impl MutationQuery {
                 Ok(NodeToInsert {
                     id: node.id.clone(),
                     entity: entity_name.clone(),
+                    enable_archives: entity.enable_archives,
+                    enable_full_text: entity.enable_full_text,
                     node: Some(node),
                     ..Default::default()
                 })

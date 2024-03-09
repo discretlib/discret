@@ -26,6 +26,8 @@ pub struct EntityMutation {
     pub name: String,
     pub alias: Option<String>,
     pub short_name: String,
+    pub enable_archives: bool,
+    pub enable_full_text: bool,
     pub depth: usize,
     pub fields: HashMap<String, MutationField>,
 }
@@ -40,6 +42,8 @@ impl EntityMutation {
             name: String::from(""),
             short_name: String::from(""),
             alias: None,
+            enable_archives: true,
+            enable_full_text: true,
             depth: 0,
             fields: HashMap::new(),
         }
@@ -185,7 +189,11 @@ impl MutationParser {
             Self::parse_entity_internals(&mut entity, data_model, entity_pairs, variables)?;
 
         let entity_model = data_model.get_entity(&entity.name)?;
+
         entity.short_name = entity_model.short_name.clone();
+        entity.enable_archives = entity_model.enable_archives;
+        entity.enable_full_text = entity_model.enable_full_text;
+
         Self::propagate_room(&mut entity)?;
         Self::fill_not_nullable(&mut entity, entity_model)?;
         Ok(entity)
@@ -1331,7 +1339,36 @@ mod tests {
             &data_model,
         )
         .expect("ok");
+    }
 
-        println!("{:#?}", _mutation);
+    #[test]
+    fn disabled_index_and_archiving() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person(no_archive, no_full_text_index){
+                name : String ,
+            }
+        
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $age
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let entity_mut = &mutation.mutations[0];
+        assert!(!entity_mut.enable_archives);
+        assert!(!entity_mut.enable_full_text);
     }
 }
