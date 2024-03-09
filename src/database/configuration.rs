@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,40 +70,34 @@ impl Default for Configuration {
     }
 }
 
-pub const CONFIGURATION_TABLE: &str = "CREATE TABLE _config (
-    key TEXT NOT NULL,
-    value TEXT,
-    PRIMARY KEY(key)
-) WITHOUT ROWID, STRICT";
+pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "CREATE TABLE _configuration (
+        key TEXT NOT NULL,
+        value TEXT,
+        PRIMARY KEY(key)
+    ) WITHOUT ROWID, STRICT",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE _daily_log (
+        room BLOB NOT NULL,
+        date INTEGER NOT NULL,
+        entry_number INTEGER,
+        size INTEGER,
+        daily_hash BLOB,
+        need_recompute INTEGER, 
+        PRIMARY KEY (room, date)
+    ) WITHOUT ROWID, STRICT",
+        [],
+    )?;
 
-pub const NODE_DELETION_TABLE: &str = "CREATE TABLE _node_deletion_log (
-    room BLOB,
-    id BLOB,
-    date INTEGER,
-    entity TEXT,
-    size INTEGER,
-    PRIMARY KEY(room, date, id, entity)
-) WITHOUT ROWID, STRICT";
-
-pub const DAILY_NODE_LOG: &str = "CREATE TABLE daily_node_log (
-    room BLOB NOT NULL,
-    date INTEGER NOT NULL,
-    row_num INTEGER,
-    size INTEGER,
-    daily_hash BLOB,
-    updated_at INTEGER,
-    PRIMARY KEY (room, date)
-) WITHOUT ROWID, STRICT";
-
-pub const EDGE_DELETION_TABLE: &str = "CREATE TABLE _edge_deletion_log (
-    room BLOB,
-    src BLOB,
-    dest BLOB,
-    label TEXT,
-    date INTEGER,
-    size INTEGER,
-    PRIMARY KEY(room, date, id, entity)
-) WITHOUT ROWID, STRICT";
+    conn.execute(
+        "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (need_recompute, room, date)",
+        [],
+    )?;
+    Ok(())
+}
 
 //name of the system entities
 pub const ROOM_ENT: &str = "_Room";

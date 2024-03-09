@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
+use chrono::{DateTime, Duration, NaiveDateTime};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
@@ -311,6 +312,21 @@ pub fn now() -> i64 {
         .as_millis()
         .try_into()
         .unwrap()
+}
+
+//returns the date without time
+pub fn date(date_time: i64) -> i64 {
+    let date = DateTime::from_timestamp_millis(date_time).unwrap();
+    let ds: NaiveDateTime = date.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    ds.timestamp_millis()
+}
+
+//returns the next day without time
+pub fn date_next_day(date_time: i64) -> i64 {
+    let date = DateTime::from_timestamp_millis(date_time).unwrap();
+    let date = date + Duration::days(1);
+    let ds: NaiveDateTime = date.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    ds.timestamp_millis()
 }
 
 #[cfg(test)]

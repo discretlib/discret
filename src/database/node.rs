@@ -83,6 +83,17 @@ impl Node {
             [],
         )?;
 
+        //log the deletions for synchronisation
+        conn.execute(
+            "CREATE TABLE _node_deletion_log (
+            room BLOB,
+            id BLOB,
+            entity TEXT,
+            date INTEGER,
+            PRIMARY KEY(room, date, id, entity )
+        ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
         Ok(())
     }
 

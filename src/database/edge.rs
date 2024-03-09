@@ -46,6 +46,18 @@ impl Edge {
             " CREATE UNIQUE INDEX _edge_dest_label_src_idx ON _edge(dest, label, src )",
             [],
         )?;
+
+        conn.execute(
+            "CREATE TABLE _edge_deletion_log (
+            room BLOB,
+            src BLOB,
+            dest BLOB,
+            label TEXT,
+            date INTEGER,
+            PRIMARY KEY(room, src, label, dest, date)
+        ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
         Ok(())
     }
 

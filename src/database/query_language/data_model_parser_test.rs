@@ -1,8 +1,6 @@
 #[cfg(test)]
 mod tests {
 
-    use std::any::Any;
-
     use crate::database::{
         configuration::{
             AUTHORS_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
@@ -10,6 +8,7 @@ mod tests {
         },
         query_language::{data_model_parser::*, FieldType, Value},
     };
+    use std::any::Any;
 
     #[test]
     fn parse_valid_model() {
@@ -694,7 +693,7 @@ mod tests {
         datamodel
             .update(
                 "
-                Pesrson {
+                Pesssssrson {
                     name : String,
                 }",
             )
@@ -814,6 +813,16 @@ mod tests {
         assert_eq!(RESERVED_SHORT_NAMES.to_string(), name.short_name);
         let age = person.get_field("age").unwrap();
         assert_eq!((RESERVED_SHORT_NAMES + 1).to_string(), age.short_name);
+
+        datamodel
+            .update(
+                r#"Person {
+            name : String default "",
+            age : Integer default 0,
+            other: Person
+        }"#,
+            )
+            .expect("Entity Field don't need default value");
     }
 
     #[test]

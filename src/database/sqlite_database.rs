@@ -1,4 +1,8 @@
-use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
+use blake3::Hasher;
+use rusqlite::{
+    functions::{Aggregate, FunctionFlags},
+    Connection, OptionalExtension, Row, ToSql,
+};
 
 use std::{path::PathBuf, thread, time, usize};
 use tokio::sync::{
@@ -10,6 +14,7 @@ use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
     authorisation::{AuthorisationMessage, RoomMutationQuery},
+    configuration,
     deletion::DeletionQuery,
     edge::Edge,
     mutation_query::MutationQuery,
@@ -149,6 +154,7 @@ pub fn create_connection(
 ///
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
     add_base64_function(conn)?;
+    add_blake3_hash_aggregate(conn)?;
     let initialised: Option<String> = conn
         .query_row(
             "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name = '_node'",
@@ -161,7 +167,7 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
         conn.execute("BEGIN TRANSACTION", [])?;
         Node::create_table(conn)?;
         Edge::create_table(conn)?;
-        // DailySynchLog::create_table(conn)?;
+        configuration::create_system_tables(conn)?;
         conn.execute("COMMIT", [])?;
     }
     Ok(())
@@ -634,11 +640,58 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+struct Blake3Hash;
+impl Aggregate<Hasher, Option<Vec<u8>>> for Blake3Hash {
+    fn init(&self, _: &mut rusqlite::functions::Context<'_>) -> rusqlite::Result<Hasher> {
+        let hasher = blake3::Hasher::new();
+        Ok(hasher)
+    }
+
+    fn step(
+        &self,
+        ctx: &mut rusqlite::functions::Context<'_>,
+        acc: &mut Hasher,
+    ) -> rusqlite::Result<()> {
+        let v = ctx.get::<Vec<u8>>(0)?;
+        acc.update(&v);
+        Ok(())
+    }
+
+    fn finalize(
+        &self,
+        _: &mut rusqlite::functions::Context<'_>,
+        acc: Option<Hasher>,
+    ) -> rusqlite::Result<Option<Vec<u8>>> {
+        match acc {
+            Some(a) => {
+                if a.count() == 0 {
+                    Ok(None)
+                } else {
+                    let hash = a.finalize();
+                    let hash = hash.as_bytes();
+                    Ok(Some(hash.to_vec()))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+fn add_blake3_hash_aggregate(conn: &Connection) -> Result<()> {
+    conn.create_aggregate_function(
+        "hash",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        Blake3Hash,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::cryptography::hash;
+    use crate::cryptography::{hash, random_secret};
     use crate::database::Error;
     use std::result::Result;
     use std::{fs, path::Path, time::Instant};
@@ -859,5 +912,88 @@ mod tests {
             .query_async(insert_query, Vec::new(), STRING_MAPPING)
             .await
             .expect_err("attempt to write a readonly database");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn blake3_hash_aggreagate() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        conn.execute(
+            "CREATE TABLE hashing (
+            id  BLOB,
+            group_id  INTEGER
+        )",
+            [],
+        )
+        .unwrap();
+
+        let mut group_1 = Vec::new();
+        for _ in 0..10 {
+            let val = random_secret().to_vec();
+            group_1.push(val);
+        }
+
+        let mut stmt = conn
+            .prepare("INSERT INTO hashing (id, group_id) VALUES (?,?)")
+            .unwrap();
+        for v in &group_1 {
+            stmt.execute((v, 1)).unwrap();
+        }
+        group_1.sort();
+
+        let mut hasher = blake3::Hasher::new();
+        for v in &group_1 {
+            hasher.update(v);
+        }
+        let hash = hasher.finalize();
+        let hash = hash.as_bytes();
+        let hash = base64_encode(hash);
+
+        let mut expected = Vec::new();
+        expected.push(hash);
+
+        let mut group_2 = Vec::new();
+        for _ in 0..10 {
+            let val = random_secret().to_vec();
+            group_2.push(val);
+        }
+
+        let mut stmt = conn
+            .prepare("INSERT INTO hashing (id, group_id) VALUES (?,?)")
+            .unwrap();
+        for v in &group_2 {
+            stmt.execute((v, 2)).unwrap();
+        }
+        group_2.sort();
+
+        let mut hasher = blake3::Hasher::new();
+        for v in &group_2 {
+            hasher.update(v);
+        }
+        let hash = hasher.finalize();
+        let hash = hash.as_bytes();
+        let hash = base64_encode(hash);
+        expected.push(hash);
+
+        let mut stmt = conn
+            .prepare(
+                "
+            SELECT hash(id),group_id 
+            FROM (SELECT id, group_id FROM hashing ORDER BY id, group_id)
+            GROUP BY group_id
+            ORDER BY group_id",
+            )
+            .unwrap();
+
+        let mut result = Vec::new();
+        let mut rows = stmt.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let result_opt: Option<Vec<u8>> = row.get(0).unwrap();
+            let hash = base64_encode(&result_opt.unwrap());
+            result.push(hash);
+        }
+
+        assert_eq!(expected, result);
     }
 }

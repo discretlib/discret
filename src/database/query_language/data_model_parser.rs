@@ -750,10 +750,15 @@ impl Entity {
                         ));
                     }
                     if field.nullable && !new_field.nullable && new_field.default_value.is_none() {
-                        return Err(Error::MissingDefaultValue(
-                            String::from(&self.name),
-                            String::from(&field.name),
-                        ));
+                        match field.field_type {
+                            FieldType::Array(_) | FieldType::Entity(_) => {}
+                            _ => {
+                                return Err(Error::MissingDefaultValue(
+                                    String::from(&self.name),
+                                    String::from(&field.name),
+                                ));
+                            }
+                        }
                     }
                     field.nullable = new_field.nullable;
                     field.default_value = new_field.default_value;
@@ -769,10 +774,15 @@ impl Entity {
         }
         for field in new_entity.fields {
             if !field.1.nullable && field.1.default_value.is_none() {
-                return Err(Error::MissingDefaultValue(
-                    String::from(&self.name),
-                    String::from(&field.1.name),
-                ));
+                match field.1.field_type {
+                    FieldType::Array(_) | FieldType::Entity(_) => {}
+                    _ => {
+                        return Err(Error::MissingDefaultValue(
+                            String::from(&self.name),
+                            String::from(&field.1.name),
+                        ));
+                    }
+                }
             }
             self.insert_field(field.0, field.1);
         }

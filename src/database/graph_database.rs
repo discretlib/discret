@@ -1,4 +1,5 @@
 use lru::LruCache;
+use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot::Sender;
@@ -20,6 +21,7 @@ use super::{
     Error, Result,
 };
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
+use crate::database::sqlite_database::Writeable;
 
 const LRU_SIZE: usize = 128;
 
@@ -27,6 +29,7 @@ enum Message {
     Query(String, Parameters, Sender<Result<String>>),
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
+    UpdateModel(String, Sender<Result<String>>),
 }
 
 #[derive(Clone)]
@@ -44,7 +47,8 @@ impl GraphDatabaseService {
     ) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
-        let mut service = GraphDatabase::open(name, model, key_material, data_folder, config)?;
+        let mut service = GraphDatabase::open(name, key_material, data_folder, config)?;
+        service.update_data_model(model).await?;
         service.initialise_authorisations().await?;
 
         let verifying_key = service.verifying_key.clone();
@@ -79,6 +83,16 @@ impl GraphDatabaseService {
                         match deletion {
                             Ok(cache) => {
                                 service.delete(cache, parameters, reply).await;
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err));
+                            }
+                        }
+                    }
+                    Message::UpdateModel(value, reply) => {
+                        match service.update_data_model(&value).await {
+                            Ok(model) => {
+                                let _ = reply.send(Ok(model));
                             }
                             Err(err) => {
                                 let _ = reply.send(Err(err));
@@ -131,6 +145,13 @@ impl GraphDatabaseService {
         let _ = self.sender.send(msg).await;
         recieve.await?
     }
+
+    pub async fn update_data_model(&self, query: &str) -> Result<String> {
+        let (send, recieve) = oneshot::channel::<Result<String>>();
+        let msg = Message::UpdateModel(query.to_string(), send);
+        let _ = self.sender.send(msg).await;
+        recieve.await?
+    }
 }
 
 struct GraphDatabase {
@@ -146,7 +167,6 @@ struct GraphDatabase {
 impl GraphDatabase {
     pub fn open(
         name: &str,
-        model: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
         config: Configuration,
@@ -175,13 +195,7 @@ impl GraphDatabase {
         let query_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
         let deletion_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
 
-        //
-        //TODO load from database
-        //
-        let mut data_model = DataModel::new();
-        data_model.update_system(configuration::SYSTEM_DATA_MODEL)?;
-
-        data_model.update(model)?;
+        let data_model = DataModel::new();
 
         let auth = RoomAuthorisations {
             signing_key,
@@ -203,9 +217,58 @@ impl GraphDatabase {
         Ok(database)
     }
 
-    pub async fn update_data_model(&mut self, model: &str) -> Result<()> {
+    pub async fn update_data_model(&mut self, model: &str) -> Result<String> {
+        let (send, recieve) = oneshot::channel::<Result<Option<String>>>();
+
+        //load from database
+        self.graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let query = "SELECT value FROM _configuration WHERE key='Data Model'";
+                let res: std::result::Result<Option<String>, rusqlite::Error> =
+                    conn.query_row(query, [], |row| row.get(0)).optional();
+                match res {
+                    Ok(datamodel) => {
+                        let _ = send.send(Ok(datamodel));
+                    }
+                    Err(err) => {
+                        let _ = send.send(Err(Error::Database(err)));
+                    }
+                }
+            }))
+            .await?;
+
+        let res = recieve.await??;
+        if let Some(serialized_dm) = res {
+            let dam: DataModel = serde_json::from_str(&serialized_dm)?;
+            self.data_model = dam;
+        }
+
+        self.data_model
+            .update_system(configuration::SYSTEM_DATA_MODEL)?;
         self.data_model.update(model)?;
-        Ok(())
+
+        let str = serde_json::to_string(&self.data_model)?;
+
+        struct Serialized(String);
+        impl Writeable for Serialized {
+            fn write(
+                &self,
+                conn: &rusqlite::Connection,
+            ) -> std::result::Result<(), rusqlite::Error> {
+                let query =
+                    "INSERT OR REPLACE INTO _configuration(key, value) VALUES ('Data Model', ?)";
+                conn.execute(query, [&self.0])?;
+                Ok(())
+            }
+        }
+
+        self.graph_database
+            .writer
+            .write(Box::new(Serialized(str.clone())))
+            .await?;
+
+        Ok(str)
     }
 
     pub async fn initialise_authorisations(&mut self) -> Result<()> {
@@ -392,7 +455,7 @@ mod tests {
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "selection app",
-            data_model,
+            &data_model,
             &secret,
             path,
             Configuration::default(),
@@ -437,7 +500,7 @@ mod tests {
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
-            data_model,
+            &data_model,
             &secret,
             path,
             Configuration::default(),
@@ -478,5 +541,65 @@ mod tests {
             .unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"Bob\"}]\n}";
         assert_eq!(result, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_data_model() {
+        init_database_path();
+        let secret = random_secret();
+        //create a first instance
+        {
+            let data_model = "
+            Person{ 
+                name:String 
+            }";
+            let path: PathBuf = DATA_PATH.into();
+            GraphDatabaseService::start(
+                "delete app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+            )
+            .await
+            .unwrap();
+        }
+
+        {
+            let data_model = "
+            Person{ 
+                surname: String,
+                name:String 
+            }";
+            let path: PathBuf = DATA_PATH.into();
+            let is_error = GraphDatabaseService::start(
+                "delete app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+            )
+            .await
+            .is_err();
+            assert!(is_error);
+        }
+
+        {
+            let data_model = "
+            Person{ 
+                name:String ,
+                surname: String nullable,
+            }";
+            let path: PathBuf = DATA_PATH.into();
+            GraphDatabaseService::start(
+                "delete app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+            )
+            .await
+            .unwrap();
+        }
     }
 }
