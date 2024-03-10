@@ -135,8 +135,7 @@ pub fn create_connection(
     //enabled to keep database small
     set_pragma("auto_vacuum", "1", &conn)?;
 
-    //enable an obscure legacy compatibility
-    //to avoid a bug when using json extract during partial index creation "unsafe use of ->>() in CREATE INDEX"
+    //enabled to avoid a bug when using json extract in partial index: "unsafe use of ->>() in CREATE INDEX"
     //see https://sqlite.org/forum/forumpost/c88a671ad083d153
     set_pragma("trusted_schema", "1", &conn)?;
 

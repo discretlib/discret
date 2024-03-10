@@ -1,15 +1,27 @@
 
-DataModel: 
+Database: 
+    - add source entity field to edges
+    - add a thread to authorisations to process room_mutation
+    - deletion now carries the node and edges to be deleted
+    to allow the insertion in the deletion log
+
+
+    implements signed deletions log 
+    implements daily log
+           upsert: INSERT INTO vocabulary(word) VALUES('jovial') ON CONFLICT(word) DO UPDATE SET count=count+1;
    
 
-    index
-    add source entity field
-    implements deletions log
-    implements daily log
-    
-   
+    add a priority thread to database for interactive queries
+
+
+
+
     test allow selection of archived entity(starting with $)
     undelete entity through a mutation
+
+
+
+
 
     - update room definitions
 

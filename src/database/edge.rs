@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Edge {
     pub src: Vec<u8>,
+    pub src_entity: String,
     pub label: String,
     pub dest: Vec<u8>,
     pub cdate: i64,
@@ -31,6 +32,7 @@ impl Edge {
             " 
             CREATE TABLE _edge (
                 src BLOB NOT NULL,
+                src_entity TEXT NOT NULL,
                 label TEXT NOT NULL,
                 dest BLOB NOT NULL,
                 cdate INTEGER NOT NULL,
@@ -49,12 +51,15 @@ impl Edge {
 
         conn.execute(
             "CREATE TABLE _edge_deletion_log (
-            room BLOB,
-            src BLOB,
-            dest BLOB,
-            label TEXT,
-            date INTEGER,
-            PRIMARY KEY(room, src, label, dest, date)
+            room BLOB NOT NULL,
+            src BLOB NOT NULL,
+            src_entity TEXT NOT NULL, 
+            dest BLOB NOT NULL,
+            label TEXT NOT NULL,
+            date INTEGER NOT NULL,
+            verifying_key BLOB NOT NULL,
+            signature BLOB NOT NULL,
+            PRIMARY KEY(room, src, src_entity, label, dest, date)
         ) WITHOUT ROWID, STRICT",
             [],
         )?;
@@ -62,7 +67,7 @@ impl Edge {
     }
 
     pub const EDGE_QUERY: &'static str = "
-    SELECT  src, label, dest, cdate, verifying_key, signature 
+    SELECT src, src_entity, label, dest, cdate, verifying_key, signature 
         FROM _edge
     WHERE 
         src = ? AND
@@ -72,17 +77,19 @@ impl Edge {
     pub const EDGE_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(Edge {
             src: row.get(0)?,
-            label: row.get(1)?,
-            dest: row.get(2)?,
-            cdate: row.get(3)?,
-            verifying_key: row.get(4)?,
-            signature: row.get(5)?,
+            src_entity: row.get(1)?,
+            label: row.get(2)?,
+            dest: row.get(3)?,
+            cdate: row.get(4)?,
+            verifying_key: row.get(5)?,
+            signature: row.get(6)?,
         }))
     };
 
     fn len(&self) -> usize {
         let mut len = 0;
         len += &self.src.len();
+        len += &self.src_entity.len();
         len += &self.label.as_bytes().len();
         len += &self.dest.len();
         len += 8; //cdate
@@ -94,6 +101,7 @@ impl Edge {
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.src);
+        hasher.update(&self.src_entity.as_bytes());
         hasher.update(self.label.as_bytes());
         hasher.update(&self.dest);
         hasher.update(&self.cdate.to_le_bytes());
@@ -115,6 +123,13 @@ impl Edge {
                 size,
                 MAX_ROW_LENTGH
             )));
+        }
+        if self.src_entity.is_empty() {
+            return Err(Error::EmptyNodeEntity());
+        }
+
+        if self.label.is_empty() {
+            return Err(Error::EmptyEdgeLabel());
         }
 
         if !is_valid_id_len(&self.src) {
@@ -143,6 +158,14 @@ impl Edge {
             return Err(Error::InvalidId());
         }
 
+        if self.src_entity.is_empty() {
+            return Err(Error::EmptyNodeEntity());
+        }
+
+        if self.label.is_empty() {
+            return Err(Error::EmptyEdgeLabel());
+        }
+
         self.verifying_key = signing_key.export_verifying_key();
 
         let size = self.len();
@@ -169,11 +192,12 @@ impl Edge {
     ///
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _edge (src, label, dest, cdate, verifying_key, signature) 
-                            VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO _edge (src, src_entity, label, dest, cdate, verifying_key, signature) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)",
         )?;
         insert_stmt.execute((
             &self.src,
+            &self.src_entity,
             &self.label,
             &self.dest,
             &self.cdate,
@@ -260,7 +284,7 @@ impl Edge {
     ///
     pub fn get_edges(src: &Vec<u8>, label: &str, conn: &Connection) -> Result<Vec<Box<Edge>>> {
         let mut edges_stmt = conn.prepare_cached(
-            "SELECT  src, label, dest, cdate, verifying_key, signature 
+            "SELECT  src, src_entity, label, dest, cdate, verifying_key, signature 
             FROM _edge
             WHERE 
                 src = ? AND
@@ -282,6 +306,7 @@ impl Default for Edge {
     fn default() -> Self {
         Self {
             src: vec![],
+            src_entity: String::from(""),
             label: String::from(""),
             dest: vec![],
             cdate: now(),
@@ -308,6 +333,7 @@ mod tests {
         let to = new_id();
         let mut e = Edge {
             src: from.clone(),
+            src_entity: "0".to_string(),
             label: String::from("Test"),
             dest: to.clone(),
             ..Default::default()
@@ -353,7 +379,9 @@ mod tests {
 
         let mut e = Edge {
             src: source.clone(),
+            src_entity: "0".to_string(),
             dest: source.clone(),
+            label: "0".to_string(),
             ..Default::default()
         };
         e.sign(&keypair).unwrap();
@@ -393,6 +421,7 @@ mod tests {
         let to = new_id();
         let mut e = Edge {
             src: from.clone(),
+            src_entity: "0".to_string(),
             label: String::from(label),
             dest: to.clone(),
             ..Default::default()

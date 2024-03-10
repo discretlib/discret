@@ -217,6 +217,7 @@ pub enum AuthorisationMessage {
     ),
     Load(String, Sender<super::Result<()>>),
 }
+
 pub struct RoomMutationQuery {
     mutation_query: MutationQuery,
     reply: Sender<super::Result<MutationQuery>>,
@@ -230,88 +231,118 @@ impl Writeable for RoomMutationQuery {
 #[derive(Clone)]
 pub struct AuthorisationService {
     sender: mpsc::Sender<AuthorisationMessage>,
+    room_mutation_sender: mpsc::Sender<AuthorisationMessage>,
 }
 impl AuthorisationService {
     pub fn start(mut auth: RoomAuthorisations) -> Self {
         let (sender, mut receiver) = mpsc::channel::<AuthorisationMessage>(100);
 
-        let self_sender = sender.clone();
+        //special channel to receive RoomMutationQuery from the database writer
+        //separated to avoid potentail deadlock when inserting a lot of room at teh same time
+        let (room_mutation_sender, mut room_mutation_receiver) =
+            mpsc::channel::<AuthorisationMessage>(100);
+
+        let self_sender = room_mutation_sender.clone();
         tokio::spawn(async move {
-            while let Some(msg) = receiver.recv().await {
-                match msg {
-                    AuthorisationMessage::MutationQuery(
-                        mut mutation_query,
-                        database_writer,
-                        reply,
-                    ) => {
-                        let need_room_insert = match auth.validate_mutation(&mut mutation_query) {
-                            Ok(rooms) => {
-                                if rooms.is_empty() {
-                                    false
-                                } else {
-                                    true
-                                }
-                            }
-                            Err(e) => {
-                                let _ = reply.send(Err(e));
-                                continue;
-                            }
-                        };
-                        if need_room_insert {
-                            let query = WriteMessage::RoomMutationQuery(
-                                RoomMutationQuery {
-                                    mutation_query,
-                                    reply,
-                                },
-                                self_sender.clone(),
-                            );
-
-                            let _ = database_writer.send(query).await;
-                        } else {
-                            let query = WriteMessage::MutationQuery(mutation_query, reply);
-                            let _ = database_writer.send(query).await;
+            loop {
+                tokio::select! {
+                    msg = receiver.recv() =>{
+                        match msg {
+                            Some(msg) => {
+                                Self::process_message(msg, &mut auth,&self_sender).await;
+                            },
+                            None => break,
                         }
                     }
-                    AuthorisationMessage::RoomMutationQuery(result, mut query) => match result {
-                        Ok(_) => {
-                            match auth.validate_mutation(&mut query.mutation_query) {
-                                Ok(rooms) => {
-                                    for room in rooms {
-                                        auth.add_room(room);
-                                    }
-                                    let _ = query.reply.send(Ok(query.mutation_query));
-                                }
-                                Err(e) => {
-                                    let _ = query.reply.send(Err(e));
-                                }
-                            };
-                        }
-                        Err(e) => {
-                            let _ = query.reply.send(Err(e));
-                        }
-                    },
-
-                    AuthorisationMessage::Load(rooms, reply) => {
-                        let res = auth.load(&rooms);
-                        let _ = reply.send(res);
-                    }
-
-                    AuthorisationMessage::DeletionQuery(deletion_query, database_writer, reply) => {
-                        match auth.validate_deletion(&deletion_query) {
-                            Ok(_) => {
-                                let query = WriteMessage::DeletionQuery(deletion_query, reply);
-                                let _ = database_writer.send(query).await;
-                            }
-                            Err(e) => {
-                                let _ = reply.send(Err(e));
-                            }
+                    msg = room_mutation_receiver.recv() =>{
+                        match msg {
+                            Some(msg) => {
+                                Self::process_message(msg, &mut auth,&self_sender).await;
+                            },
+                            None => break,
                         }
                     }
                 }
             }
         });
 
-        Self { sender }
+        Self {
+            sender,
+            room_mutation_sender,
+        }
+    }
+
+    pub async fn process_message(
+        msg: AuthorisationMessage,
+        auth: &mut RoomAuthorisations,
+        self_sender: &mpsc::Sender<AuthorisationMessage>,
+    ) {
+        match msg {
+            AuthorisationMessage::MutationQuery(mut mutation_query, database_writer, reply) => {
+                let need_room_insert = match auth.validate_mutation(&mut mutation_query) {
+                    Ok(rooms) => {
+                        if rooms.is_empty() {
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
+                if need_room_insert {
+                    let query = WriteMessage::RoomMutationQuery(
+                        RoomMutationQuery {
+                            mutation_query,
+                            reply,
+                        },
+                        self_sender.clone(),
+                    );
+
+                    let _ = database_writer.send(query).await;
+                } else {
+                    let query = WriteMessage::MutationQuery(mutation_query, reply);
+                    let _ = database_writer.send(query).await;
+                }
+            }
+            AuthorisationMessage::RoomMutationQuery(result, mut query) => match result {
+                Ok(_) => {
+                    match auth.validate_mutation(&mut query.mutation_query) {
+                        Ok(rooms) => {
+                            for room in rooms {
+                                auth.add_room(room);
+                            }
+                            let _ = query.reply.send(Ok(query.mutation_query));
+                        }
+                        Err(e) => {
+                            let _ = query.reply.send(Err(e));
+                        }
+                    };
+                }
+                Err(e) => {
+                    let _ = query.reply.send(Err(e));
+                }
+            },
+
+            AuthorisationMessage::Load(rooms, reply) => {
+                let res = auth.load(&rooms);
+                let _ = reply.send(res);
+            }
+
+            AuthorisationMessage::DeletionQuery(deletion_query, database_writer, reply) => {
+                match auth.validate_deletion(&deletion_query) {
+                    Ok(_) => {
+                        let query = WriteMessage::DeletionQuery(deletion_query, reply);
+                        let _ = database_writer.send(query).await;
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }
+        }
     }
 
     ///
@@ -356,7 +387,7 @@ impl RoomAuthorisations {
                     for room_id in &node.rooms {
                         match self.rooms.get(room_id) {
                             Some(room) => {
-                                let can = if node.verifying_key.eq(&_verifying_key) {
+                                let can = if node.node._verifying_key.eq(&_verifying_key) {
                                     room.can(
                                         &_verifying_key,
                                         &node.name,
@@ -385,7 +416,7 @@ impl RoomAuthorisations {
             }
         }
         for edge in &deletion_query.edges {
-            match edge.source_entity.as_str() {
+            match edge.edge.src_entity.as_str() {
                 configuration::ROOM_ENT
                 | configuration::AUTHORISATION_ENT
                 | configuration::CREDENTIAL_ENT
@@ -395,24 +426,24 @@ impl RoomAuthorisations {
                     for room_id in &edge.rooms {
                         match self.rooms.get(room_id) {
                             Some(room) => {
-                                let can = if edge.verifying_key.eq(&_verifying_key) {
+                                let can = if edge.edge.verifying_key.eq(&_verifying_key) {
                                     room.can(
                                         &_verifying_key,
-                                        &edge.source_entity,
+                                        &edge.src_name,
                                         edge.date,
                                         &RightType::MutateSelf,
                                     )
                                 } else {
                                     room.can(
                                         &_verifying_key,
-                                        &edge.source_entity,
+                                        &edge.src_name,
                                         now(),
                                         &RightType::DeleteAll,
                                     )
                                 };
                                 if !can {
                                     return Err(Error::AuthorisationRejected(
-                                        edge.source_entity.clone(),
+                                        edge.edge.src_entity.clone(),
                                         base64_encode(&room_id),
                                     ));
                                 }

@@ -164,6 +164,7 @@ impl MutationQuery {
         };
 
         let mut node_insert = Self::create_node_to_insert(entity, parameters, conn)?;
+
         let mut json = if let Some(old_node) = &mut node_insert.old_node {
             match &old_node._json {
                 Some(e) => {
@@ -211,6 +212,7 @@ impl MutationQuery {
                                     )? {
                                         let edge = Edge {
                                             src: node_insert.id.clone(),
+                                            src_entity: entity.short_name.clone(),
                                             label: field.short_name.to_string(),
                                             dest: target_id,
                                             cdate: now(),
@@ -252,6 +254,7 @@ impl MutationQuery {
                                 let target_id = insert_query.node_insert.id.clone();
                                 let edge = Edge {
                                     src: node_insert.id.clone(),
+                                    src_entity: entity.short_name.clone(),
                                     label: field.short_name.to_string(),
                                     dest: target_id,
                                     cdate: now(),

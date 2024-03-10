@@ -90,6 +90,8 @@ impl Node {
             id BLOB,
             entity TEXT,
             date INTEGER,
+            verifying_key BLOB NOT NULL,
+            signature BLOB NOT NULL,
             PRIMARY KEY(room, date, id, entity )
         ) WITHOUT ROWID, STRICT",
             [],
@@ -146,6 +148,9 @@ impl Node {
             return Err(Error::InvalidId());
         }
 
+        if self._entity.is_empty() {
+            return Err(Error::EmptyNodeEntity());
+        }
         let size = self.len()?;
         if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
@@ -183,6 +188,9 @@ impl Node {
             return Err(Error::InvalidId());
         }
 
+        if self._entity.is_empty() {
+            return Err(Error::EmptyNodeEntity());
+        }
         //ensure that the Json field is an Object field
         if let Some(v) = &self._json {
             let value: Value = serde_json::from_str(v)?;

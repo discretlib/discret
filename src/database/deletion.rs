@@ -10,22 +10,18 @@ use super::{
 };
 #[derive(Debug)]
 pub struct NodeDelete {
-    pub id: Vec<u8>,
+    pub node: Node,
     pub name: String,
     pub short_name: String,
     pub rooms: HashSet<Vec<u8>>,
-    pub verifying_key: Vec<u8>,
     pub date: i64,
     pub enable_archives: bool,
 }
 #[derive(Debug)]
 pub struct EdgeDelete {
-    pub src: Vec<u8>,
-    pub label: String,
-    pub dest: Vec<u8>,
+    pub edge: Edge,
+    pub src_name: String,
     pub rooms: HashSet<Vec<u8>>,
-    pub source_entity: String,
-    pub verifying_key: Vec<u8>,
     pub date: i64,
 }
 #[derive(Debug)]
@@ -65,41 +61,37 @@ impl DeletionQuery {
                 rooms.insert(row.get(0)?);
             }
 
-            let verifying_key_query =
-                "SELECT _verifying_key FROM _node WHERE id = ? AND _entity = ?";
-            let mut verifying_key_stmt = conn.prepare_cached(verifying_key_query)?;
-            let verifying_key: Vec<u8> =
-                verifying_key_stmt.query_row((&src, &del.short_name), |row| row.get(0))?;
-
             if del.references.is_empty() {
-                deletion_query.nodes.push(NodeDelete {
-                    id: src,
-                    name: del.name.clone(),
-                    short_name: del.short_name.clone(),
-                    rooms: rooms.clone(),
-                    verifying_key: verifying_key.clone(),
-                    date,
-                    enable_archives: del.enable_archives,
-                })
+                let node = Node::get(&src, &del.short_name, conn)?;
+                if let Some(node) = node {
+                    deletion_query.nodes.push(NodeDelete {
+                        node: *node,
+                        name: del.name.clone(),
+                        short_name: del.short_name.clone(),
+                        rooms: rooms.clone(),
+                        date,
+                        enable_archives: del.enable_archives,
+                    })
+                }
             } else {
-                for edge in &del.references {
+                for edge_deletion in &del.references {
                     let dest = parameters
                         .params
-                        .get(&edge.dest_param)
+                        .get(&edge_deletion.dest_param)
                         .unwrap()
                         .as_string()
                         .unwrap();
 
                     let dest = base64_decode(dest.as_bytes())?;
-                    deletion_query.edges.push(EdgeDelete {
-                        src: src.clone(),
-                        label: edge.label.clone(),
-                        dest,
-                        rooms: rooms.clone(),
-                        source_entity: edge.entity_name.clone(),
-                        verifying_key: verifying_key.clone(),
-                        date,
-                    });
+                    let edge = Edge::get(&src, &edge_deletion.label, &dest, conn)?;
+                    if let Some(edge) = edge {
+                        deletion_query.edges.push(EdgeDelete {
+                            edge: *edge,
+                            src_name: del.name.clone(),
+                            rooms: rooms.clone(),
+                            date,
+                        });
+                    }
                 }
             }
         }
@@ -108,11 +100,11 @@ impl DeletionQuery {
 
     pub fn delete(&self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         for edg in &self.edges {
-            Edge::delete_edge(&edg.src, &edg.label, &edg.dest, conn)?;
+            edg.edge.delete(conn)?;
         }
         for nod in &self.nodes {
             Node::delete(
-                &nod.id,
+                &nod.node.id,
                 &nod.short_name,
                 nod.date,
                 nod.enable_archives,

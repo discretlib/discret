@@ -57,8 +57,11 @@ pub enum Error {
     )]
     InvalidId(),
 
-    #[error("database schema cannot be empty or have more than {0} characters")]
-    InvalidNodeSchema(usize),
+    #[error("Entity cannot be empty")]
+    EmptyNodeEntity(),
+
+    #[error("Edge label cannot be empty")]
+    EmptyEdgeLabel(),
 
     #[error("entity {0} with id {1} could not be found and cannot be updated")]
     InvalidMutationId(String, String),
