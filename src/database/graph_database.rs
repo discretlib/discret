@@ -250,7 +250,7 @@ impl GraphDatabase {
 
         let str = serde_json::to_string(&self.data_model)?;
 
-        struct Serialized(String);
+        struct Serialized(String, DataModel);
         impl Writeable for Serialized {
             fn write(
                 &self,
@@ -259,13 +259,38 @@ impl GraphDatabase {
                 let query =
                     "INSERT OR REPLACE INTO _configuration(key, value) VALUES ('Data Model', ?)";
                 conn.execute(query, [&self.0])?;
+
+                let mut index_exists_stmt = conn.prepare_cached(
+                    "SELECT 1 FROM sqlite_master WHERE type= 'index' AND name = ? ",
+                )?;
+                let datamodel = &self.1;
+                for entity in datamodel.entities() {
+                    for to_delete in &entity.1.indexes_to_remove {
+                        let name = to_delete.0;
+                        let node: Option<i64> = index_exists_stmt
+                            .query_row([name], |row| row.get(0))
+                            .optional()?;
+                        if node.is_some() {
+                            conn.execute(&format!("DROP INDEX {}", name), [])?;
+                        }
+                    }
+                    for to_insert in &entity.1.indexes {
+                        let name = to_insert.0;
+                        let node: Option<i64> = index_exists_stmt
+                            .query_row([name], |row| row.get(0))
+                            .optional()?;
+                        if node.is_none() {
+                            conn.execute(&to_insert.1.create_query(), [])?;
+                        }
+                    }
+                }
                 Ok(())
             }
         }
 
         self.graph_database
             .writer
-            .write(Box::new(Serialized(str.clone())))
+            .write(Box::new(Serialized(str.clone(), self.data_model.clone())))
             .await?;
 
         Ok(str)
@@ -551,7 +576,8 @@ mod tests {
         {
             let data_model = "
             Person{ 
-                name:String 
+                name:String,
+                index(name)
             }";
             let path: PathBuf = DATA_PATH.into();
             GraphDatabaseService::start(

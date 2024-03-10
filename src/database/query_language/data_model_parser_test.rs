@@ -67,7 +67,7 @@ mod tests {
         let index = &pet.indexes;
         assert_eq!(1, index.len());
         for i in index.values() {
-            assert_eq!("weight", i.fields[0])
+            assert_eq!("weight", i.fields[0].name)
         }
 
         let weight = pet.fields.get("weight").unwrap();

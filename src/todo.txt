@@ -1,12 +1,13 @@
 
 DataModel: 
    
-    load system DataModel
+
     index
-    disable no_archiving, no_full_text_index
+    add source entity field
+    implements deletions log
+    implements daily log
+    
    
-   
-    //rinf for flutter
     test allow selection of archived entity(starting with $)
     undelete entity through a mutation
 
@@ -22,6 +23,8 @@ DataModel:
         
     - get todays log
     - recompare
+
+    //rinf for flutter
 
 // let instance_map = 
 //     .map

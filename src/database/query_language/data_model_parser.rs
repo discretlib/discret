@@ -217,6 +217,10 @@ impl DataModel {
         Ok(())
     }
 
+    pub fn entities(&self) -> &HashMap<String, Entity> {
+        &self.entities
+    }
+
     fn insert(&mut self, name: String, mut entity: Entity, name_decal: usize) -> Result<(), Error> {
         entity.short_name = (name_decal + self.entities.len()).to_string();
         let old = self.entities.insert(name, entity);
@@ -244,6 +248,30 @@ impl DataModel {
                 name
             )))
         }
+    }
+
+    pub fn add_index(&mut self, entity: &str, index: Index) -> Result<(), Error> {
+        let ent_option = self.entities.get_mut(entity);
+        match ent_option {
+            Some(ent) => {
+                if ent.indexes.get(&index.name()).is_some() {
+                    return Err(Error::InvalidQuery(format!(
+                        "Index '{}' allready exists in entity '{}'",
+                        index.name(),
+                        entity
+                    )));
+                }
+
+                ent.indexes.insert(index.name(), index);
+            }
+            None => {
+                return Err(Error::InvalidQuery(format!(
+                    "Entity '{}' not found in the data model",
+                    entity
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn update(&mut self, model: &str) -> Result<(), Error> {
@@ -334,7 +362,17 @@ impl DataModel {
                     match pair.as_rule() {
                         Rule::entity => {
                             let entity = Self::parse_entity(pair, system)?;
-                            data_model.add_entity(entity, system)?;
+                            let name = entity.0.name.clone();
+                            data_model.add_entity(entity.0, system)?;
+                            for index_vec in entity.1 {
+                                let ent = data_model.get_entity(&name)?;
+                                let mut index = Index::new(name.clone(), ent.short_name.clone());
+                                for field_name in &index_vec {
+                                    let field = ent.get_field(field_name)?;
+                                    index.add_field(field.clone())?;
+                                }
+                                data_model.add_index(&name, index)?;
+                            }
                         }
                         Rule::EOI => {}
                         _ => unreachable!(),
@@ -347,8 +385,12 @@ impl DataModel {
         Ok(data_model)
     }
 
-    fn parse_entity(pair: Pair<'_, Rule>, system: bool) -> Result<Entity, Error> {
+    fn parse_entity(
+        pair: Pair<'_, Rule>,
+        system: bool,
+    ) -> Result<(Entity, Vec<Vec<String>>), Error> {
         let mut entity = Entity::new();
+        let mut parsed_index = Vec::new();
         for entity_pair in pair.into_inner() {
             match entity_pair.as_rule() {
                 Rule::deprecable_identifier => {
@@ -395,8 +437,8 @@ impl DataModel {
                                 entity.add_field(field)?;
                             }
                             Rule::index => {
-                                let index = Self::parse_index(i)?;
-                                entity.add_index(index)?;
+                                let index = Self::parse_index(i);
+                                parsed_index.push(index);
                             }
 
                             _ => unreachable!(),
@@ -407,22 +449,22 @@ impl DataModel {
                 _ => unreachable!(),
             }
         }
-        entity.check_consistency()?;
-        Ok(entity)
+
+        //     entity.check_consistency()?;
+        Ok((entity, parsed_index))
     }
 
-    fn parse_index(entity_pair: Pair<'_, Rule>) -> Result<Index, Error> {
-        let mut index = Index::new();
+    fn parse_index(entity_pair: Pair<'_, Rule>) -> Vec<String> {
+        let mut index = Vec::new();
 
         for field in entity_pair.into_inner() {
             match field.as_rule() {
-                Rule::identifier => index.add_field(field.as_str().to_string())?,
+                Rule::identifier => index.push(field.as_str().to_string()),
                 Rule::comma => {}
                 _ => unreachable!(),
             }
         }
-        //   println!("{:#?}", entity_pair);
-        Ok(index)
+        index
     }
 
     fn is_reserved(value: &str) -> bool {
@@ -647,31 +689,72 @@ impl DataModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
-    pub fields: Vec<String>,
+    pub entity_name: String,
+    pub entity_short: String,
+    pub fields: Vec<Field>,
 }
 
 impl Index {
-    pub fn new() -> Self {
-        Self { fields: Vec::new() }
+    pub fn new(entity_name: String, entity_short: String) -> Self {
+        Self {
+            entity_name,
+            entity_short,
+            fields: Vec::new(),
+        }
     }
-    pub fn add_field(&mut self, name: String) -> Result<(), Error> {
-        if self.fields.contains(&name) {
+    pub fn add_field(&mut self, field: Field) -> Result<(), Error> {
+        match field.field_type {
+            FieldType::Array(_) | FieldType::Entity(_) | FieldType::Json => {
+                return Err(Error::InvalidQuery(format!(
+                    "'{}' 's type {} is not allowed in an index",
+                    &field.name, field.field_type
+                )));
+            }
+            FieldType::Boolean
+            | FieldType::Float
+            | FieldType::Base64
+            | FieldType::Integer
+            | FieldType::String => {}
+        }
+
+        if self.fields.iter().any(|f| f.name.eq(&field.name)) {
             return Err(Error::InvalidQuery(format!(
                 "'{}' is duplicated in the Index",
-                name
+                &field.name
             )));
         }
-        self.fields.push(name);
+        self.fields.push(field);
         Ok(())
     }
 
     pub fn name(&self) -> String {
         let mut name = String::new();
+        name.push_str("idx$");
+        name.push_str(&self.entity_name);
         for i in &self.fields {
             name.push('$');
-            name.push_str(i);
+            name.push_str(&i.name);
         }
         name
+    }
+
+    pub fn create_query(&self) -> String {
+        let mut q = String::new();
+        q.push_str(&format!("CREATE INDEX {} ON _node (", self.name()));
+        let it = &mut self.fields.iter().peekable();
+        while let Some(field) = it.next() {
+            if field.is_system {
+                q.push_str(&field.name);
+            } else {
+                q.push_str(&format!("_json->>'$.{}'", &field.name));
+            }
+            if it.peek().is_some() {
+                q.push(',');
+            }
+        }
+        q.push(')');
+        q.push_str(&format!(" WHERE _entity='{}' ", self.entity_short));
+        q
     }
 }
 
@@ -826,6 +909,12 @@ impl Entity {
                 name
             )));
         }
+        if index.fields.is_empty() {
+            return Err(Error::InvalidQuery(format!(
+                "Index '{}' has no fields",
+                name
+            )));
+        }
         self.indexes.insert(name, index);
         Ok(())
     }
@@ -844,30 +933,6 @@ impl Entity {
                 name, self.name
             )))
         }
-    }
-
-    fn check_consistency(&self) -> Result<(), Error> {
-        for index in self.indexes.values() {
-            for field in &index.fields {
-                if let Some(e) = self.fields.get(field) {
-                    match e.field_type {
-                        FieldType::Array(_) | FieldType::Entity(_) => {
-                            return Err(Error::InvalidQuery(format!(
-                                "Invalid Index: field '{}' cannot be indexed because of its type '{}'. Only scalar values can be indexed ",
-                                field, e.field_type
-                            )));
-                        }
-                        _ => {}
-                    }
-                } else {
-                    return Err(Error::InvalidQuery(format!(
-                        "Invalid Index: field '{}' does not exist in entity '{}' ",
-                        field, self.name
-                    )));
-                }
-            }
-        }
-        Ok(())
     }
 }
 
