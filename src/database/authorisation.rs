@@ -13,7 +13,9 @@ use crate::{
 use super::{
     configuration::{self, AUTH_CRED_FIELD, AUTH_USER_FIELD, ROOM_ENT},
     deletion::DeletionQuery,
+    edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
+    node::NodeDeletionEntry,
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
@@ -331,8 +333,8 @@ impl AuthorisationService {
                 let _ = reply.send(res);
             }
 
-            AuthorisationMessage::DeletionQuery(deletion_query, database_writer, reply) => {
-                match auth.validate_deletion(&deletion_query) {
+            AuthorisationMessage::DeletionQuery(mut deletion_query, database_writer, reply) => {
+                match auth.validate_deletion(&mut deletion_query) {
                     Ok(_) => {
                         let query = WriteMessage::DeletionQuery(deletion_query, reply);
                         let _ = database_writer.send(query).await;
@@ -374,8 +376,9 @@ impl RoomAuthorisations {
         self.rooms.insert(room.id.clone(), room);
     }
 
-    pub fn validate_deletion(&self, deletion_query: &DeletionQuery) -> Result<()> {
-        let _verifying_key = self.signing_key.export_verifying_key();
+    pub fn validate_deletion(&self, deletion_query: &mut DeletionQuery) -> Result<()> {
+        let now = now();
+        let verifying_key = self.signing_key.export_verifying_key();
         for node in &deletion_query.nodes {
             match node.name.as_str() {
                 configuration::ROOM_ENT
@@ -387,20 +390,15 @@ impl RoomAuthorisations {
                     for room_id in &node.rooms {
                         match self.rooms.get(room_id) {
                             Some(room) => {
-                                let can = if node.node._verifying_key.eq(&_verifying_key) {
+                                let can = if node.node._verifying_key.eq(&verifying_key) {
                                     room.can(
-                                        &_verifying_key,
+                                        &verifying_key,
                                         &node.name,
                                         node.date,
                                         &RightType::MutateSelf,
                                     )
                                 } else {
-                                    room.can(
-                                        &_verifying_key,
-                                        &node.name,
-                                        now(),
-                                        &RightType::DeleteAll,
-                                    )
+                                    room.can(&verifying_key, &node.name, now, &RightType::DeleteAll)
                                 };
                                 if !can {
                                     return Err(Error::AuthorisationRejected(
@@ -408,6 +406,14 @@ impl RoomAuthorisations {
                                         base64_encode(&room_id),
                                     ));
                                 }
+                                let log_entry = NodeDeletionEntry::build(
+                                    room.id.clone(),
+                                    &node.node,
+                                    now,
+                                    verifying_key.clone(),
+                                    &self.signing_key,
+                                );
+                                deletion_query.node_log.push(log_entry);
                             }
                             None => return Err(Error::UnknownRoom(base64_encode(room_id))),
                         }
@@ -426,18 +432,18 @@ impl RoomAuthorisations {
                     for room_id in &edge.rooms {
                         match self.rooms.get(room_id) {
                             Some(room) => {
-                                let can = if edge.edge.verifying_key.eq(&_verifying_key) {
+                                let can = if edge.edge.verifying_key.eq(&verifying_key) {
                                     room.can(
-                                        &_verifying_key,
+                                        &verifying_key,
                                         &edge.src_name,
                                         edge.date,
                                         &RightType::MutateSelf,
                                     )
                                 } else {
                                     room.can(
-                                        &_verifying_key,
+                                        &verifying_key,
                                         &edge.src_name,
-                                        now(),
+                                        now,
                                         &RightType::DeleteAll,
                                     )
                                 };
@@ -447,6 +453,14 @@ impl RoomAuthorisations {
                                         base64_encode(&room_id),
                                     ));
                                 }
+                                let log_entry = EdgeDeletionEntry::build(
+                                    room.id.clone(),
+                                    &edge.edge,
+                                    now,
+                                    verifying_key.clone(),
+                                    &self.signing_key,
+                                );
+                                deletion_query.edge_log.push(log_entry);
                             }
                             None => return Err(Error::UnknownRoom(base64_encode(room_id))),
                         }
@@ -463,24 +477,25 @@ impl RoomAuthorisations {
 
         let verifying_key = self.signing_key.export_verifying_key();
         let mut rooms = Vec::new();
-        for insert_entity in &mut mutation_query.insert_entities {
-            let mut rooms_ent = self.validate_insert_entity(insert_entity, &verifying_key)?;
+        for insert_entity in &mut mutation_query.mutate_entities {
+            let mut rooms_ent = self.validate_entity_mutation(insert_entity, &verifying_key)?;
+
             rooms.append(&mut rooms_ent);
         }
         Ok(rooms)
     }
 
-    pub fn validate_insert_entity(
+    pub fn validate_entity_mutation(
         &self,
-        insert_entity: &mut InsertEntity,
+        entity_to_mutate: &mut InsertEntity,
         verifying_key: &Vec<u8>,
     ) -> Result<Vec<Room>> {
-        let to_insert = &insert_entity.node_insert;
+        let to_insert = &entity_to_mutate.node_to_mutate;
         let mut rooms = Vec::new();
-
+        let now = now();
         match to_insert.entity.as_str() {
             configuration::ROOM_ENT => {
-                let room = self.validate_room_mutation(insert_entity, verifying_key)?;
+                let room = self.validate_room_mutation(entity_to_mutate, verifying_key)?;
                 if let Some(room) = room {
                     rooms.push(room);
                 }
@@ -494,71 +509,89 @@ impl RoomAuthorisations {
                 ))
             }
             _ => {
-                if let Some(node) = &to_insert.node {
-                    match &to_insert.old_node {
-                        Some(old_node) => {
-                            let same_user = old_node._verifying_key.eq(&node._verifying_key);
-                            for room_id in &to_insert.rooms {
-                                if let Some(room) = self.rooms.get(room_id) {
-                                    let can = if same_user {
-                                        room.can(
-                                            &node._verifying_key,
-                                            &to_insert.entity,
-                                            node.mdate,
-                                            &RightType::MutateSelf,
-                                        )
-                                    } else {
-                                        room.can(
-                                            &node._verifying_key,
-                                            &to_insert.entity,
-                                            node.mdate,
-                                            &RightType::MutateAll,
-                                        )
-                                    };
-                                    if !can {
-                                        return Err(Error::AuthorisationRejected(
-                                            to_insert.entity.clone(),
-                                            base64_encode(&room_id),
-                                        ));
-                                    }
-                                } else {
-                                    return Err(Error::UnknownRoom(base64_encode(room_id)));
-                                }
-                            }
-
-                            //
-                            // add author edge
-                            //
-                        }
-                        None => {
-                            for room_id in &to_insert.rooms {
-                                //    println!("{}  {}", base64_encode(&room_id), to_insert.entity);
-                                if let Some(room) = self.rooms.get(room_id) {
-                                    let can = room.can(
-                                        &node._verifying_key,
+                match &to_insert.old_node {
+                    Some(old_node) => {
+                        let same_user = old_node._verifying_key.eq(verifying_key);
+                        for room_id in &to_insert.rooms {
+                            if let Some(room) = self.rooms.get(room_id) {
+                                let can = if same_user {
+                                    room.can(
+                                        &verifying_key,
                                         &to_insert.entity,
-                                        node.mdate,
+                                        to_insert.date,
                                         &RightType::MutateSelf,
-                                    );
-                                    if !can {
-                                        return Err(Error::AuthorisationRejected(
-                                            to_insert.entity.clone(),
-                                            base64_encode(&room_id),
-                                        ));
-                                    }
+                                    )
                                 } else {
-                                    return Err(Error::UnknownRoom(base64_encode(room_id)));
+                                    room.can(
+                                        &verifying_key,
+                                        &to_insert.entity,
+                                        to_insert.date,
+                                        &RightType::MutateAll,
+                                    )
+                                };
+                                if !can {
+                                    return Err(Error::AuthorisationRejected(
+                                        to_insert.entity.clone(),
+                                        base64_encode(&room_id),
+                                    ));
                                 }
+                                for edge_deletion in &entity_to_mutate.edge_deletions {
+                                    let log = EdgeDeletionEntry::build(
+                                        room.id.clone(),
+                                        edge_deletion,
+                                        now,
+                                        verifying_key.clone(),
+                                        &self.signing_key,
+                                    );
+                                    entity_to_mutate.edge_deletions_log.push(log);
+                                }
+                            } else {
+                                return Err(Error::UnknownRoom(base64_encode(room_id)));
+                            }
+                        }
+
+                        //
+                        // add author edge
+                        //
+                    }
+                    None => {
+                        for room_id in &to_insert.rooms {
+                            //    println!("{}  {}", base64_encode(&room_id), to_insert.entity);
+                            if let Some(room) = self.rooms.get(room_id) {
+                                let can = room.can(
+                                    verifying_key,
+                                    &to_insert.entity,
+                                    to_insert.date,
+                                    &RightType::MutateSelf,
+                                );
+                                if !can {
+                                    return Err(Error::AuthorisationRejected(
+                                        to_insert.entity.clone(),
+                                        base64_encode(&room_id),
+                                    ));
+                                }
+                                for edge_deletion in &entity_to_mutate.edge_deletions {
+                                    let log = EdgeDeletionEntry::build(
+                                        room.id.clone(),
+                                        edge_deletion,
+                                        now,
+                                        verifying_key.clone(),
+                                        &self.signing_key,
+                                    );
+                                    entity_to_mutate.edge_deletions_log.push(log);
+                                }
+                            } else {
+                                return Err(Error::UnknownRoom(base64_encode(room_id)));
                             }
                         }
                     }
+                }
 
-                    for entry in &mut insert_entity.sub_nodes {
-                        for insert_entity in entry.1 {
-                            let mut room_ent =
-                                self.validate_insert_entity(insert_entity, verifying_key)?;
-                            rooms.append(&mut room_ent);
-                        }
+                for entry in &mut entity_to_mutate.sub_nodes {
+                    for insert_entity in entry.1 {
+                        let mut room_ent =
+                            self.validate_entity_mutation(insert_entity, verifying_key)?;
+                        rooms.append(&mut room_ent);
                     }
                 }
             }
@@ -572,7 +605,7 @@ impl RoomAuthorisations {
         insert_entity: &mut InsertEntity,
         verifying_key: &Vec<u8>,
     ) -> Result<Option<Room>> {
-        let node_insert = &insert_entity.node_insert;
+        let node_insert = &insert_entity.node_to_mutate;
 
         if !insert_entity.edge_deletions.is_empty() {
             return Err(Error::CannotRemove(
@@ -672,7 +705,7 @@ impl RoomAuthorisations {
         }
 
         let room_user = &room.clone();
-        let node_insert = &insert_entity.node_insert;
+        let node_insert = &insert_entity.node_to_mutate;
 
         //verify that the passed authentication belongs to the room
         let authorisation = match &node_insert.node {
@@ -708,7 +741,7 @@ impl RoomAuthorisations {
                                 ROOM_ENT.to_string(),
                             ));
                         }
-                        let node_insert = &insert_entity.node_insert;
+                        let node_insert = &insert_entity.node_to_mutate;
 
                         if node_insert.node.is_none() || node_insert.old_node.is_some() {
                             return Err(Error::UpdateNotAllowed());
@@ -733,8 +766,8 @@ impl RoomAuthorisations {
                                 ROOM_ENT.to_string(),
                             ));
                         }
-                        if insert_entity.node_insert.node.is_none()
-                            || insert_entity.node_insert.old_node.is_some()
+                        if insert_entity.node_to_mutate.node.is_none()
+                            || insert_entity.node_to_mutate.old_node.is_some()
                         {
                             return Err(Error::UpdateNotAllowed());
                         }
@@ -755,7 +788,7 @@ impl RoomAuthorisations {
         room_user: &Room,
         authorisation: &mut Authorisation,
     ) -> Result<()> {
-        let node_insert = &insert_entity.node_insert;
+        let node_insert = &insert_entity.node_to_mutate;
         if let Some(node) = &node_insert.node {
             if let Some(json) = &node._json {
                 let user = user_from(json, node.mdate)?;
@@ -799,7 +832,7 @@ impl RoomAuthorisations {
                 ));
             }
             for insert_entity in entry.1 {
-                let node_insert = &insert_entity.node_insert;
+                let node_insert = &insert_entity.node_to_mutate;
                 if node_insert.node.is_none() || node_insert.old_node.is_some() {
                     return Err(Error::UpdateNotAllowed());
                 }

@@ -1,20 +1,36 @@
 
 Database: 
-    - add source entity field to edges
-    - add a thread to authorisations to process room_mutation
-    - deletion now carries the node and edges to be deleted
-    to allow the insertion in the deletion log
-
-
     implements signed deletions log 
     implements daily log
            upsert: INSERT INTO vocabulary(word) VALUES('jovial') ON CONFLICT(word) DO UPDATE SET count=count+1;
    
-
+    better null and not null handling in querie
     add a priority thread to database for interactive queries
+    add performance monitoring service
 
 
+    synchronisation
+        register a sync handler
+        register a Connection (verfying_key, mpsc)
+            send rooms for the key
+        roomsreveived
+            get missing room
+        synchronise new room
+            verify history
+            mark complete
 
+        synchronise others based on most recent update
+            verify history
+    
+    log handler
+        when synchronisation is complete
+        conflicts
+        conn is create_di
+        disconnect
+        
+    after mutation
+        send 
+        
 
     test allow selection of archived entity(starting with $)
     undelete entity through a mutation

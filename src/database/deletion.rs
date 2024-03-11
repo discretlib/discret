@@ -3,9 +3,10 @@ use std::{collections::HashSet, sync::Arc};
 
 use super::{
     configuration::ROOMS_FIELD_SHORT,
-    edge::Edge,
-    node::Node,
+    edge::{Edge, EdgeDeletionEntry},
+    node::{Node, NodeDeletionEntry},
     query_language::{deletion_parser::DeletionParser, parameter::Parameters},
+    sqlite_database::Writeable,
     Result,
 };
 #[derive(Debug)]
@@ -27,7 +28,9 @@ pub struct EdgeDelete {
 #[derive(Debug)]
 pub struct DeletionQuery {
     pub nodes: Vec<NodeDelete>,
+    pub node_log: Vec<NodeDeletionEntry>,
     pub edges: Vec<EdgeDelete>,
+    pub edge_log: Vec<EdgeDeletionEntry>,
 }
 impl DeletionQuery {
     pub fn build(
@@ -39,7 +42,9 @@ impl DeletionQuery {
         deletion.variables.validate_params(parameters)?;
         let mut deletion_query = Self {
             nodes: Vec::new(),
+            node_log: Vec::new(),
             edges: Vec::new(),
+            edge_log: Vec::new(),
         };
         for del in &deletion.deletions {
             let src = parameters
@@ -102,6 +107,9 @@ impl DeletionQuery {
         for edg in &self.edges {
             edg.edge.delete(conn)?;
         }
+        for log in &self.edge_log {
+            log.write(conn)?;
+        }
         for nod in &self.nodes {
             Node::delete(
                 &nod.node.id,
@@ -110,6 +118,9 @@ impl DeletionQuery {
                 nod.enable_archives,
                 conn,
             )?;
+        }
+        for log in &self.node_log {
+            log.write(conn)?;
         }
         Ok(())
     }

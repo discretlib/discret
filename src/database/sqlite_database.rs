@@ -315,7 +315,7 @@ impl DatabaseReader {
         receive_response.await?
     }
 
-    fn select<T: Send + Sized + 'static>(
+    pub fn select<T: Send + Sized + 'static>(
         query: &str,
         params: &Vec<Box<dyn ToSql + Sync + Send>>,
         mapping: &RowMappingFn<T>,

@@ -1,5 +1,5 @@
 use super::{
-    sqlite_database::{is_valid_id_len, RowMappingFn, MAX_ROW_LENTGH},
+    sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{base64_encode, import_verifying_key, new_id, now, SigningKey};
@@ -79,9 +79,14 @@ impl Node {
 
         //the full text search virtual table
         conn.execute(
-            "CREATE VIRTUAL TABLE _node_fts USING fts5(text, content='' , prefix='2,3' , detail=none)",
+            "CREATE VIRTUAL TABLE _node_fts USING fts5(text, content='' , tokenize='trigram', detail=full)",
             [],
         )?;
+
+        // conn.execute(
+        //     "CREATE VIRTUAL TABLE _node_fts USING fts5(text, content='' , prefix='2,3' , detail=none)",
+        //     [],
+        // )?;
 
         //log the deletions for synchronisation
         conn.execute(
@@ -89,11 +94,27 @@ impl Node {
             room BLOB,
             id BLOB,
             entity TEXT,
-            date INTEGER,
+            deletion_date INTEGER,
             verifying_key BLOB NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(room, date, id, entity )
+            PRIMARY KEY(room, deletion_date, id, entity )
         ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE _daily_node_log (
+            room BLOB NOT NULL,
+            date INTEGER NOT NULL,
+            entry_number INTEGER,
+            daily_hash BLOB,
+            need_recompute INTEGER, 
+            PRIMARY KEY (room, date)
+        ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX _daily_node_log_recompute_room_date ON _daily_node_log (need_recompute, room, date)",
             [],
         )?;
         Ok(())
@@ -424,6 +445,102 @@ impl Node {
         Ok(())
     }
 }
+#[derive(Debug)]
+pub struct NodeDeletionEntry {
+    pub room: Vec<u8>,
+    pub id: Vec<u8>,
+    pub entity: String,
+    pub deletion_date: i64,
+    pub verifying_key: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub mdate: i64,
+}
+impl NodeDeletionEntry {
+    pub fn build(
+        room: Vec<u8>,
+        node: &Node,
+        deletion_date: i64,
+        verifying_key: Vec<u8>,
+        signing_key: &impl SigningKey,
+    ) -> Self {
+        let signature = Self::sign(&room, node, deletion_date, &verifying_key, signing_key);
+        Self {
+            room,
+            id: node.id.clone(),
+            entity: node._entity.clone(),
+            deletion_date,
+            verifying_key,
+            signature,
+            mdate: node.mdate,
+        }
+    }
+
+    pub fn sign(
+        room: &Vec<u8>,
+        node: &Node,
+        deletion_date: i64,
+        verifying_key: &Vec<u8>,
+        signing_key: &impl SigningKey,
+    ) -> Vec<u8> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(room);
+        hasher.update(&node.id);
+        hasher.update(&node._entity.as_bytes());
+        hasher.update(&deletion_date.to_le_bytes());
+        hasher.update(verifying_key);
+        let hash = hasher.finalize();
+        signing_key.sign(hash.as_bytes())
+    }
+
+    pub fn verify(&self) -> Result<()> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.room);
+        hasher.update(&self.id);
+        hasher.update(&self.entity.as_bytes());
+        hasher.update(&self.deletion_date.to_le_bytes());
+        hasher.update(&self.verifying_key);
+        let hash = hasher.finalize();
+        let pub_key = import_verifying_key(&self.verifying_key)?;
+        pub_key.verify(hash.as_bytes(), &self.signature)?;
+        Ok(())
+    }
+
+    pub const MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(NodeDeletionEntry {
+            room: row.get(0)?,
+            id: row.get(1)?,
+            entity: row.get(2)?,
+            deletion_date: row.get(3)?,
+            verifying_key: row.get(4)?,
+            signature: row.get(5)?,
+            mdate: 0,
+        }))
+    };
+}
+impl Writeable for NodeDeletionEntry {
+    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _node_deletion_log (
+                room,
+                id,
+                entity,
+                deletion_date,
+                verifying_key,
+                signature
+            ) VALUES (?,?,?,?,?,?)
+        ",
+        )?;
+        insert_stmt.execute((
+            &self.room,
+            &self.id,
+            &self.entity,
+            &self.deletion_date,
+            &self.verifying_key,
+            &self.signature,
+        ))?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -658,5 +775,50 @@ mod tests {
         let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
         let num_nodes: i64 = exists_stmt.query_row([], |row| Ok(row.get(0)?)).unwrap();
         assert_eq!(0, num_nodes);
+    }
+
+    #[test]
+    fn node_deletion_log() {
+        let conn = Connection::open_in_memory().unwrap();
+        Node::create_table(&conn).unwrap();
+
+        let signing_key = Ed25519SigningKey::new();
+        let entity = "Pet";
+
+        let mut node = Node {
+            _entity: String::from(entity),
+            ..Default::default()
+        };
+        node.sign(&signing_key).unwrap();
+        node.write(&conn, false, &None, &None, &None).unwrap();
+        Node::delete(&node.id, &node._entity, node.mdate, false, &conn).unwrap();
+
+        let node_deletion_log = NodeDeletionEntry::build(
+            Vec::new(),
+            &node,
+            now(),
+            signing_key.export_verifying_key(),
+            &signing_key,
+        );
+        node_deletion_log.write(&conn).unwrap();
+        let mut exists_stmt = conn
+            .prepare(
+                "SELECT  
+                        room,
+                        id,
+                        entity,
+                        deletion_date,
+                        verifying_key,
+                        signature 
+                    FROM _node_deletion_log",
+            )
+            .unwrap();
+        let node_deletion_log = exists_stmt
+            .query_row([], NodeDeletionEntry::MAPPING)
+            .unwrap();
+        node_deletion_log.verify().unwrap();
+
+        assert_eq!(&node.id, &node_deletion_log.id);
+        assert_eq!(&node._entity, &node_deletion_log.entity);
     }
 }

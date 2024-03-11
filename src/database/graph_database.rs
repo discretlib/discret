@@ -1,5 +1,5 @@
 use lru::LruCache;
-use rusqlite::OptionalExtension;
+use rusqlite::{OptionalExtension, ToSql};
 use std::collections::HashMap;
 use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot::Sender;
@@ -9,6 +9,7 @@ use super::authorisation::{AuthorisationMessage, AuthorisationService, RoomAutho
 use super::configuration;
 use super::deletion::DeletionQuery;
 use super::query_language::deletion_parser::DeletionParser;
+use super::sqlite_database::{DatabaseReader, RowMappingFn};
 use super::{
     configuration::Configuration,
     mutation_query::MutationQuery,
@@ -35,6 +36,7 @@ enum Message {
 #[derive(Clone)]
 pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
+    database_reader: DatabaseReader,
     verifying_key: Vec<u8>,
 }
 impl GraphDatabaseService {
@@ -50,6 +52,8 @@ impl GraphDatabaseService {
         let mut service = GraphDatabase::open(name, key_material, data_folder, config)?;
         service.update_data_model(model).await?;
         service.initialise_authorisations().await?;
+
+        let database_reader = service.graph_database.reader.clone();
 
         let verifying_key = service.verifying_key.clone();
         tokio::spawn(async move {
@@ -105,6 +109,7 @@ impl GraphDatabaseService {
 
         Ok(GraphDatabaseService {
             sender,
+            database_reader,
             verifying_key,
         })
     }
@@ -116,11 +121,11 @@ impl GraphDatabaseService {
     pub async fn delete(
         &self,
         deletion: &str,
-        parameters: Option<Parameters>,
+        param_opt: Option<Parameters>,
     ) -> Result<DeletionQuery> {
         let (send, recieve) = oneshot::channel::<Result<DeletionQuery>>();
 
-        let msg = Message::Delete(deletion.to_string(), parameters.unwrap_or_default(), send);
+        let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
         recieve.await?
@@ -129,19 +134,19 @@ impl GraphDatabaseService {
     pub async fn mutate(
         &self,
         mutation: &str,
-        parameters: Option<Parameters>,
+        param_opt: Option<Parameters>,
     ) -> Result<MutationQuery> {
         let (send, recieve) = oneshot::channel::<Result<MutationQuery>>();
 
-        let msg = Message::Mutate(mutation.to_string(), parameters.unwrap_or_default(), send);
+        let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
         recieve.await?
     }
 
-    pub async fn query(&self, query: &str, parameters: Option<Parameters>) -> Result<String> {
+    pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
         let (send, recieve) = oneshot::channel::<Result<String>>();
-        let msg = Message::Query(query.to_string(), parameters.unwrap_or_default(), send);
+        let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
         recieve.await?
     }
@@ -151,6 +156,24 @@ impl GraphDatabaseService {
         let msg = Message::UpdateModel(query.to_string(), send);
         let _ = self.sender.send(msg).await;
         recieve.await?
+    }
+
+    pub async fn select<T: Send + Sized + 'static>(
+        &self,
+        query: String,
+        params: Vec<Box<dyn ToSql + Sync + Send>>,
+        mapping: RowMappingFn<T>,
+    ) -> Result<Vec<T>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
+
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let result =
+                    DatabaseReader::select(&query, &params, &mapping, conn).map_err(Error::from);
+                let _ = send_response.send(result);
+            }))
+            .await?;
+        receive_response.await?
     }
 }
 
@@ -545,7 +568,7 @@ mod tests {
             .await
             .unwrap();
 
-        let e = &res.insert_entities[0].node_insert.id;
+        let e = &res.mutate_entities[0].node_to_mutate.id;
 
         let mut param = Parameters::new();
         param.add("id", base64_encode(e)).unwrap();

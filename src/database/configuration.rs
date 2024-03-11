@@ -79,23 +79,7 @@ pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     ) WITHOUT ROWID, STRICT",
         [],
     )?;
-    conn.execute(
-        "CREATE TABLE _daily_log (
-        room BLOB NOT NULL,
-        date INTEGER NOT NULL,
-        entry_number INTEGER,
-        size INTEGER,
-        daily_hash BLOB,
-        need_recompute INTEGER, 
-        PRIMARY KEY (room, date)
-    ) WITHOUT ROWID, STRICT",
-        [],
-    )?;
 
-    conn.execute(
-        "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (need_recompute, room, date)",
-        [],
-    )?;
     Ok(())
 }
 

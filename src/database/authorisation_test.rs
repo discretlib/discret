@@ -8,7 +8,9 @@ mod tests {
         database::{
             authorisation::*,
             configuration::Configuration,
+            edge::EdgeDeletionEntry,
             graph_database::GraphDatabaseService,
+            node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
     };
@@ -315,14 +317,14 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let _auth_id = base64_encode(&authorisation_insert.node_insert.id);
+        let _auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
         let credentials_insert = &authorisation_insert.sub_nodes.get("credentials").unwrap()[0];
-        let _cred_id = base64_encode(&credentials_insert.node_insert.id);
+        let _cred_id = base64_encode(&credentials_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -402,8 +404,8 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let pet_room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let pet_room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("pet_room_id", pet_room_id.clone()).unwrap();
@@ -610,14 +612,14 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_insert.id);
+        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
         let credentials_insert = &authorisation_insert.sub_nodes.get("credentials").unwrap()[0];
-        let cred_id = base64_encode(&credentials_insert.node_insert.id);
+        let cred_id = base64_encode(&credentials_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -824,14 +826,14 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_insert.id);
+        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
         let user_insert = &authorisation_insert.sub_nodes.get("users").unwrap()[0];
-        let user_id = base64_encode(&user_insert.node_insert.id);
+        let user_id = base64_encode(&user_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -1015,11 +1017,11 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_insert.id);
+        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -1123,8 +1125,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            let room_insert = &room.insert_entities[0];
-            let room_person_id = base64_encode(&room_insert.node_insert.id);
+            let room_insert = &room.mutate_entities[0];
+            let room_person_id = base64_encode(&room_insert.node_to_mutate.id);
 
             let mut param = Parameters::default();
             param.add("user_id", user_id.clone()).unwrap();
@@ -1157,8 +1159,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            let room_insert = &room.insert_entities[0];
-            let room_pet_id = base64_encode(&room_insert.node_insert.id);
+            let room_insert = &room.mutate_entities[0];
+            let room_pet_id = base64_encode(&room_insert.node_to_mutate.id);
 
             (room_person_id, room_pet_id)
         };
@@ -1306,11 +1308,11 @@ mod tests {
             .await
             .unwrap();
 
-        let room_insert = &room.insert_entities[0];
-        let room_id = base64_encode(&room_insert.node_insert.id);
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_insert.id);
+        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -1333,17 +1335,17 @@ mod tests {
             .await
             .expect("can insert");
 
-        let ent = &mutat.insert_entities[0];
+        let ent = &mutat.mutate_entities[0];
         assert_eq!("P1", ent.name);
-        let id1 = base64_encode(&ent.node_insert.id);
+        let id1 = base64_encode(&ent.node_to_mutate.id);
         let parents = ent.sub_nodes.get("parents").unwrap();
 
-        let father_id = base64_encode(&parents[0].node_insert.id);
-        let mother_id = base64_encode(&parents[1].node_insert.id);
+        let father_id = base64_encode(&parents[0].node_to_mutate.id);
+        let mother_id = base64_encode(&parents[1].node_to_mutate.id);
 
-        let ent = &mutat.insert_entities[1];
+        let ent = &mutat.mutate_entities[1];
         assert_eq!("P2", ent.name);
-        let id2 = base64_encode(&ent.node_insert.id);
+        let id2 = base64_encode(&ent.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("id", id2).unwrap();
@@ -1477,5 +1479,195 @@ mod tests {
         assert_eq!(result, expected);
         //println!("{:#?}", result);
         //println!("{}", result);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletion_log() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random_secret();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        type: "whatever"
+                        authorisations:[{
+                            name:"admin"
+                            credentials: [{
+                                mutate_room:true
+                                mutate_room_users:true
+                                rights:[{
+                                    entity:"Person"
+                                    mutate_self:true
+                                    delete_all:true
+                                    mutate_all:true
+                                }]
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+
+        let mutat = app
+            .mutate(
+                r#"mutation mut {
+                P1: Person{
+                    _rooms: [{id:$room_id}]
+                    name: "me"
+                    parents:[{name:"father"},{name:"mother"}]
+                }
+                P2: Person{
+                    _rooms: [{id:$room_id}]
+                    name: "another me"
+                }
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("can insert");
+
+        let ent = &mutat.mutate_entities[0];
+        assert_eq!("P1", ent.name);
+        let id1 = base64_encode(&ent.node_to_mutate.id);
+        let parents = ent.sub_nodes.get("parents").unwrap();
+
+        let father_id = base64_encode(&parents[0].node_to_mutate.id);
+
+        let ent = &mutat.mutate_entities[1];
+        assert_eq!("P2", ent.name);
+        let id2 = base64_encode(&ent.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("id", id2.clone()).unwrap();
+
+        app.delete(
+            "deletion delete_person {
+            Person { $id  }
+        }",
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let node_log_query = "SELECT  
+            room,
+            id,
+            entity,
+            deletion_date,
+            verifying_key,
+            signature 
+        FROM _node_deletion_log";
+
+        let res = app
+            .select(
+                node_log_query.to_string(),
+                Vec::new(),
+                NodeDeletionEntry::MAPPING,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(1, res.len());
+        assert_eq!(id2, base64_encode(&res[0].id));
+
+        let mut param = Parameters::default();
+        param.add("id", id1.clone()).unwrap();
+        param.add("father_id", father_id.clone()).unwrap();
+        app.delete(
+            "deletion delete_person {
+            Person { 
+                $id
+                parents[$father_id]
+            }
+        }",
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let edge_log_query = "SELECT 
+                room,
+                src,
+                src_entity, 
+                dest,
+                label,
+                deletion_date,
+                verifying_key,
+                signature
+            FROM  _edge_deletion_log";
+
+        let res = app
+            .select(
+                edge_log_query.to_string(),
+                Vec::new(),
+                EdgeDeletionEntry::MAPPING,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(1, res.len());
+        assert_eq!(id1.clone(), base64_encode(&res[0].src));
+        assert_eq!(father_id.clone(), base64_encode(&res[0].dest));
+
+        let mut param = Parameters::default();
+        param.add("id", id1.clone()).unwrap();
+
+        app.mutate(
+            "mutation mut {
+            Person{
+                id:$id
+                parents: null
+            }
+        }",
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let res = app
+            .select(
+                edge_log_query.to_string(),
+                Vec::new(),
+                EdgeDeletionEntry::MAPPING,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(2, res.len());
     }
 }

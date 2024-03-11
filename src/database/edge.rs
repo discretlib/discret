@@ -1,5 +1,5 @@
 use super::{
-    sqlite_database::{is_valid_id_len, RowMappingFn, MAX_ROW_LENTGH},
+    sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::cryptography::{base64_encode, import_verifying_key, now, SigningKey};
@@ -56,11 +56,27 @@ impl Edge {
             src_entity TEXT NOT NULL, 
             dest BLOB NOT NULL,
             label TEXT NOT NULL,
-            date INTEGER NOT NULL,
+            deletion_date INTEGER NOT NULL,
             verifying_key BLOB NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(room, src, src_entity, label, dest, date)
+            PRIMARY KEY(room, deletion_date, src, label, dest )
         ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE _daily_edge_log (
+            room BLOB NOT NULL,
+            date INTEGER NOT NULL,
+            entry_number INTEGER,
+            daily_hash BLOB,
+            need_recompute INTEGER, 
+            PRIMARY KEY (room, date)
+        ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX _daily_edge_log_recompute_room_date ON _daily_edge_log (need_recompute, room, date)",
             [],
         )?;
         Ok(())
@@ -315,7 +331,116 @@ impl Default for Edge {
         }
     }
 }
+#[derive(Debug)]
+pub struct EdgeDeletionEntry {
+    pub room: Vec<u8>,
+    pub src: Vec<u8>,
+    pub src_entity: String,
+    pub label: String,
+    pub dest: Vec<u8>,
+    pub deletion_date: i64,
+    pub verifying_key: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub date: i64,
+}
+impl EdgeDeletionEntry {
+    pub fn build(
+        room: Vec<u8>,
+        edge: &Edge,
+        deletion_date: i64,
+        verifying_key: Vec<u8>,
+        signing_key: &impl SigningKey,
+    ) -> Self {
+        let signature = Self::sign(&room, edge, deletion_date, &verifying_key, signing_key);
+        Self {
+            room,
+            src: edge.src.clone(),
+            src_entity: edge.src_entity.clone(),
+            label: edge.label.clone(),
+            dest: edge.dest.clone(),
+            deletion_date,
+            verifying_key,
+            signature,
+            date: edge.cdate, //not included in the signature and not inserted in the log, only used to update the daily log
+        }
+    }
 
+    pub fn sign(
+        room: &Vec<u8>,
+        edge: &Edge,
+        deletion_date: i64,
+        verifying_key: &Vec<u8>,
+        signing_key: &impl SigningKey,
+    ) -> Vec<u8> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(room);
+        hasher.update(&edge.src);
+        hasher.update(&edge.src_entity.as_bytes());
+        hasher.update(&edge.label.as_bytes());
+        hasher.update(&edge.dest);
+        hasher.update(&deletion_date.to_le_bytes());
+        hasher.update(verifying_key);
+        let hash = hasher.finalize();
+        signing_key.sign(hash.as_bytes())
+    }
+
+    pub fn verify(&self) -> Result<()> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.room);
+        hasher.update(&self.src);
+        hasher.update(&self.src_entity.as_bytes());
+        hasher.update(&self.label.as_bytes());
+        hasher.update(&self.dest);
+        hasher.update(&self.deletion_date.to_le_bytes());
+        hasher.update(&self.verifying_key);
+        let hash = hasher.finalize();
+        let pub_key = import_verifying_key(&self.verifying_key)?;
+        pub_key.verify(hash.as_bytes(), &self.signature)?;
+        Ok(())
+    }
+
+    pub const MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(EdgeDeletionEntry {
+            room: row.get(0)?,
+            src: row.get(1)?,
+            src_entity: row.get(2)?,
+            dest: row.get(3)?,
+            label: row.get(4)?,
+            deletion_date: row.get(5)?,
+            verifying_key: row.get(6)?,
+            signature: row.get(7)?,
+            date: 0,
+        }))
+    };
+}
+impl Writeable for EdgeDeletionEntry {
+    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _edge_deletion_log (
+            room,
+            src,
+            src_entity, 
+            dest,
+            label,
+            deletion_date,
+            verifying_key,
+            signature
+        ) VALUES (?,?,?,?,?,?,?,?)",
+        )?;
+
+        insert_stmt.execute((
+            &self.room,
+            &self.src,
+            &self.src_entity,
+            &self.dest,
+            &self.label,
+            &self.deletion_date,
+            &self.verifying_key,
+            &self.signature,
+        ))?;
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
 
@@ -447,5 +572,60 @@ mod tests {
         new_edge.delete(&conn).unwrap();
         let edges = Edge::get_edges(&from, label, &conn).unwrap();
         assert_eq!(1, edges.len());
+    }
+
+    #[test]
+    fn edge_deletion_log() {
+        let signing_key = Ed25519SigningKey::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        let label = "pet";
+        let from = new_id();
+        let to = new_id();
+        let mut e = Edge {
+            src: from.clone(),
+            src_entity: "0".to_string(),
+            label: String::from(label),
+            dest: to.clone(),
+            ..Default::default()
+        };
+
+        e.sign(&signing_key).unwrap();
+        e.write(&conn).unwrap();
+        e.delete(&conn).unwrap();
+
+        let log = EdgeDeletionEntry::build(
+            Vec::new(),
+            &e,
+            now(),
+            signing_key.export_verifying_key(),
+            &signing_key,
+        );
+
+        log.write(&conn).unwrap();
+
+        let mut exists_stmt = conn
+            .prepare(
+                "SELECT 
+                room,
+                src,
+                src_entity, 
+                dest,
+                label,
+                deletion_date,
+                verifying_key,
+                signature
+            FROM  _edge_deletion_log",
+            )
+            .unwrap();
+        let edge_deletion_log = exists_stmt
+            .query_row([], EdgeDeletionEntry::MAPPING)
+            .unwrap();
+        edge_deletion_log.verify().unwrap();
+
+        assert_eq!(&e.src, &edge_deletion_log.src);
+        assert_eq!(&e.src_entity, &edge_deletion_log.src_entity);
+        assert_eq!(&e.label, &edge_deletion_log.label);
+        assert_eq!(&e.dest, &edge_deletion_log.dest);
     }
 }
