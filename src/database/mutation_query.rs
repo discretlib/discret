@@ -14,7 +14,7 @@ use super::{
         parameter::Parameters,
         FieldType,
     },
-    sqlite_database::{RowMappingFn, Writeable},
+    sqlite_database::{DailyRoomMutations, RowMappingFn, Writeable},
     Error, Result,
 };
 use std::{
@@ -121,6 +121,12 @@ impl Writeable for MutationQuery {
     }
 }
 impl MutationQuery {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+        for insert in &self.mutate_entities {
+            insert.update_daily_logs(daily_log);
+        }
+    }
+
     pub fn build(
         parameters: &Parameters,
         mutation: Arc<MutationParser>,
@@ -446,6 +452,28 @@ impl InsertEntity {
         }
 
         Ok(())
+    }
+
+    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+        for query in &self.sub_nodes {
+            for insert in query.1 {
+                insert.update_daily_logs(daily_log);
+            }
+        }
+        for room in &self.node_to_mutate.rooms {
+            daily_log.add_node_date(room.clone(), self.node_to_mutate.date);
+            if let Some(node) = &self.node_to_mutate.old_node {
+                daily_log.add_node_date(room.clone(), node.mdate);
+            }
+            for edge in &self.edge_insertions {
+                daily_log.add_edge_date(room.clone(), edge.cdate);
+            }
+        }
+
+        for edg in &self.edge_deletions_log {
+            daily_log.add_edge_date(edg.room.clone(), edg.date);
+            daily_log.add_edge_date(edg.room.clone(), edg.deletion_date);
+        }
     }
 
     pub fn sign_all(&mut self, signing_key: &impl SigningKey) -> Result<()> {

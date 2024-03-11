@@ -16,7 +16,7 @@ use super::{
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
-    sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
+    sqlite_database::{BufferedDatabaseWriter, DailyRoomMutations, WriteMessage, Writeable},
     Error, Result,
 };
 
@@ -227,6 +227,11 @@ pub struct RoomMutationQuery {
 impl Writeable for RoomMutationQuery {
     fn write(&self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.mutation_query.write(conn)
+    }
+}
+impl RoomMutationQuery {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+        self.mutation_query.update_daily_logs(daily_log);
     }
 }
 

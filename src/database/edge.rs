@@ -316,8 +316,6 @@ impl Edge {
     }
 }
 
-/// Query used in conjunction with the from_row() method to easily retrieve an edge
-
 impl Default for Edge {
     fn default() -> Self {
         Self {
@@ -441,6 +439,9 @@ impl Writeable for EdgeDeletionEntry {
         Ok(())
     }
 }
+
+
+
 #[cfg(test)]
 mod tests {
 

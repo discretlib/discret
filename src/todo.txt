@@ -1,6 +1,5 @@
 
 Database: 
-    implements signed deletions log 
     implements daily log
            upsert: INSERT INTO vocabulary(word) VALUES('jovial') ON CONFLICT(word) DO UPDATE SET count=count+1;
    

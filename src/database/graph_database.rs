@@ -490,7 +490,10 @@ mod tests {
         }
     }
 
-    use crate::{cryptography::random_secret, database::query_language::parameter::ParametersAdd};
+    use crate::{
+        cryptography::{base64_decode, date, now, random_secret},
+        database::{query_language::parameter::ParametersAdd, sqlite_database::DailyLog},
+    };
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -649,6 +652,117 @@ mod tests {
             )
             .await
             .unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn daily_log() {
+        init_database_path();
+
+        let data_model = "Person{ name:String, parents:[Person] }";
+
+        let secret = random_secret();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "delete app",
+            &data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        type: "whatever"
+                        authorisations:[{
+                            name:"admin"
+                            credentials: [{
+                                mutate_room:true
+                                mutate_room_users:true
+                                rights:[{
+                                    entity:"Person"
+                                    mutate_self:true
+                                    delete_all:true
+                                    mutate_all:true
+                                }]
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+
+        let _ = app
+            .mutate(
+                r#"
+        mutation mutmut {
+            P2: Person {_rooms:[{id:$room_id}] name:"Alice" parents:[{name:"someone"}] }
+            P3: Person {_rooms:[{id:$room_id}] name:"Bob"  parents:[{name:"some_other"}] }
+        } "#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let daily_edge_log = "
+            SELECT 
+                room,
+                date,
+                entry_number,
+                daily_hash,
+                need_recompute
+            from _daily_edge_log ";
+
+        let edge_log = app
+            .select(daily_edge_log.to_string(), Vec::new(), DailyLog::MAPPING)
+            .await
+            .unwrap();
+        assert_eq!(1, edge_log.len());
+        for nd in edge_log {
+            assert_eq!(date(now()), nd.date);
+            assert!(nd.need_recompute);
+            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room);
+        }
+
+        let daily_node_log = "
+        SELECT 
+            room,
+            date,
+            entry_number,
+            daily_hash,
+            need_recompute
+        from _daily_node_log ";
+
+        let node_log = app
+            .select(daily_node_log.to_string(), Vec::new(), DailyLog::MAPPING)
+            .await
+            .unwrap();
+        assert_eq!(1, node_log.len());
+        for nd in node_log {
+            assert_eq!(date(now()), nd.date);
+            assert!(nd.need_recompute);
+            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room);
         }
     }
 }

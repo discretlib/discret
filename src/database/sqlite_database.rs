@@ -4,13 +4,17 @@ use rusqlite::{
     Connection, OptionalExtension, Row, ToSql,
 };
 
-use std::{path::PathBuf, thread, time, usize};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    thread, time, usize,
+};
 use tokio::sync::{
     mpsc,
     oneshot::{self, Sender},
 };
 
-use crate::cryptography::{base64_decode, base64_encode};
+use crate::cryptography::{base64_decode, base64_encode, date};
 
 use super::{
     authorisation::{AuthorisationMessage, RoomMutationQuery},
@@ -501,7 +505,7 @@ impl BufferedDatabaseWriter {
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         conn.execute("BEGIN TRANSACTION", [])?;
-
+        let mut daily_log = DailyRoomMutations::default();
         for query in buffer {
             match query {
                 WriteMessage::DeletionQuery(query, _) => {
@@ -509,18 +513,21 @@ impl BufferedDatabaseWriter {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
+                    query.update_daily_logs(&mut daily_log);
                 }
                 WriteMessage::MutationQuery(query, _) => {
                     if let Err(e) = query.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
+                    query.update_daily_logs(&mut daily_log);
                 }
                 WriteMessage::RoomMutationQuery(query, _) => {
                     if let Err(e) = query.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
+                    query.update_daily_logs(&mut daily_log);
                 }
                 WriteMessage::WriteStmt(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {
@@ -530,6 +537,7 @@ impl BufferedDatabaseWriter {
                 }
             }
         }
+        daily_log.write(conn)?;
         conn.execute("COMMIT", [])?;
         Ok(())
     }
@@ -570,6 +578,90 @@ impl BufferedDatabaseWriter {
     pub async fn optimize(&self) -> Result<WriteStmt> {
         self.write(Box::new(Optimize {})).await
     }
+}
+
+///
+/// stores the modified dates for each rooms during the batch insert
+/// at the end of the batch, update the hash to null for all impacted daily logs entries
+/// recompute will be performed later
+/// this avoids an update of the log for every inserted rows and is specially usefull during room synchronisation
+///
+#[derive(Default, Debug)]
+pub struct DailyRoomMutations {
+    nodes: HashMap<Vec<u8>, HashSet<i64>>,
+    edges: HashMap<Vec<u8>, HashSet<i64>>,
+}
+impl DailyRoomMutations {
+    pub fn add_node_date(&mut self, room: Vec<u8>, mut_date: i64) {
+        let entry = self.nodes.entry(room).or_insert(HashSet::new());
+        entry.insert(date(mut_date));
+        //   println!("insert node daily");
+    }
+
+    pub fn add_edge_date(&mut self, room: Vec<u8>, mut_date: i64) {
+        let entry = self.edges.entry(room).or_insert(HashSet::new());
+        entry.insert(date(mut_date));
+        //  println!("insert edge daily");
+    }
+
+    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        //println!("Writing daily");
+        let mut node_daily_stmt = conn.prepare_cached(
+            "INSERT INTO _daily_node_log (
+                    room,
+                    date,
+                    entry_number,
+                    daily_hash,
+                    need_recompute
+                ) values (?,?,0,NULL,1)
+                ON CONFLICT(room, date) 
+                DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
+            ",
+        )?;
+        for room in &self.nodes {
+            for date in room.1 {
+                node_daily_stmt.execute((room.0, date))?;
+            }
+        }
+
+        let mut edge_daily_stmt = conn.prepare_cached(
+            "INSERT INTO _daily_edge_log (
+                    room,
+                    date,
+                    entry_number,
+                    daily_hash,
+                    need_recompute
+                ) values (?,?,0,NULL,1)
+                ON CONFLICT(room, date) 
+                DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
+            ",
+        )?;
+        for room in &self.edges {
+            for date in room.1 {
+                edge_daily_stmt.execute((room.0, date))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct DailyLog {
+    pub room: Vec<u8>,
+    pub date: i64,
+    pub entry_number: Option<u64>,
+    pub daily_hash: Option<Vec<u8>>,
+    pub need_recompute: bool,
+}
+impl DailyLog {
+    pub const MAPPING: RowMappingFn<Self> = |row| {
+        Ok(Box::new(Self {
+            room: row.get(0)?,
+            date: row.get(1)?,
+            entry_number: row.get(2)?,
+            daily_hash: row.get(3)?,
+            need_recompute: row.get(4)?,
+        }))
+    };
 }
 
 ///
