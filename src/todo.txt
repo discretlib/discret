@@ -1,8 +1,7 @@
 
 Database: 
-    implements daily log
-           upsert: INSERT INTO vocabulary(word) VALUES('jovial') ON CONFLICT(word) DO UPDATE SET count=count+1;
-   
+    impements daily_log update hash
+
     better null and not null handling in querie
     add a priority thread to database for interactive queries
     add performance monitoring service
