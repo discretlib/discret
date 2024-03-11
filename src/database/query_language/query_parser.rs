@@ -227,9 +227,7 @@ impl EntityQuery {
                     par.order_by.len()
                 )))
             }
-
-            for i in 0..paging.len(){
-                let val = &paging[i];
+            for (i, val) in paging.iter().enumerate(){
                 let order_field = &par.order_by[i];
 
                 let field_type = &order_field.field.field_type;

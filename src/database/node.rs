@@ -476,16 +476,16 @@ impl NodeDeletionEntry {
     }
 
     pub fn sign(
-        room: &Vec<u8>,
+        room: &[u8],
         node: &Node,
         deletion_date: i64,
-        verifying_key: &Vec<u8>,
+        verifying_key: &[u8],
         signing_key: &impl SigningKey,
     ) -> Vec<u8> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(room);
         hasher.update(&node.id);
-        hasher.update(&node._entity.as_bytes());
+        hasher.update(node._entity.as_bytes());
         hasher.update(&deletion_date.to_le_bytes());
         hasher.update(verifying_key);
         let hash = hasher.finalize();
@@ -496,7 +496,7 @@ impl NodeDeletionEntry {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.room);
         hasher.update(&self.id);
-        hasher.update(&self.entity.as_bytes());
+        hasher.update(self.entity.as_bytes());
         hasher.update(&self.deletion_date.to_le_bytes());
         hasher.update(&self.verifying_key);
         let hash = hasher.finalize();

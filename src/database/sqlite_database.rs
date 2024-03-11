@@ -593,13 +593,13 @@ pub struct DailyRoomMutations {
 }
 impl DailyRoomMutations {
     pub fn add_node_date(&mut self, room: Vec<u8>, mut_date: i64) {
-        let entry = self.nodes.entry(room).or_insert(HashSet::new());
+        let entry = self.nodes.entry(room).or_default();
         entry.insert(date(mut_date));
         //   println!("insert node daily");
     }
 
     pub fn add_edge_date(&mut self, room: Vec<u8>, mut_date: i64) {
-        let entry = self.edges.entry(room).or_insert(HashSet::new());
+        let entry = self.edges.entry(room).or_default();
         entry.insert(date(mut_date));
         //  println!("insert edge daily");
     }
@@ -679,7 +679,7 @@ pub const DB_ID_MAX_SIZE: usize = 33;
 ///
 /// control the validity of the id
 ///
-pub fn is_valid_id_len(id: &Vec<u8>) -> bool {
+pub fn is_valid_id_len(id: &[u8]) -> bool {
     let v = id.len();
     (DB_ID_MIN_SIZE..=DB_ID_MAX_SIZE).contains(&v)
 }

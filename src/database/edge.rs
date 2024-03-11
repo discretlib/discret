@@ -117,7 +117,7 @@ impl Edge {
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.src);
-        hasher.update(&self.src_entity.as_bytes());
+        hasher.update(self.src_entity.as_bytes());
         hasher.update(self.label.as_bytes());
         hasher.update(&self.dest);
         hasher.update(&self.cdate.to_le_bytes());
@@ -298,7 +298,7 @@ impl Edge {
     ///
     /// retrieve all edges from a specific source and label
     ///
-    pub fn get_edges(src: &Vec<u8>, label: &str, conn: &Connection) -> Result<Vec<Box<Edge>>> {
+    pub fn get_edges(src: &Vec<u8>, label: &str, conn: &Connection) -> Result<Vec<Edge>> {
         let mut edges_stmt = conn.prepare_cached(
             "SELECT  src, src_entity, label, dest, cdate, verifying_key, signature 
             FROM _edge
@@ -309,7 +309,7 @@ impl Edge {
         let edges = edges_stmt.query_map((src, label), Self::EDGE_MAPPING)?;
         let mut rows = vec![];
         for edge in edges {
-            rows.push(edge?);
+            rows.push(*edge?);
         }
 
         Ok(rows)
@@ -364,17 +364,17 @@ impl EdgeDeletionEntry {
     }
 
     pub fn sign(
-        room: &Vec<u8>,
+        room: &[u8],
         edge: &Edge,
         deletion_date: i64,
-        verifying_key: &Vec<u8>,
+        verifying_key: &[u8],
         signing_key: &impl SigningKey,
     ) -> Vec<u8> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(room);
         hasher.update(&edge.src);
-        hasher.update(&edge.src_entity.as_bytes());
-        hasher.update(&edge.label.as_bytes());
+        hasher.update(edge.src_entity.as_bytes());
+        hasher.update(edge.label.as_bytes());
         hasher.update(&edge.dest);
         hasher.update(&deletion_date.to_le_bytes());
         hasher.update(verifying_key);
@@ -386,8 +386,8 @@ impl EdgeDeletionEntry {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.room);
         hasher.update(&self.src);
-        hasher.update(&self.src_entity.as_bytes());
-        hasher.update(&self.label.as_bytes());
+        hasher.update(self.src_entity.as_bytes());
+        hasher.update(self.label.as_bytes());
         hasher.update(&self.dest);
         hasher.update(&self.deletion_date.to_le_bytes());
         hasher.update(&self.verifying_key);
@@ -439,8 +439,6 @@ impl Writeable for EdgeDeletionEntry {
         Ok(())
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

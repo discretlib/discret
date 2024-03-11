@@ -245,7 +245,7 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(*e);
+                                    query.edge_deletions.push(e);
                                 }
                             }
                             _ => unreachable!(),
@@ -255,7 +255,7 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(*e);
+                                    query.edge_deletions.push(e);
                                 }
                                 let insert_query =
                                     Self::get_mutate_query(mutation, parameters, conn)?;
@@ -279,7 +279,7 @@ impl MutationQuery {
                                 let edges =
                                     Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
                                 for e in edges {
-                                    query.edge_deletions.push(*e);
+                                    query.edge_deletions.push(e);
                                 }
                             }
                             _ => unreachable!(),
@@ -540,10 +540,9 @@ impl InsertEntity {
                             )));
                         }
                         let mut arr = Vec::new();
-                        for i in 0..mutations.len() {
+                        for (i, mutation) in mutations.iter().enumerate() {
                             let mut sub_map: serde_json::Map<String, serde_json::Value> =
                                 serde_json::Map::new();
-                            let mutation = &mutations[i];
                             let insert_entity = &sub.1[i];
                             Self::fill_json(insert_entity, mutation, &mut sub_map)?;
                             arr.push(serde_json::Value::Object(sub_map));

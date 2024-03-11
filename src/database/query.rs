@@ -149,47 +149,43 @@ pub fn get_exists_query(
         let field_short = &field.field.short_name;
         match &field.field_type {
             QueryFieldType::EntityArrayQuery(sub_entity, nullable) => {
-                if !nullable {
-                    if !entity.params.nullable.contains(field_name) {
-                        tab(&mut q, t);
-                        q.push_str("AND EXISTS (\n");
-                        let sub = get_sub_entity_query(
-                            sub_entity,
-                            prepared_query,
-                            parent_table,
-                            field_name,
-                            field_short,
-                            t + 1,
-                            false,
-                        );
-                        q.push_str(&sub);
-                        q.push('\n');
-                        tab(&mut q, t);
-                        q.push(')');
-                        q.push('\n');
-                    }
+                if !nullable && !entity.params.nullable.contains(field_name) {
+                    tab(&mut q, t);
+                    q.push_str("AND EXISTS (\n");
+                    let sub = get_sub_entity_query(
+                        sub_entity,
+                        prepared_query,
+                        parent_table,
+                        field_name,
+                        field_short,
+                        t + 1,
+                        false,
+                    );
+                    q.push_str(&sub);
+                    q.push('\n');
+                    tab(&mut q, t);
+                    q.push(')');
+                    q.push('\n');
                 }
             }
             QueryFieldType::EntityQuery(sub_entity, nullable) => {
-                if !nullable {
-                    if !entity.params.nullable.contains(field_name) {
-                        tab(&mut q, t);
-                        q.push_str("AND EXISTS (\n");
-                        let sub = get_sub_entity_query(
-                            sub_entity,
-                            prepared_query,
-                            parent_table,
-                            field_name,
-                            field_short,
-                            t + 1,
-                            true,
-                        );
-                        q.push_str(&sub);
-                        q.push('\n');
-                        tab(&mut q, t);
-                        q.push(')');
-                        q.push('\n');
-                    }
+                if !nullable && !entity.params.nullable.contains(field_name) {
+                    tab(&mut q, t);
+                    q.push_str("AND EXISTS (\n");
+                    let sub = get_sub_entity_query(
+                        sub_entity,
+                        prepared_query,
+                        parent_table,
+                        field_name,
+                        field_short,
+                        t + 1,
+                        true,
+                    );
+                    q.push_str(&sub);
+                    q.push('\n');
+                    tab(&mut q, t);
+                    q.push(')');
+                    q.push('\n');
                 }
             }
             _ => {}
@@ -758,9 +754,9 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> St
             q.push('(');
         }
 
-        for j in 0..i {
+        for (j, value) in paging.iter().enumerate().take(i) {
             let ord = &params.order_by[j];
-            let value = &paging[j];
+
             let value = match value {
                 FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
                 FieldValue::Value(val) => match val {

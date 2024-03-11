@@ -9,7 +9,7 @@ use super::authorisation::{AuthorisationMessage, AuthorisationService, RoomAutho
 use super::configuration;
 use super::deletion::DeletionQuery;
 use super::query_language::deletion_parser::DeletionParser;
-use super::sqlite_database::{DatabaseReader, RowMappingFn};
+use super::sqlite_database::{DailyRoomMutations, DatabaseReader, RowMappingFn};
 use super::{
     configuration::Configuration,
     mutation_query::MutationQuery,
@@ -31,6 +31,7 @@ enum Message {
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
+    ComputeDailyLog(Sender<Result<DailyRoomMutations>>),
 }
 
 #[derive(Clone)]
@@ -103,6 +104,7 @@ impl GraphDatabaseService {
                             }
                         }
                     }
+                    Message::ComputeDailyLog(_reply) => todo!(),
                 }
             }
         });
@@ -321,7 +323,7 @@ impl GraphDatabase {
 
     pub async fn initialise_authorisations(&mut self) -> Result<()> {
         let (send, recieve) = oneshot::channel::<Result<String>>();
-        let cache = self.get_cached_query(&RoomAuthorisations::LOAD_QUERY)?;
+        let cache = self.get_cached_query(RoomAuthorisations::LOAD_QUERY)?;
         let parameters = Parameters::default();
         self.query(cache.0, cache.1, parameters, send).await;
         let result = recieve.await??;

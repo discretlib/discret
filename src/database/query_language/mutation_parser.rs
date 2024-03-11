@@ -204,10 +204,7 @@ impl MutationParser {
     //propagate the room definition to sub entities to avoid having to write the room everywhere in the query
     //
     fn propagate_room(entity: &mut EntityMutation) -> Result<(), Error> {
-        let room_field = match entity.fields.get(ROOMS_FIELD) {
-            Some(e) => Some(e.clone()),
-            None => None,
-        };
+        let room_field = entity.fields.get(ROOMS_FIELD).cloned();
 
         for field in &mut entity.fields {
             if !field.0.eq(ROOMS_FIELD) {
@@ -217,7 +214,6 @@ impl MutationParser {
                         for inner in inners {
                             if inner.fields.get(ROOMS_FIELD).is_none() {
                                 if let Some(room_field) = room_field.clone() {
-                                    let room_field = room_field;
                                     inner.add_field(room_field)?;
                                 }
                             }
@@ -227,7 +223,6 @@ impl MutationParser {
                     MutationFieldValue::Entity(inner) => {
                         if inner.fields.get(ROOMS_FIELD).is_none() {
                             if let Some(room_field) = room_field.clone() {
-                                let room_field = room_field;
                                 inner.add_field(room_field)?;
                             }
                         }
