@@ -1,26 +1,20 @@
-use blake3::Hasher;
-use rusqlite::{
-    functions::{Aggregate, FunctionFlags},
-    Connection, OptionalExtension, Row, ToSql,
-};
+use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    thread, time, usize,
-};
+use std::{path::PathBuf, thread, time, usize};
 use tokio::sync::{
     mpsc,
     oneshot::{self, Sender},
 };
 
-use crate::cryptography::{base64_decode, base64_encode, date};
+use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
     authorisation::{AuthorisationMessage, RoomMutationQuery},
     configuration,
+    daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::Edge,
+    event_service::EventServiceMessage,
     mutation_query::MutationQuery,
     node::Node,
     Error, Result,
@@ -44,6 +38,7 @@ pub enum WriteMessage {
     MutationQuery(MutationQuery, Sender<Result<MutationQuery>>),
     RoomMutationQuery(RoomMutationQuery, mpsc::Sender<AuthorisationMessage>),
     WriteStmt(WriteStmt, Sender<Result<WriteStmt>>),
+    ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
 }
 
 //Create a sqlcipher database connection
@@ -159,7 +154,6 @@ pub fn create_connection(
 ///
 pub fn prepare_connection(conn: &Connection) -> Result<()> {
     add_base64_function(conn)?;
-    add_blake3_hash_aggregate(conn)?;
     let initialised: Option<String> = conn
         .query_row(
             "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name = '_node'",
@@ -170,8 +164,9 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
 
     if initialised.is_none() {
         conn.execute("BEGIN TRANSACTION", [])?;
-        Node::create_table(conn)?;
-        Edge::create_table(conn)?;
+        Node::create_tables(conn)?;
+        Edge::create_tables(conn)?;
+        DailyLog::create_tables(&conn)?;
         configuration::create_system_tables(conn)?;
         conn.execute("COMMIT", [])?;
     }
@@ -254,7 +249,7 @@ impl DatabaseReader {
             //        - the cleanup process at the beginning of some tests (see graph_database tests)
             //        - the rapid creation of several instance of the connection
             //
-            let ten_millis = time::Duration::from_millis(10);
+            let ten_millis = time::Duration::from_millis(20);
             thread::sleep(ten_millis);
             let conn =
                 create_connection(path, secret, cache_size_in_kb, enable_memory_security).unwrap();
@@ -446,8 +441,8 @@ impl BufferedDatabaseWriter {
         });
 
         thread::spawn(move || {
-            while let Some(buffer) = receive_buffer.blocking_recv() {
-                let result = Self::process_batch_write(&buffer, &conn);
+            while let Some(mut buffer) = receive_buffer.blocking_recv() {
+                let result = Self::process_batch_write(&mut buffer, &conn);
                 match result {
                     Ok(_) => {
                         for msg in buffer {
@@ -466,6 +461,11 @@ impl BufferedDatabaseWriter {
                                 }
                                 WriteMessage::WriteStmt(q, r) => {
                                     let _ = r.send(Ok(q));
+                                }
+                                WriteMessage::ComputeDailyLog(q, r) => {
+                                    let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
+                                        Ok(q),
+                                    ));
                                 }
                             }
                         }
@@ -489,6 +489,11 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::WriteStmt(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
+                                WriteMessage::ComputeDailyLog(_, r) => {
+                                    let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
+                                        Err(Error::DatabaseWrite(e.to_string())),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -501,11 +506,11 @@ impl BufferedDatabaseWriter {
     }
 
     fn process_batch_write(
-        buffer: &Vec<WriteMessage>,
+        buffer: &mut Vec<WriteMessage>,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         conn.execute("BEGIN TRANSACTION", [])?;
-        let mut daily_log = DailyRoomMutations::default();
+        let mut daily_log = DailyMutations::default();
         for query in buffer {
             match query {
                 WriteMessage::DeletionQuery(query, _) => {
@@ -531,6 +536,12 @@ impl BufferedDatabaseWriter {
                 }
                 WriteMessage::WriteStmt(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                }
+                WriteMessage::ComputeDailyLog(daily_mutations, _) => {
+                    if let Err(e) = daily_mutations.compute(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
@@ -578,90 +589,6 @@ impl BufferedDatabaseWriter {
     pub async fn optimize(&self) -> Result<WriteStmt> {
         self.write(Box::new(Optimize {})).await
     }
-}
-
-///
-/// stores the modified dates for each rooms during the batch insert
-/// at the end of the batch, update the hash to null for all impacted daily logs entries
-/// recompute will be performed later
-/// this avoids an update of the log for every inserted rows and is specially usefull during room synchronisation
-///
-#[derive(Default, Debug)]
-pub struct DailyRoomMutations {
-    nodes: HashMap<Vec<u8>, HashSet<i64>>,
-    edges: HashMap<Vec<u8>, HashSet<i64>>,
-}
-impl DailyRoomMutations {
-    pub fn add_node_date(&mut self, room: Vec<u8>, mut_date: i64) {
-        let entry = self.nodes.entry(room).or_default();
-        entry.insert(date(mut_date));
-        //   println!("insert node daily");
-    }
-
-    pub fn add_edge_date(&mut self, room: Vec<u8>, mut_date: i64) {
-        let entry = self.edges.entry(room).or_default();
-        entry.insert(date(mut_date));
-        //  println!("insert edge daily");
-    }
-
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        //println!("Writing daily");
-        let mut node_daily_stmt = conn.prepare_cached(
-            "INSERT INTO _daily_node_log (
-                    room,
-                    date,
-                    entry_number,
-                    daily_hash,
-                    need_recompute
-                ) values (?,?,0,NULL,1)
-                ON CONFLICT(room, date) 
-                DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
-            ",
-        )?;
-        for room in &self.nodes {
-            for date in room.1 {
-                node_daily_stmt.execute((room.0, date))?;
-            }
-        }
-
-        let mut edge_daily_stmt = conn.prepare_cached(
-            "INSERT INTO _daily_edge_log (
-                    room,
-                    date,
-                    entry_number,
-                    daily_hash,
-                    need_recompute
-                ) values (?,?,0,NULL,1)
-                ON CONFLICT(room, date) 
-                DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
-            ",
-        )?;
-        for room in &self.edges {
-            for date in room.1 {
-                edge_daily_stmt.execute((room.0, date))?;
-            }
-        }
-        Ok(())
-    }
-}
-
-pub struct DailyLog {
-    pub room: Vec<u8>,
-    pub date: i64,
-    pub entry_number: Option<u64>,
-    pub daily_hash: Option<Vec<u8>>,
-    pub need_recompute: bool,
-}
-impl DailyLog {
-    pub const MAPPING: RowMappingFn<Self> = |row| {
-        Ok(Box::new(Self {
-            room: row.get(0)?,
-            date: row.get(1)?,
-            entry_number: row.get(2)?,
-            daily_hash: row.get(3)?,
-            need_recompute: row.get(4)?,
-        }))
-    };
 }
 
 ///
@@ -733,58 +660,11 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-struct Blake3Hash;
-impl Aggregate<Hasher, Option<Vec<u8>>> for Blake3Hash {
-    fn init(&self, _: &mut rusqlite::functions::Context<'_>) -> rusqlite::Result<Hasher> {
-        let hasher = blake3::Hasher::new();
-        Ok(hasher)
-    }
-
-    fn step(
-        &self,
-        ctx: &mut rusqlite::functions::Context<'_>,
-        acc: &mut Hasher,
-    ) -> rusqlite::Result<()> {
-        let v = ctx.get::<Vec<u8>>(0)?;
-        acc.update(&v);
-        Ok(())
-    }
-
-    fn finalize(
-        &self,
-        _: &mut rusqlite::functions::Context<'_>,
-        acc: Option<Hasher>,
-    ) -> rusqlite::Result<Option<Vec<u8>>> {
-        match acc {
-            Some(a) => {
-                if a.count() == 0 {
-                    Ok(None)
-                } else {
-                    let hash = a.finalize();
-                    let hash = hash.as_bytes();
-                    Ok(Some(hash.to_vec()))
-                }
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-fn add_blake3_hash_aggregate(conn: &Connection) -> Result<()> {
-    conn.create_aggregate_function(
-        "hash",
-        1,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        Blake3Hash,
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::cryptography::{hash, random_secret};
+    use crate::cryptography::hash;
     use crate::database::Error;
     use std::result::Result;
     use std::{fs, path::Path, time::Instant};
@@ -1005,88 +885,5 @@ mod tests {
             .query_async(insert_query, Vec::new(), STRING_MAPPING)
             .await
             .expect_err("attempt to write a readonly database");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn blake3_hash_aggreagate() {
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-
-        conn.execute(
-            "CREATE TABLE hashing (
-            id  BLOB,
-            group_id  INTEGER
-        )",
-            [],
-        )
-        .unwrap();
-
-        let mut group_1 = Vec::new();
-        for _ in 0..10 {
-            let val = random_secret().to_vec();
-            group_1.push(val);
-        }
-
-        let mut stmt = conn
-            .prepare("INSERT INTO hashing (id, group_id) VALUES (?,?)")
-            .unwrap();
-        for v in &group_1 {
-            stmt.execute((v, 1)).unwrap();
-        }
-        group_1.sort();
-
-        let mut hasher = blake3::Hasher::new();
-        for v in &group_1 {
-            hasher.update(v);
-        }
-        let hash = hasher.finalize();
-        let hash = hash.as_bytes();
-        let hash = base64_encode(hash);
-
-        let mut expected = Vec::new();
-        expected.push(hash);
-
-        let mut group_2 = Vec::new();
-        for _ in 0..10 {
-            let val = random_secret().to_vec();
-            group_2.push(val);
-        }
-
-        let mut stmt = conn
-            .prepare("INSERT INTO hashing (id, group_id) VALUES (?,?)")
-            .unwrap();
-        for v in &group_2 {
-            stmt.execute((v, 2)).unwrap();
-        }
-        group_2.sort();
-
-        let mut hasher = blake3::Hasher::new();
-        for v in &group_2 {
-            hasher.update(v);
-        }
-        let hash = hasher.finalize();
-        let hash = hash.as_bytes();
-        let hash = base64_encode(hash);
-        expected.push(hash);
-
-        let mut stmt = conn
-            .prepare(
-                "
-            SELECT hash(id),group_id 
-            FROM (SELECT id, group_id FROM hashing ORDER BY id, group_id)
-            GROUP BY group_id
-            ORDER BY group_id",
-            )
-            .unwrap();
-
-        let mut result = Vec::new();
-        let mut rows = stmt.query([]).unwrap();
-        while let Some(row) = rows.next().unwrap() {
-            let result_opt: Option<Vec<u8>> = row.get(0).unwrap();
-            let hash = base64_encode(&result_opt.unwrap());
-            result.push(hash);
-        }
-
-        assert_eq!(expected, result);
     }
 }

@@ -2,14 +2,17 @@ use lru::LruCache;
 use rusqlite::{OptionalExtension, ToSql};
 use std::collections::HashMap;
 use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{mpsc, oneshot};
 
 use super::authorisation::{AuthorisationMessage, AuthorisationService, RoomAuthorisations};
 use super::configuration;
+use super::daily_log::DailyLogsUpdate;
 use super::deletion::DeletionQuery;
+use super::event_service::{EventMessage, EventService, EventServiceMessage};
 use super::query_language::deletion_parser::DeletionParser;
-use super::sqlite_database::{DailyRoomMutations, DatabaseReader, RowMappingFn};
+use super::sqlite_database::{DatabaseReader, RowMappingFn, WriteMessage};
 use super::{
     configuration::Configuration,
     mutation_query::MutationQuery,
@@ -31,7 +34,8 @@ enum Message {
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
-    ComputeDailyLog(Sender<Result<DailyRoomMutations>>),
+    SubscribeForEvents(Sender<Receiver<EventMessage>>),
+    ComputeDailyLog(),
 }
 
 #[derive(Clone)]
@@ -104,7 +108,23 @@ impl GraphDatabaseService {
                             }
                         }
                     }
-                    Message::ComputeDailyLog(_reply) => todo!(),
+                    Message::ComputeDailyLog() => {
+                        _ = service
+                            .graph_database
+                            .writer
+                            .send(WriteMessage::ComputeDailyLog(
+                                DailyLogsUpdate::default(),
+                                service.event_service.sender.clone(),
+                            ))
+                            .await;
+                    }
+                    Message::SubscribeForEvents(reply) => {
+                        let _ = service
+                            .event_service
+                            .sender
+                            .send(EventServiceMessage::Subscribe(reply))
+                            .await;
+                    }
                 }
             }
         });
@@ -130,7 +150,11 @@ impl GraphDatabaseService {
         let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
-        recieve.await?
+        let result = recieve.await?;
+
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+
+        result
     }
 
     pub async fn mutate(
@@ -143,7 +167,10 @@ impl GraphDatabaseService {
         let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
 
-        recieve.await?
+        let result = recieve.await?;
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+
+        result
     }
 
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
@@ -177,12 +204,24 @@ impl GraphDatabaseService {
             .await?;
         receive_response.await?
     }
+
+    pub async fn subcribe_for_events(&self) -> Result<Receiver<EventMessage>> {
+        let (send_response, receive_response) = oneshot::channel::<Receiver<EventMessage>>();
+
+        let _ = self
+            .sender
+            .send(Message::SubscribeForEvents(send_response))
+            .await;
+
+        Ok(receive_response.await?)
+    }
 }
 
 struct GraphDatabase {
     data_model: DataModel,
     auth_service: AuthorisationService,
     graph_database: Database,
+    event_service: EventService,
     database_path: PathBuf,
     mutation_cache: LruCache<String, Arc<MutationParser>>,
     query_cache: LruCache<String, QueryCacheEntry>,
@@ -228,11 +267,12 @@ impl GraphDatabase {
         };
 
         let auth_service = AuthorisationService::start(auth);
-
+        let event_service = EventService::new();
         let database = Self {
             data_model,
             auth_service,
             graph_database,
+            event_service,
             database_path,
             mutation_cache,
             query_cache,
@@ -418,6 +458,9 @@ impl GraphDatabase {
             }))
             .await;
     }
+
+    pub async fn compute_daily_log() {}
+
     pub fn get_cached_deletion(&mut self, deletion: &str) -> Result<Arc<DeletionParser>> {
         let deletion = match self.deletion_cache.get(deletion) {
             Some(e) => e.clone(),
@@ -492,10 +535,7 @@ mod tests {
         }
     }
 
-    use crate::{
-        cryptography::{base64_decode, date, now, random_secret},
-        database::{query_language::parameter::ParametersAdd, sqlite_database::DailyLog},
-    };
+    use crate::{cryptography::random, database::query_language::parameter::ParametersAdd};
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -504,7 +544,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "selection app",
@@ -549,7 +589,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
@@ -599,7 +639,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn load_data_model() {
         init_database_path();
-        let secret = random_secret();
+        let secret = random();
         //create a first instance
         {
             let data_model = "
@@ -654,117 +694,6 @@ mod tests {
             )
             .await
             .unwrap();
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn daily_log() {
-        init_database_path();
-
-        let data_model = "Person{ name:String, parents:[Person] }";
-
-        let secret = random_secret();
-        let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
-            "delete app",
-            &data_model,
-            &secret,
-            path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
-
-        let user_id = base64_encode(app.verifying_key());
-
-        let mut param = Parameters::default();
-        param.add("user_id", user_id.clone()).unwrap();
-
-        let room = app
-            .mutate(
-                r#"mutation mut {
-                    _Room{
-                        type: "whatever"
-                        authorisations:[{
-                            name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
-                            }]
-                            users: [{
-                                verifying_key:$user_id
-                            }]
-                        }]
-                    }
-
-                }"#,
-                Some(param),
-            )
-            .await
-            .unwrap();
-
-        let room_insert = &room.mutate_entities[0];
-        let room_id = base64_encode(&room_insert.node_to_mutate.id);
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-
-        let _ = app
-            .mutate(
-                r#"
-        mutation mutmut {
-            P2: Person {_rooms:[{id:$room_id}] name:"Alice" parents:[{name:"someone"}] }
-            P3: Person {_rooms:[{id:$room_id}] name:"Bob"  parents:[{name:"some_other"}] }
-        } "#,
-                Some(param),
-            )
-            .await
-            .unwrap();
-
-        let daily_edge_log = "
-            SELECT 
-                room,
-                date,
-                entry_number,
-                daily_hash,
-                need_recompute
-            from _daily_edge_log ";
-
-        let edge_log = app
-            .select(daily_edge_log.to_string(), Vec::new(), DailyLog::MAPPING)
-            .await
-            .unwrap();
-        assert_eq!(1, edge_log.len());
-        for nd in edge_log {
-            assert_eq!(date(now()), nd.date);
-            assert!(nd.need_recompute);
-            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room);
-        }
-
-        let daily_node_log = "
-        SELECT 
-            room,
-            date,
-            entry_number,
-            daily_hash,
-            need_recompute
-        from _daily_node_log ";
-
-        let node_log = app
-            .select(daily_node_log.to_string(), Vec::new(), DailyLog::MAPPING)
-            .await
-            .unwrap();
-        assert_eq!(1, node_log.len());
-        for nd in node_log {
-            assert_eq!(date(now()), nd.date);
-            assert!(nd.need_recompute);
-            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room);
         }
     }
 }

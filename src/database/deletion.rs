@@ -3,10 +3,11 @@ use std::{collections::HashSet, sync::Arc};
 
 use super::{
     configuration::ROOMS_FIELD_SHORT,
+    daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
     node::{Node, NodeDeletionEntry},
     query_language::{deletion_parser::DeletionParser, parameter::Parameters},
-    sqlite_database::{DailyRoomMutations, Writeable},
+    sqlite_database::Writeable,
     Result,
 };
 #[derive(Debug)]
@@ -125,14 +126,14 @@ impl DeletionQuery {
         Ok(())
     }
 
-    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for edg in &self.edge_log {
-            daily_log.add_edge_date(edg.room.clone(), edg.date);
-            daily_log.add_edge_date(edg.room.clone(), edg.deletion_date);
+            daily_log.add_room_date(edg.room.clone(), edg.date);
+            daily_log.add_room_date(edg.room.clone(), edg.deletion_date);
         }
         for log in &self.node_log {
-            daily_log.add_node_date(log.room.clone(), log.mdate);
-            daily_log.add_node_date(log.room.clone(), log.deletion_date);
+            daily_log.add_room_date(log.room.clone(), log.mdate);
+            daily_log.add_room_date(log.room.clone(), log.deletion_date);
         }
     }
 }

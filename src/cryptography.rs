@@ -147,7 +147,7 @@ impl Ed25519SigningKey {
     /// new key using a random number
     ///
     pub fn new() -> Self {
-        let random: [u8; 32] = random_secret();
+        let random: [u8; 32] = random();
         Ed25519SigningKey::create_from(&random)
     }
 
@@ -163,7 +163,7 @@ impl Ed25519SigningKey {
     }
 }
 
-pub fn random_secret() -> [u8; 32] {
+pub fn random() -> [u8; 32] {
     let mut random: [u8; 32] = [0; 32];
 
     OsRng.fill_bytes(&mut random);

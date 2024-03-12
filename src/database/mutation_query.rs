@@ -7,6 +7,7 @@ use crate::{
 
 use super::{
     configuration::{ID_FIELD, ROOMS_FIELD_SHORT},
+    daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
     node::Node,
     query_language::{
@@ -14,7 +15,7 @@ use super::{
         parameter::Parameters,
         FieldType,
     },
-    sqlite_database::{DailyRoomMutations, RowMappingFn, Writeable},
+    sqlite_database::{RowMappingFn, Writeable},
     Error, Result,
 };
 use std::{
@@ -121,7 +122,7 @@ impl Writeable for MutationQuery {
     }
 }
 impl MutationQuery {
-    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for insert in &self.mutate_entities {
             insert.update_daily_logs(daily_log);
         }
@@ -223,7 +224,7 @@ impl MutationQuery {
                                             src: node_to_mutate.id.clone(),
                                             src_entity: entity.short_name.clone(),
                                             label: field.short_name.to_string(),
-                                            dest: target_id,
+                                            dest: target_id.clone(),
                                             cdate: node_to_mutate.date,
                                             ..Default::default()
                                         };
@@ -434,11 +435,6 @@ pub struct InsertEntity {
 }
 impl InsertEntity {
     fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        for query in &self.sub_nodes {
-            for insert in query.1 {
-                insert.write(conn)?;
-            }
-        }
         self.node_to_mutate.write(conn)?;
 
         for edge in &self.edge_deletions {
@@ -450,29 +446,34 @@ impl InsertEntity {
         for edge in &self.edge_insertions {
             edge.write(conn)?;
         }
+        for query in &self.sub_nodes {
+            for insert in query.1 {
+                insert.write(conn)?;
+            }
+        }
 
         Ok(())
     }
 
-    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for query in &self.sub_nodes {
             for insert in query.1 {
                 insert.update_daily_logs(daily_log);
             }
         }
         for room in &self.node_to_mutate.rooms {
-            daily_log.add_node_date(room.clone(), self.node_to_mutate.date);
+            daily_log.add_room_date(room.clone(), self.node_to_mutate.date);
             if let Some(node) = &self.node_to_mutate.old_node {
-                daily_log.add_node_date(room.clone(), node.mdate);
+                daily_log.add_room_date(room.clone(), node.mdate);
             }
             for edge in &self.edge_insertions {
-                daily_log.add_edge_date(room.clone(), edge.cdate);
+                daily_log.add_room_date(room.clone(), edge.cdate);
             }
         }
 
         for edg in &self.edge_deletions_log {
-            daily_log.add_edge_date(edg.room.clone(), edg.date);
-            daily_log.add_edge_date(edg.room.clone(), edg.deletion_date);
+            daily_log.add_room_date(edg.room.clone(), edg.date);
+            daily_log.add_room_date(edg.room.clone(), edg.deletion_date);
         }
     }
 

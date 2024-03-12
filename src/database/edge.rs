@@ -27,7 +27,7 @@ impl Edge {
     /// Edge can be efficiently queried in the two directions: src->dest and dest->src
     /// rowid is is useless for this table
     ///
-    pub fn create_table(conn: &Connection) -> Result<()> {
+    pub fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute(
             " 
             CREATE TABLE _edge (
@@ -43,9 +43,15 @@ impl Edge {
             ",
             [],
         )?;
-
+        //reverse search
         conn.execute(
             " CREATE UNIQUE INDEX _edge_dest_label_src_idx ON _edge(dest, label, src )",
+            [],
+        )?;
+
+        //usefull for daily log creation
+        conn.execute(
+            " CREATE INDEX _edge_src_cdate_idx ON _edge(src, cdate )",
             [],
         )?;
 
@@ -64,21 +70,6 @@ impl Edge {
             [],
         )?;
 
-        conn.execute(
-            "CREATE TABLE _daily_edge_log (
-            room BLOB NOT NULL,
-            date INTEGER NOT NULL,
-            entry_number INTEGER,
-            daily_hash BLOB,
-            need_recompute INTEGER, 
-            PRIMARY KEY (room, date)
-        ) WITHOUT ROWID, STRICT",
-            [],
-        )?;
-        conn.execute(
-            "CREATE INDEX _daily_edge_log_recompute_room_date ON _daily_edge_log (need_recompute, room, date)",
-            [],
-        )?;
         Ok(())
     }
 
@@ -208,9 +199,10 @@ impl Edge {
     ///
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _edge (src, src_entity, label, dest, cdate, verifying_key, signature) 
+            "INSERT INTO _edge (src, src_entity, label, dest, cdate, verifying_key, signature) 
                             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )?;
+
         insert_stmt.execute((
             &self.src,
             &self.src_entity,
@@ -556,7 +548,7 @@ mod tests {
 
         let mut new_edge = Edge::get(&from, label, &to, &conn).unwrap().unwrap();
         new_edge.sign(&signing_key).unwrap();
-        new_edge.write(&conn).unwrap();
+        new_edge.write(&conn).expect_err("edge allready exist");
 
         let edges = Edge::get_edges(&from, label, &conn).unwrap();
         assert_eq!(1, edges.len());

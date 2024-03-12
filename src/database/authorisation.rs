@@ -12,11 +12,12 @@ use crate::{
 
 use super::{
     configuration::{self, AUTH_CRED_FIELD, AUTH_USER_FIELD, ROOM_ENT},
+    daily_log::DailyMutations,
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
-    sqlite_database::{BufferedDatabaseWriter, DailyRoomMutations, WriteMessage, Writeable},
+    sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
 
@@ -223,7 +224,7 @@ impl Writeable for RoomMutationQuery {
     }
 }
 impl RoomMutationQuery {
-    pub fn update_daily_logs(&self, daily_log: &mut DailyRoomMutations) {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         self.mutation_query.update_daily_logs(daily_log);
     }
 }

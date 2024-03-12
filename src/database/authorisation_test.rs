@@ -4,7 +4,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, now, random_secret},
+        cryptography::{base64_encode, now, random},
         database::{
             authorisation::*,
             configuration::Configuration,
@@ -18,7 +18,7 @@ mod tests {
     #[test]
     fn mutate_room() {
         let user1 = User {
-            verifying_key: random_secret().to_vec(),
+            verifying_key: random().to_vec(),
             date: 0,
             enabled: true,
         };
@@ -74,7 +74,7 @@ mod tests {
         assert!(auth.is_user_valid_at(&user1.verifying_key, 1400));
         assert!(!auth.is_user_valid_at(&user1.verifying_key, 1501));
 
-        let authorisation_id = random_secret().to_vec();
+        let authorisation_id = random().to_vec();
         room.add_auth(authorisation_id.clone(), auth).unwrap();
         room.add_auth(authorisation_id, Authorisation::default())
             .expect_err("cannot insert twice");
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn entity_right() {
         let user1 = User {
-            verifying_key: random_secret().to_vec(),
+            verifying_key: random().to_vec(),
             date: 0,
             enabled: true,
         };
@@ -136,7 +136,7 @@ mod tests {
             .expect_err("cannot insert twice");
 
         auth.set_credential(cred1).unwrap();
-        let authorisation_id = random_secret().to_vec();
+        let authorisation_id = random().to_vec();
         room.add_auth(authorisation_id, auth).unwrap();
 
         assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::DeleteAll));
@@ -151,7 +151,7 @@ mod tests {
         assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateSelf));
         assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateAll));
 
-        let user2 = random_secret().to_vec();
+        let user2 = random().to_vec();
         assert!(!room.can(&user2, "Person", 1000, &RightType::DeleteAll));
         assert!(!room.can(&user2, "Person", 1000, &RightType::MutateSelf));
         assert!(!room.can(&user2, "Person", 1000, &RightType::MutateAll));
@@ -178,7 +178,7 @@ mod tests {
     async fn room_creation() {
         init_database_path();
         let data_model = "Person{ name:String }";
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -271,7 +271,7 @@ mod tests {
         }
         ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -467,7 +467,7 @@ mod tests {
     async fn authorisation_entities_error() {
         init_database_path();
         let data_model = "Person{name:String,}";
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -566,7 +566,7 @@ mod tests {
         }
         ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -766,7 +766,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -979,7 +979,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1077,7 +1077,7 @@ mod tests {
             Pet{ name:String }
             ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
 
         //open a database, creates two rooms and close it
@@ -1262,7 +1262,7 @@ mod tests {
         }   
         ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1491,7 +1491,7 @@ mod tests {
         }   
         ";
 
-        let secret = random_secret();
+        let secret = random();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",

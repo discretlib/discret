@@ -47,7 +47,7 @@ impl Node {
     ///
     /// _nodes keeps its rowid because it is required for the full text seach.
     ///
-    pub fn create_table(conn: &Connection) -> Result<()> {
+    pub fn create_tables(conn: &Connection) -> Result<()> {
         //system table stores compressed text and json
         conn.execute(
             "
@@ -71,11 +71,14 @@ impl Node {
             [],
         )?;
 
-        //allows for more efficient "entity full scan" for example when loading all rooms for the authorisation feature
+        //allows for more efficient "entity full scan" for example when loading all rooms for the authorisations
         conn.execute(
-            "CREATE INDEX _node__entity_id__mdate_idx ON _node (_entity, id)",
+            "CREATE INDEX _node_entity_id_mdate_idx ON _node (_entity, id)",
             [],
         )?;
+
+        //used during daily node log update
+        conn.execute("CREATE INDEX _node_id_mdate_idx ON _node (id, mdate)", [])?;
 
         //the full text search virtual table
         conn.execute(
@@ -102,21 +105,7 @@ impl Node {
             [],
         )?;
 
-        conn.execute(
-            "CREATE TABLE _daily_node_log (
-            room BLOB NOT NULL,
-            date INTEGER NOT NULL,
-            entry_number INTEGER,
-            daily_hash BLOB,
-            need_recompute INTEGER, 
-            PRIMARY KEY (room, date)
-        ) WITHOUT ROWID, STRICT",
-            [],
-        )?;
-        conn.execute(
-            "CREATE INDEX _daily_node_log_recompute_room_date ON _daily_node_log (need_recompute, room, date)",
-            [],
-        )?;
+    
         Ok(())
     }
 
@@ -617,7 +606,7 @@ mod tests {
     #[test]
     fn node_fts() {
         let conn = Connection::open_in_memory().unwrap();
-        Node::create_table(&conn).unwrap();
+        Node::create_tables(&conn).unwrap();
 
         let keypair = Ed25519SigningKey::new();
 
@@ -713,7 +702,7 @@ mod tests {
     #[test]
     fn node_with_archive() {
         let conn = Connection::open_in_memory().unwrap();
-        Node::create_table(&conn).unwrap();
+        Node::create_tables(&conn).unwrap();
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
@@ -748,7 +737,7 @@ mod tests {
     #[test]
     fn node_without_archive() {
         let conn = Connection::open_in_memory().unwrap();
-        Node::create_table(&conn).unwrap();
+        Node::create_tables(&conn).unwrap();
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
@@ -780,7 +769,7 @@ mod tests {
     #[test]
     fn node_deletion_log() {
         let conn = Connection::open_in_memory().unwrap();
-        Node::create_table(&conn).unwrap();
+        Node::create_tables(&conn).unwrap();
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
