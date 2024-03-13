@@ -8,6 +8,8 @@ use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
 
+use crate::utils::now;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("{0}")]
@@ -300,33 +302,6 @@ pub fn new_id() -> Vec<u8> {
     OsRng.fill_bytes(two);
 
     whole.to_vec()
-}
-
-///
-/// current time in milliseconds since unix epoch
-///
-pub fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-        .try_into()
-        .unwrap()
-}
-
-//returns the date without time
-pub fn date(date_time: i64) -> i64 {
-    let date = DateTime::from_timestamp_millis(date_time).unwrap();
-    let ds: NaiveDateTime = date.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    ds.timestamp_millis()
-}
-
-//returns the next day without time
-pub fn date_next_day(date_time: i64) -> i64 {
-    let date = DateTime::from_timestamp_millis(date_time).unwrap();
-    let date = date + Duration::days(1);
-    let ds: NaiveDateTime = date.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    ds.timestamp_millis()
 }
 
 #[cfg(test)]

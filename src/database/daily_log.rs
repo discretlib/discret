@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::cryptography::{date, date_next_day};
+use crate::utils::{date, date_next_day};
 
 use super::{configuration::ROOMS_FIELD_SHORT, sqlite_database::RowMappingFn};
 
@@ -198,13 +198,14 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_decode, base64_encode, date, now, random},
+        cryptography::{base64_decode, base64_encode, random},
         database::{
             configuration::Configuration,
             daily_log::DailyLog,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
         },
+        utils::{date, now},
     };
 
     const DATA_PATH: &str = "test/data/database/daily_log/";

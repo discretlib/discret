@@ -2,7 +2,10 @@ use super::{
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
-use crate::cryptography::{base64_encode, import_verifying_key, new_id, now, SigningKey};
+use crate::{
+    cryptography::{base64_encode, import_verifying_key, new_id, SigningKey},
+    utils::now,
+};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -105,7 +108,6 @@ impl Node {
             [],
         )?;
 
-    
         Ok(())
     }
 

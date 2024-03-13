@@ -4,7 +4,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, now, random},
+        cryptography::{base64_encode, random},
         database::{
             authorisation::*,
             configuration::Configuration,
@@ -13,6 +13,7 @@ mod tests {
             node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
+        utils::now,
     };
 
     #[test]

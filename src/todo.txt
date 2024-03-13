@@ -1,8 +1,24 @@
 
 Database: 
-    impements daily_log update hash
 
-    better null and not null handling in querie
+    implements direct node and edge insertion
+        in batch
+        the node and edge with associated room edges
+        intercept room creation note the id of new room creation from node
+
+    get nodes in batch, with associated room edges
+    get edges in batch
+
+
+    room modification should trigger an event: room_id users[]
+
+    get room nodes and edges in one query
+    get all rooms for user
+
+    implement sys_ virtual tables in the datamodel
+        table that will allow to query event log and performances
+
+    better null and not null entity handling in querie, setting an entity to null should also implies a nullable(field)
     add a priority thread to database for interactive queries
     add performance monitoring service
 

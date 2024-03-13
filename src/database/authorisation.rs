@@ -6,8 +6,9 @@ use std::{
 use tokio::sync::{mpsc, oneshot::Sender};
 
 use crate::{
-    cryptography::{base64_decode, base64_encode, now, Ed25519SigningKey, SigningKey},
+    cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     database::configuration::{ID_FIELD, MODIFICATION_DATE_FIELD, ROOMS_FIELD},
+    utils::now,
 };
 
 use super::{
