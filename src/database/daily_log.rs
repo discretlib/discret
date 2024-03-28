@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::utils::{date, date_next_day};
+use crate::date_utils::{date, date_next_day};
 
 use super::{configuration::ROOMS_FIELD_SHORT, sqlite_database::RowMappingFn};
 
@@ -205,7 +205,7 @@ mod tests {
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
         },
-        utils::{date, now},
+        date_utils::{date, now},
     };
 
     const DATA_PATH: &str = "test/data/database/daily_log/";
@@ -282,7 +282,7 @@ mod tests {
         match e {
             crate::database::event_service::EventMessage::ComputedDailyLog(log) => {
                 let s = log.unwrap();
-                //the room as no parent roon and is not synchronized
+                //the room as no parent room and is not synchronized
                 assert_eq!(0, s.room_dates.len());
             }
         }

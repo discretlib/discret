@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     cryptography::{base64_encode, import_verifying_key, new_id, SigningKey},
-    utils::now,
+    date_utils::now,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -257,7 +257,11 @@ impl Node {
     ///
     /// Retrieve a node using its primary key
     ///
-    pub fn get(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<Option<Box<Node>>> {
+    pub fn get(
+        id: &Vec<u8>,
+        entity: &str,
+        conn: &Connection,
+    ) -> std::result::Result<Option<Box<Node>>, rusqlite::Error> {
         let mut get_stmt = conn.prepare_cached(Self::NODE_QUERY)?;
         let node = get_stmt
             .query_row((id, entity), Self::NODE_MAPPING)

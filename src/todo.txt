@@ -1,5 +1,26 @@
 
 Database: 
+    
+    --Rooms
+    get_rooms_for_user(user)
+    get_room(id)
+    add_room(RoomDbDefinition)
+    room modification triggers an event: room_id users[]
+
+
+
+    --synchronisation function
+    get_log_for_room(room, start_date),
+    get_node_ids_for_dates(room, vec<dates>)
+    get_nodes(vec<id>)
+    add_nodes(Vec<FullNode>)
+    get node_del_log_for_dates(room, vec<dates>)
+    get_edges_for_dates(Vec<date>)
+    get edge_del_log_for_dates(room, vec<dates>)
+    add_edges(vec<Edges>)
+
+
+
 
     implements direct node and edge insertion
         in batch
@@ -10,8 +31,7 @@ Database:
     get edges in batch
 
 
-    room modification should trigger an event: room_id users[]
-
+    
     get room nodes and edges in one query
     get all rooms for user
 

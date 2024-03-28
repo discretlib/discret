@@ -2,10 +2,10 @@
 
 mod cryptography;
 mod database;
+mod date_utils;
 mod message;
 mod network;
 mod synchronisation;
-mod utils;
 
 pub type Result<T> = std::result::Result<T, Error>;
 use thiserror::Error;

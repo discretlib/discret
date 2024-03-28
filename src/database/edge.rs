@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     cryptography::{base64_encode, import_verifying_key, SigningKey},
-    utils::now,
+    date_utils::now,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -293,7 +293,11 @@ impl Edge {
     ///
     /// retrieve all edges from a specific source and label
     ///
-    pub fn get_edges(src: &Vec<u8>, label: &str, conn: &Connection) -> Result<Vec<Edge>> {
+    pub fn get_edges(
+        src: &Vec<u8>,
+        label: &str,
+        conn: &Connection,
+    ) -> std::result::Result<Vec<Edge>, rusqlite::Error> {
         let mut edges_stmt = conn.prepare_cached(
             "SELECT  src, src_entity, label, dest, cdate, verifying_key, signature 
             FROM _edge

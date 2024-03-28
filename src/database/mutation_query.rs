@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{
     cryptography::{base64_decode, base64_encode, SigningKey},
     database::configuration::ROOMS_FIELD,
-    utils::now,
+    date_utils::now,
 };
 
 use super::{

@@ -3,21 +3,26 @@ use std::{
     fmt,
 };
 
+use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot::Sender};
 
 use crate::{
     cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
-    database::configuration::{ID_FIELD, MODIFICATION_DATE_FIELD, ROOMS_FIELD},
-    utils::now,
+    database::configuration::{
+        AUTH_CRED_FIELD_SHORT, AUTH_USER_FIELD_SHORT, CRED_RIGHTS_SHORT, ID_FIELD,
+        MODIFICATION_DATE_FIELD, ROOMS_FIELD, ROOMS_FIELD_SHORT, ROOM_AUTH_FIELD_SHORT,
+        ROOM_ENT_SHORT,
+    },
+    date_utils::now,
 };
 
 use super::{
     configuration::{self, AUTH_CRED_FIELD, AUTH_USER_FIELD, ROOM_ENT},
     daily_log::DailyMutations,
     deletion::DeletionQuery,
-    edge::EdgeDeletionEntry,
+    edge::{Edge, EdgeDeletionEntry},
     mutation_query::{InsertEntity, MutationQuery},
-    node::NodeDeletionEntry,
+    node::{Node, NodeDeletionEntry},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
@@ -200,6 +205,214 @@ impl fmt::Display for RightType {
     }
 }
 
+///
+/// a complete room definition in the node/edge format that is used for data synchronisation
+///
+pub struct RoomNode {
+    pub rowid: Option<i64>,
+    pub node: Node,
+    pub parent_edges: Vec<Edge>,
+    pub auth_edges: Vec<Edge>,
+    pub auth_nodes: Vec<AuthorisationNode>,
+}
+impl RoomNode {
+    pub fn write(&self, conn: &Connection) -> super::Result<()> {
+        self.node.write(conn, false, &self.rowid, &None, &None)?;
+        for p in &self.parent_edges {
+            p.write(conn)?;
+        }
+        for a in &self.auth_edges {
+            a.write(conn)?;
+        }
+        for a in &self.auth_nodes {
+            a.write(conn)?;
+        }
+        Ok(())
+    }
+
+    pub fn read(
+        conn: &Connection,
+        id: &Vec<u8>,
+    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        if node.is_none() {
+            return Ok(None);
+        }
+        let node = *node.unwrap();
+        let parent_edges = Edge::get_edges(id, ROOMS_FIELD_SHORT, conn)?;
+        let auth_edges = Edge::get_edges(id, ROOM_AUTH_FIELD_SHORT, conn)?;
+        let mut auth_nodes = Vec::new();
+        for edge in &auth_edges {
+            let auth_opt = AuthorisationNode::read(conn, &edge.dest)?;
+            if let Some(auth) = auth_opt {
+                auth_nodes.push(auth);
+            }
+        }
+        Ok(Some(Self {
+            rowid: None,
+            node,
+            parent_edges,
+            auth_edges,
+            auth_nodes,
+        }))
+    }
+}
+
+pub struct AuthorisationNode {
+    pub rowid: Option<i64>,
+    pub node: Node,
+    pub cred_edges: Vec<Edge>,
+    pub cred_nodes: Vec<CredentialNode>,
+    pub user_edges: Vec<Edge>,
+    pub user_nodes: Vec<UserAuthNode>,
+}
+impl AuthorisationNode {
+    pub fn write(&self, conn: &Connection) -> super::Result<()> {
+        self.node.write(conn, false, &self.rowid, &None, &None)?;
+        for c in &self.cred_edges {
+            c.write(conn)?;
+        }
+        for c in &self.cred_nodes {
+            c.write(conn)?;
+        }
+        for u in &self.user_edges {
+            u.write(conn)?;
+        }
+        for u in &self.user_nodes {
+            u.write(conn)?;
+        }
+        Ok(())
+    }
+
+    pub fn read(
+        conn: &Connection,
+        id: &Vec<u8>,
+    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        if node.is_none() {
+            return Ok(None);
+        }
+        let node = *node.unwrap();
+
+        let cred_edges = Edge::get_edges(id, AUTH_CRED_FIELD_SHORT, conn)?;
+        let mut cred_nodes = Vec::new();
+        for edge in &cred_edges {
+            let cred_opt = CredentialNode::read(conn, &edge.dest)?;
+            if let Some(cred) = cred_opt {
+                cred_nodes.push(cred);
+            }
+        }
+
+        let user_edges = Edge::get_edges(id, AUTH_USER_FIELD_SHORT, conn)?;
+        let mut user_nodes = Vec::new();
+        for edge in &user_edges {
+            let user_opt = UserAuthNode::read(conn, &edge.dest)?;
+            if let Some(user) = user_opt {
+                user_nodes.push(user);
+            }
+        }
+
+        Ok(Some(Self {
+            rowid: None,
+            node,
+            cred_edges,
+            cred_nodes,
+            user_edges,
+            user_nodes,
+        }))
+    }
+}
+
+pub struct CredentialNode {
+    pub rowid: Option<i64>,
+    pub node: Node,
+    pub right_edges: Vec<Edge>,
+    pub right_nodes: Vec<EntityRightNode>,
+}
+impl CredentialNode {
+    pub fn write(&self, conn: &Connection) -> super::Result<()> {
+        self.node.write(conn, false, &self.rowid, &None, &None)?;
+
+        for r in &self.right_edges {
+            r.write(conn)?;
+        }
+        for r in &self.right_nodes {
+            r.write(conn)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn read(
+        conn: &Connection,
+        id: &Vec<u8>,
+    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        if node.is_none() {
+            return Ok(None);
+        }
+        let node = *node.unwrap();
+        let right_edges = Edge::get_edges(id, CRED_RIGHTS_SHORT, conn)?;
+        let mut right_nodes = Vec::new();
+        for edge in &right_edges {
+            let right_opt = EntityRightNode::read(conn, &edge.dest)?;
+            if let Some(right) = right_opt {
+                right_nodes.push(right);
+            }
+        }
+        Ok(Some(Self {
+            rowid: None,
+            node,
+            right_edges,
+            right_nodes,
+        }))
+    }
+}
+
+pub struct UserAuthNode {
+    pub rowid: Option<i64>,
+    pub node: Node,
+}
+impl UserAuthNode {
+    pub fn write(&self, conn: &Connection) -> super::Result<()> {
+        self.node.write(conn, false, &self.rowid, &None, &None)?;
+        Ok(())
+    }
+    pub fn read(
+        conn: &Connection,
+        id: &Vec<u8>,
+    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        if node.is_none() {
+            return Ok(None);
+        }
+        let node = *node.unwrap();
+        Ok(Some(Self { rowid: None, node }))
+    }
+}
+
+pub struct EntityRightNode {
+    pub rowid: Option<i64>,
+    pub node: Node,
+}
+impl EntityRightNode {
+    pub fn write(&self, conn: &Connection) -> super::Result<()> {
+        self.node.write(conn, false, &self.rowid, &None, &None)?;
+        Ok(())
+    }
+    pub fn read(
+        conn: &Connection,
+        id: &Vec<u8>,
+    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        if node.is_none() {
+            return Ok(None);
+        }
+        let node = *node.unwrap();
+        Ok(Some(Self { rowid: None, node }))
+    }
+}
+
 pub enum AuthorisationMessage {
     MutationQuery(
         MutationQuery,
@@ -213,6 +426,7 @@ pub enum AuthorisationMessage {
         Sender<super::Result<DeletionQuery>>,
     ),
     Load(String, Sender<super::Result<()>>),
+    RoomAdd(RoomNode, mpsc::Sender<super::Result<()>>),
 }
 
 pub struct RoomMutationQuery {
@@ -338,6 +552,7 @@ impl AuthorisationService {
                     }
                 }
             }
+            AuthorisationMessage::RoomAdd(room_def, reply) => todo!(),
         }
     }
 

@@ -1,14 +1,11 @@
-use std::time::SystemTime;
-
 use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
-use chrono::{DateTime, Duration, NaiveDateTime};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
 
-use crate::utils::now;
+use crate::date_utils::now;
 
 #[derive(Error, Debug)]
 pub enum Error {

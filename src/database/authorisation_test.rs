@@ -13,7 +13,7 @@ mod tests {
             node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
-        utils::now,
+        date_utils::now,
     };
 
     #[test]

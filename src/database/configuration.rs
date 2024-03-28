@@ -85,6 +85,7 @@ pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
 
 //name of the system entities
 pub const ROOM_ENT: &str = "_Room";
+pub const ROOM_ENT_SHORT: &str = "0";
 pub const AUTHORISATION_ENT: &str = "_Authorisation";
 
 pub const USER_AUTH_ENT: &str = "_UserAuth";
@@ -112,10 +113,15 @@ pub const ROOMS_FIELD_SHORT: &str = "1";
 //names of some authentication fields used during auth validation
 pub const AUTH_CRED_FIELD: &str = "credentials";
 pub const AUTH_USER_FIELD: &str = "users";
+pub const AUTH_CRED_FIELD_SHORT: &str = "33";
+pub const AUTH_USER_FIELD_SHORT: &str = "34";
 
 //names of some authentication fields used during auth validation
+pub const ROOM_AUTH_FIELD_SHORT: &str = "33";
+
 pub const CRED_MUTATE_ROOM_SHORT: &str = "32";
 pub const CRED_MUTATE_ROOM_USERS_SHORT: &str = "33";
+pub const CRED_RIGHTS_SHORT: &str = "34";
 
 pub const USER_VERIFYING_KEY_SHORT: &str = "32";
 pub const USER_ENABLED_SHORT: &str = "33";
