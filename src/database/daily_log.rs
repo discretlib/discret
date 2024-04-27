@@ -7,8 +7,9 @@ use crate::date_utils::{date, date_next_day};
 use super::{configuration::ROOMS_FIELD_SHORT, sqlite_database::RowMappingFn};
 
 ///
-/// stores the modified dates for each rooms during the batch insert
-/// at the end of the batch, update the hash to null for all impacted daily logs entries
+/// Stores the modified dates for each rooms during the batch insert.
+///
+/// At the end of the batch, update the hash to null for all impacted daily logs entries
 /// recompute will be performed later
 /// this avoids an update of the log for every inserted rows and is specially usefull during room synchronisation
 ///
@@ -198,7 +199,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_decode, base64_encode, random},
+        cryptography::{base64_decode, base64_encode, random_id},
         database::{
             configuration::Configuration,
             daily_log::DailyLog,
@@ -230,7 +231,7 @@ mod tests {
 
         let data_model = "Person{ name:String, parents:[Person] nullable }";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
@@ -253,24 +254,25 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
                             }]
                         }]
                     }
-
                 }"#,
                 Some(param),
             )

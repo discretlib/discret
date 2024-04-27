@@ -9,7 +9,7 @@ use tokio::sync::{
 use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
-    authorisation::{AuthorisationMessage, RoomMutationQuery},
+    authorisation::{AuthorisationMessage, RoomMutationQuery, RoomNode},
     configuration,
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
@@ -39,6 +39,7 @@ pub enum WriteMessage {
     RoomMutationQuery(RoomMutationQuery, mpsc::Sender<AuthorisationMessage>),
     WriteStmt(WriteStmt, Sender<Result<WriteStmt>>),
     ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
+    RoomAdd(RoomNode, Sender<Result<()>>),
 }
 
 //Create a sqlcipher database connection
@@ -467,6 +468,9 @@ impl BufferedDatabaseWriter {
                                         Ok(q),
                                     ));
                                 }
+                                WriteMessage::RoomAdd(_, r) => {
+                                    let _ = r.send(Ok(()));
+                                }
                             }
                         }
                     }
@@ -493,6 +497,9 @@ impl BufferedDatabaseWriter {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
                                         Err(Error::DatabaseWrite(e.to_string())),
                                     ));
+                                }
+                                WriteMessage::RoomAdd(_, r) => {
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                             }
                         }
@@ -533,6 +540,14 @@ impl BufferedDatabaseWriter {
                         return Err(e);
                     }
                     query.update_daily_logs(&mut daily_log);
+                }
+                WriteMessage::RoomAdd(room_node, _) => {
+                    if let Err(e) = room_node.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                    //room update do not trigger update_daily_log
+                    //because room definitions are always synchronized at the start of a p2p connection
                 }
                 WriteMessage::WriteStmt(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {

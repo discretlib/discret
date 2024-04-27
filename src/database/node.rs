@@ -34,6 +34,7 @@ impl Default for Node {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Node {
     pub id: Vec<u8>,
+    //pub room_id: Vec<u8>,
     pub cdate: i64,
     pub mdate: i64,
     pub _entity: String,

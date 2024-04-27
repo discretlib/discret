@@ -86,15 +86,21 @@ pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
 //name of the system entities
 pub const ROOM_ENT: &str = "_Room";
 pub const ROOM_ENT_SHORT: &str = "0";
+
 pub const AUTHORISATION_ENT: &str = "_Authorisation";
+pub const AUTHORISATION_ENT_SHORT: &str = "1";
 
 pub const USER_AUTH_ENT: &str = "_UserAuth";
-pub const CREDENTIAL_ENT: &str = "_Credential";
+pub const USER_AUTH_ENT_SHORT: &str = "2";
+
 pub const ENTITY_RIGHT_ENT: &str = "_EntityRight";
+pub const ENTITY_RIGHT_ENT_SHORT: &str = "3";
+
 pub const AUTHOR_ENT: &str = "_User";
 
 //name of the system fields
 pub const ID_FIELD: &str = "id";
+pub const ROOM_ID_FIELD: &str = "room_id";
 pub const CREATION_DATE_FIELD: &str = "cdate";
 pub const MODIFICATION_DATE_FIELD: &str = "mdate";
 pub const ENTITY_FIELD: &str = "_entity";
@@ -111,17 +117,18 @@ pub const ROOMS_FIELD: &str = "_rooms";
 pub const ROOMS_FIELD_SHORT: &str = "1";
 
 //names of some authentication fields used during auth validation
-pub const AUTH_CRED_FIELD: &str = "credentials";
-pub const AUTH_USER_FIELD: &str = "users";
-pub const AUTH_CRED_FIELD_SHORT: &str = "33";
-pub const AUTH_USER_FIELD_SHORT: &str = "34";
+pub const ROOM_ADMIN_FIELD: &str = "admin";
+pub const ROOM_ADMIN_FIELD_SHORT: &str = "33";
+pub const ROOM_USER_ADMIN_FIELD: &str = "user_admin";
+pub const ROOM_USER_ADMIN_FIELD_SHORT: &str = "34";
+pub const ROOM_AUTHORISATION_FIELD: &str = "authorisations";
+pub const ROOM_AUTHORISATION_FIELD_SHORT: &str = "35";
 
 //names of some authentication fields used during auth validation
-pub const ROOM_AUTH_FIELD_SHORT: &str = "33";
-
-pub const CRED_MUTATE_ROOM_SHORT: &str = "32";
-pub const CRED_MUTATE_ROOM_USERS_SHORT: &str = "33";
-pub const CRED_RIGHTS_SHORT: &str = "34";
+pub const AUTH_RIGHTS_FIELD: &str = "rights";
+pub const AUTH_RIGHTS_FIELD_SHORT: &str = "33";
+pub const AUTH_USER_FIELD: &str = "users";
+pub const AUTH_USER_FIELD_SHORT: &str = "34";
 
 pub const USER_VERIFYING_KEY_SHORT: &str = "32";
 pub const USER_ENABLED_SHORT: &str = "33";
@@ -134,25 +141,21 @@ pub const RIGHT_DELETE_SHORT: &str = "35";
 pub const SYSTEM_DATA_MODEL: &str = "    
     _Room {
         type: String,
+        admin: [_UserAuth],
+        user_admin: [_UserAuth],
         authorisations:[_Authorisation],
         index(type)
     }
     
     _Authorisation {
         name: String,
-        credentials:[_Credential] ,
+        rights:[_EntityRight] ,
         users:[_UserAuth],
     }
     
     _UserAuth{
         verifying_key: Base64,
         enabled: Boolean default true,
-    }
-
-    _Credential {
-        mutate_room: Boolean default false,
-        mutate_room_users: Boolean default false,
-        rights:[_EntityRight],
     }
     
     _EntityRight {

@@ -4,7 +4,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random},
+        cryptography::{base64_encode, random_id},
         database::{
             authorisation::*,
             configuration::Configuration,
@@ -13,149 +13,180 @@ mod tests {
             node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
-        date_utils::now,
     };
 
     #[test]
-    fn mutate_room() {
-        let user1 = User {
-            verifying_key: random().to_vec(),
-            date: 0,
+    fn room_admins() {
+        let valid_date: i64 = 10000;
+        let mut user1 = User {
+            id: random_id().to_vec(),
+            verifying_key: random_id().to_vec(),
+            date: valid_date,
             enabled: true,
         };
 
         let mut room = Room::default();
-        let mut auth = Authorisation::default();
+        assert!(!room.is_admin(&user1.verifying_key, valid_date));
 
-        auth.set_user(user1.clone()).unwrap();
+        room.add_admin_user(user1.clone()).unwrap();
+        assert!(room.is_admin(&user1.verifying_key, valid_date));
 
-        let mut cred1 = Credential::default();
-        cred1.valid_from = 1000;
-        cred1.mutate_room = true;
-        cred1.mutate_room_users = true;
+        //invalid before valid_date
+        assert!(!room.is_admin(&user1.verifying_key, valid_date - 1));
 
-        auth.set_credential(cred1).unwrap();
+        user1.date = valid_date - 100;
+        room.add_admin_user(user1.clone())
+            .expect_err("Cannot add a  user admin definition before the last date");
 
-        let mut cred2 = Credential::default();
-        cred2.valid_from = 1000;
+        user1.date = valid_date + 1000;
+        user1.enabled = false;
+        room.add_admin_user(user1.clone()).unwrap();
 
-        auth.set_credential(cred2).expect_err(
-            "Cannot insert a new credential with a from_date lower or equal to the last one",
-        );
+        //user is valid beetween valid_date and valid_date+1000
+        assert!(room.is_admin(&user1.verifying_key, valid_date + 10));
 
-        let mut cred2 = Credential::default();
-        cred2.valid_from = 2000;
-        cred2.mutate_room = false;
-        cred2.mutate_room_users = false;
+        //user is disabled
+        assert!(!room.is_admin(&user1.verifying_key, user1.date));
+    }
 
-        auth.set_credential(cred2).unwrap();
+    #[test]
+    fn room_user_admins() {
+        let valid_date: i64 = 10000;
+        let mut user1 = User {
+            id: random_id().to_vec(),
+            verifying_key: random_id().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
 
-        assert!(!auth.can("", 10, &RightType::MutateRoom));
-        assert!(!auth.can("", 10, &RightType::MutateRoomUsers));
-        assert!(auth.can("", 1000, &RightType::MutateRoom));
-        assert!(auth.can("", 1000, &RightType::MutateRoomUsers));
-        assert!(auth.can("", 1500, &RightType::MutateRoom));
-        assert!(auth.can("", 1500, &RightType::MutateRoomUsers));
-        assert!(!auth.can("", 2000, &RightType::MutateRoom));
-        assert!(!auth.can("", 2000, &RightType::MutateRoomUsers));
-        assert!(!auth.can("", now(), &RightType::MutateRoom));
-        assert!(!auth.can("", now(), &RightType::MutateRoomUsers));
+        let mut room = Room::default();
+        assert!(!room.is_user_admin(&user1.verifying_key, valid_date));
 
-        assert!(auth.is_user_valid_at(&user1.verifying_key, 1500));
+        room.add_user_admin_user(user1.clone()).unwrap();
+        assert!(room.is_user_admin(&user1.verifying_key, valid_date));
 
-        let mut user1_dis = user1.clone();
-        user1_dis.date = 1500;
-        user1_dis.enabled = false;
-        auth.set_user(user1_dis.clone()).unwrap();
+        //invalid before valid_date
+        assert!(!room.is_user_admin(&user1.verifying_key, valid_date - 1));
 
-        user1_dis.date = 1000;
-        auth.set_user(user1_dis.clone())
-            .expect_err("cannot set a user validity date to a lower value than the current one");
+        user1.date = valid_date - 100;
+        room.add_user_admin_user(user1.clone())
+            .expect_err("Cannot add a  user admin definition before the last date");
 
-        assert!(auth.is_user_valid_at(&user1.verifying_key, 1400));
-        assert!(!auth.is_user_valid_at(&user1.verifying_key, 1501));
+        user1.date = valid_date + 1000;
+        user1.enabled = false;
+        room.add_user_admin_user(user1.clone()).unwrap();
 
-        let authorisation_id = random().to_vec();
-        room.add_auth(authorisation_id.clone(), auth).unwrap();
-        room.add_auth(authorisation_id, Authorisation::default())
-            .expect_err("cannot insert twice");
+        //user is valid beetween valid_date and valid_date+1000
+        assert!(room.is_user_admin(&user1.verifying_key, valid_date + 10));
 
-        assert!(!room.can(&user1.verifying_key, "", 10, &RightType::MutateRoom));
-        assert!(room.can(&user1.verifying_key, "", 1400, &RightType::MutateRoom));
-        assert!(!room.can(&user1.verifying_key, "", 1501, &RightType::MutateRoom));
+        //user is disabled
+        assert!(!room.is_user_admin(&user1.verifying_key, user1.date));
     }
 
     #[test]
     fn entity_right() {
+        let user_valid_date: i64 = 1000;
         let user1 = User {
-            verifying_key: random().to_vec(),
-            date: 0,
+            id: random_id().to_vec(),
+            verifying_key: random_id().to_vec(),
+            date: user_valid_date,
             enabled: true,
         };
 
-        //random_secret().to_vec();
-
         let mut room = Room::default();
+        room.add_admin_user(user1.clone()).unwrap();
+        room.add_user_admin_user(user1.clone()).unwrap();
+
         let mut auth = Authorisation::default();
+        auth.add_user(user1.clone()).unwrap();
+        assert!(auth.is_user_valid_at(&user1.verifying_key, user_valid_date));
+        assert!(!auth.is_user_valid_at(&user1.verifying_key, user_valid_date - 1));
 
-        auth.set_user(user1.clone()).unwrap();
-        let mut cred1 = Credential::default();
-        cred1.valid_from = 1000;
-        cred1
-            .add_entity_rights(
-                "Person",
-                EntityRight {
-                    entity: "Person".to_string(),
-                    mutate_self: true,
-                    delete_all: true,
-                    mutate_all: true,
-                },
-            )
-            .unwrap();
-        cred1
-            .add_entity_rights(
-                "Pet",
-                EntityRight {
-                    entity: "Pet".to_string(),
-                    mutate_self: false,
-                    delete_all: false,
-                    mutate_all: false,
-                },
-            )
-            .unwrap();
+        let ent_date: i64 = 100;
+        let entity = "Person";
+        let mut person_right = EntityRight {
+            id: random_id().to_vec(),
+            valid_from: ent_date,
+            entity: entity.to_string(),
+            mutate_self: true,
+            delete_all: true,
+            mutate_all: true,
+        };
 
-        cred1
-            .add_entity_rights(
-                "Pet",
-                EntityRight {
-                    entity: "Pet".to_string(),
-                    mutate_self: false,
-                    delete_all: false,
-                    mutate_all: false,
-                },
-            )
-            .expect_err("cannot insert twice");
+        auth.add_right(person_right.clone()).unwrap();
 
-        auth.set_credential(cred1).unwrap();
-        let authorisation_id = random().to_vec();
-        room.add_auth(authorisation_id, auth).unwrap();
+        person_right.valid_from = ent_date - 1;
+        auth.add_right(person_right.clone())
+            .expect_err("Cannot insert a right before an existing one");
 
-        assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::DeleteAll));
-        assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::MutateSelf));
-        assert!(!room.can(&user1.verifying_key, "Person", 0, &RightType::MutateAll));
+        person_right.mutate_self = false;
+        person_right.delete_all = false;
+        person_right.mutate_all = false;
 
-        assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::DeleteAll));
-        assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::MutateSelf));
-        assert!(room.can(&user1.verifying_key, "Person", 1000, &RightType::MutateAll));
+        person_right.valid_from = ent_date + 1000;
+        auth.add_right(person_right.clone()).unwrap();
 
-        assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::DeleteAll));
-        assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateSelf));
-        assert!(!room.can(&user1.verifying_key, "Pet", 1000, &RightType::MutateAll));
+        room.add_auth(auth).unwrap();
 
-        let user2 = random().to_vec();
-        assert!(!room.can(&user2, "Person", 1000, &RightType::DeleteAll));
-        assert!(!room.can(&user2, "Person", 1000, &RightType::MutateSelf));
-        assert!(!room.can(&user2, "Person", 1000, &RightType::MutateAll));
+        //user is invalid at this date
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            ent_date,
+            &RightType::DeleteAll
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            ent_date,
+            &RightType::MutateSelf
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            ent_date,
+            &RightType::MutateAll
+        ));
+
+        //user is valid at this date
+        assert!(room.can(
+            &user1.verifying_key,
+            entity,
+            user_valid_date,
+            &RightType::DeleteAll
+        ));
+        assert!(room.can(
+            &user1.verifying_key,
+            entity,
+            user_valid_date,
+            &RightType::MutateSelf
+        ));
+        assert!(room.can(
+            &user1.verifying_key,
+            entity,
+            user_valid_date,
+            &RightType::MutateAll
+        ));
+
+        //the last right disable it all
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            person_right.valid_from,
+            &RightType::DeleteAll
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            person_right.valid_from,
+            &RightType::MutateSelf
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            person_right.valid_from,
+            &RightType::MutateAll
+        ));
     }
 
     const DATA_PATH: &str = "test/data/database/authorisation/";
@@ -179,7 +210,7 @@ mod tests {
     async fn room_creation() {
         init_database_path();
         let data_model = "Person{ name:String }";
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -201,24 +232,25 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
-                            name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            name:"what"
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
                             }]
                         }]
                     }
-
                 }"#,
                 Some(param),
             )
@@ -230,18 +262,20 @@ mod tests {
                 "query q{
                     _Room{
                         type
+                        admin{
+                            enabled
+                        }
+                        user_admin{
+                            enabled
+                        }
                         authorisations{
                             name 
-                            credentials{
-                                mutate_room
-                                mutate_room_users
-                                rights{
-                                    entity
-                                    mutate_self
-                                    delete_all
-                                    mutate_all
-                                }
-                            } 
+                            rights{
+                                entity
+                                mutate_self
+                                delete_all
+                                mutate_all
+                            }
                             users{
                                 enabled
                             }
@@ -253,7 +287,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"mutate_room\":true,\"mutate_room_users\":true,\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}]}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
         assert_eq!(result, expected);
         // println!("{:#?}", result);
     }
@@ -272,7 +306,7 @@ mod tests {
         }
         ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -293,18 +327,20 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
+                        type: "first"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
@@ -323,9 +359,6 @@ mod tests {
 
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
         let _auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
-
-        let credentials_insert = &authorisation_insert.sub_nodes.get("credentials").unwrap()[0];
-        let _cred_id = base64_encode(&credentials_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -380,18 +413,20 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                 _Room{
-                    type: "whatever"
+                    type: "pet_room"
+                    admin: [{
+                        verifying_key:$user_id
+                    }]
+                    user_admin: [{
+                        verifying_key:$user_id
+                    }]
                     authorisations:[{
                         name:"admin"
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:true
-                            rights:[{
-                                entity:"Pet"
-                                mutate_self:true
-                                delete_all:true
-                                mutate_all:true
-                            }]
+                        rights:[{
+                            entity:"Pet"
+                            mutate_self:true
+                            delete_all:true
+                            mutate_all:true
                         }]
                         users: [{
                             verifying_key:$user_id
@@ -468,7 +503,7 @@ mod tests {
     async fn authorisation_entities_error() {
         init_database_path();
         let data_model = "Person{name:String,}";
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -488,16 +523,12 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     _Authorisation{
-                        name:"admin"
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:true
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:true
-                                delete_all:true
-                                mutate_all:true
-                            }]
+                        name:"admin" 
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:true
+                            delete_all:true
+                            mutate_all:true
                         }]
                         users: [{
                             verifying_key:$user_id
@@ -508,24 +539,6 @@ mod tests {
         )
         .await
         .expect_err("_Authorisation cannot be mutated outside of a room context");
-
-        app.mutate(
-            r#"mutation mut {
-                    _Credential{
-                        mutate_room:true
-                        mutate_room_users:true
-                        rights:[{
-                            entity:"Person"
-                            mutate_self:true
-                            delete_all:true
-                            mutate_all:true
-                        }]
-                    }
-                }"#,
-            None,
-        )
-        .await
-        .expect_err("_Credential cannot be mutated outside of a room context");
 
         app.mutate(
             r#"mutation mut {
@@ -554,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn room_update_credentials() {
+    async fn room_update_rights() {
         init_database_path();
         let data_model = "
         Person{ 
@@ -567,7 +580,7 @@ mod tests {
         }
         ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -589,17 +602,19 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
@@ -619,9 +634,6 @@ mod tests {
         let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
         let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
 
-        let credentials_insert = &authorisation_insert.sub_nodes.get("credentials").unwrap()[0];
-        let cred_id = base64_encode(&credentials_insert.node_to_mutate.id);
-
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate(
@@ -640,85 +652,25 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         param.add("auth_id", auth_id.clone()).unwrap();
-        param.add("cred_id", cred_id.clone()).unwrap();
-
         app.mutate(
             r#"mutation mut {
                 _Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
-                        credentials: [{
-                            id:$cred_id
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:true
-                                delete_all:false
-                                mutate_all:false
-                            }]
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:false
+                            delete_all:false
+                            mutate_all:false
                         }]
                     }]
                 }
-
             }"#,
             Some(param),
         )
         .await
-        .expect_err("Cannot update credentials");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-        app.mutate(
-            r#"mutation mut {
-                _Room{
-                    id:$room_id
-                    authorisations:[{
-                        id:$auth_id
-                        credentials: [{
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:true
-                                delete_all:false
-                                mutate_all:false
-                            }]
-                        }]
-                    }]
-                }
-
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect_err("this removes the  mutate_room:true for the owner");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-        app.mutate(
-            r#"mutation mut {
-                _Room{
-                    id:$room_id
-                    authorisations:[{
-                        id:$auth_id
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:true
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:false
-                                delete_all:false
-                                mutate_all:false
-                            }]
-                        }]
-                    }]
-                }
-
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect("ok a new version of the credential is created");
+        .expect("remove all rights");
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -741,24 +693,21 @@ mod tests {
                     _Room(order_by(type asc)){
                         type
                         authorisations{
-                            name
-                            credentials(order_by(mdate desc)){
-                                rights {
-                                    entity
-                                    mutate_self
-                                    mutate_all
-                                    delete_all
-                                }
+                            name  
+                            rights (order_by(mdate desc)){
+                                entity
+                                mutate_self
+                                mutate_all
+                                delete_all
                             }
                         }
-
                     }
                 }",
                 None,
             )
             .await
             .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"credentials\":[{\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false}]},{\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
     }
 
@@ -767,7 +716,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -784,12 +733,59 @@ mod tests {
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
 
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
+        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("user_id", user_id.clone()).unwrap();
+        app.mutate(
+            r#"mutation mut {
+                _Room{
+                    id:$room_id
+                    admin: [{
+                        verifying_key:$user_id
+                        enabled:false
+                    }]
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .expect_err("cannot disable itself from admin");
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", user_id.clone()).unwrap();
+
         app.mutate(
             r#"mutation mut {
                     _Room{
-                        type: "whatever"
+                        id:$room_id
                         authorisations:[{
-                            name:"admin"
+                            id: $auth_id
                             users: [{
                                 verifying_key:$user_id
                             }]
@@ -800,41 +796,7 @@ mod tests {
             Some(param),
         )
         .await
-        .expect_err("no mutate_room_users:true credential");
-
-        let mut param = Parameters::default();
-        param.add("user_id", user_id.clone()).unwrap();
-        let room = app
-            .mutate(
-                r#"mutation mut {
-                    _Room{
-                        type: "whatever"
-                        authorisations:[{
-                            name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                            }]
-                            users: [{
-                                verifying_key:$user_id
-                            }]
-                        }]
-                    }
-
-                }"#,
-                Some(param),
-            )
-            .await
-            .unwrap();
-
-        let room_insert = &room.mutate_entities[0];
-        let room_id = base64_encode(&room_insert.node_to_mutate.id);
-
-        let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
-
-        let user_insert = &authorisation_insert.sub_nodes.get("users").unwrap()[0];
-        let user_id = base64_encode(&user_insert.node_to_mutate.id);
+        .expect_err("user_id is not allowed to insert new users");
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -845,21 +807,40 @@ mod tests {
             r#"mutation mut {
                 _Room{
                     id:$room_id
+                    user_admin: [{
+                        verifying_key:$user_id
+                    }]
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            id:$user_id
-                            enabled: false
+                            verifying_key:$user_id
                         }]
-                        
                     }]
                 }
-
             }"#,
             Some(param),
         )
         .await
-        .expect_err("Cannot disable itself");
+        .unwrap();
+
+        let result = app
+            .query(
+                "query q{
+                _Room(order_by(type asc)){
+                    id
+                    type
+                    authorisations{
+                        id
+                        name  
+                        users{ verifying_key }
+                    }
+                }
+            }",
+                None,
+            )
+            .await
+            .unwrap();
+        println!("{}", result);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -884,6 +865,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         param.add("auth_id", auth_id.clone()).unwrap();
+
         app.mutate(
             r#"mutation mut {
                 _Room{
@@ -905,51 +887,42 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", user_id.clone()).unwrap();
         app.mutate(
             r#"mutation mut {
                 _Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:false
-                        }]
                         users: [{
-                            verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
+                            verifying_key:$user_id
                             enabled:false
                         }]
-                        
                     }]
                 }
-
             }"#,
             Some(param),
         )
         .await
-        .expect_err("cannot add a new user anymore");
+        .expect("can disable itself in an authorisation");
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", user_id.clone()).unwrap();
         app.mutate(
             r#"mutation mut {
                 _Room{
                     id:$room_id
-                    authorisations:[{
-                        id:$auth_id
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:false
-                        }]
+                    user_admin: [{
+                        verifying_key:$user_id
+                        enabled:false
                     }]
                 }
-
             }"#,
             Some(param),
         )
         .await
-        .unwrap();
+        .expect("can disable itself from user_admin");
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -962,7 +935,7 @@ mod tests {
                         id:$auth_id
                         users: [{
                             verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
-                            enabled:false
+                            enabled:true
                         }]
                         
                     }]
@@ -972,7 +945,7 @@ mod tests {
             Some(param),
         )
         .await
-        .expect_err("cannot add a new user anymore");
+        .expect_err("cannot mutate user anymore");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -980,7 +953,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1001,15 +974,11 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                            }]
-                            users: [{
-                                verifying_key:$user_id
-                            }]
                         }]
                     }
                 }"#,
@@ -1049,21 +1018,15 @@ mod tests {
                 "query q{
                     _Room(order_by(type asc)){
                         type
-                        authorisations{
-                            name
-                            credentials(order_by(mdate desc)){
-                                mutate_room
-                                mutate_room_users
-                            }
-                        }
-
+                        admin{ enabled }
+                        authorisations{ name }
                     }
                 }",
                 None,
             )
             .await
             .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"new_type\",\"authorisations\":[{\"name\":\"new_admin\",\"credentials\":[{\"mutate_room\":true,\"mutate_room_users\":true}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"type\":\"new_type\",\"admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"new_admin\"}]}]\n}";
         assert_eq!(result, expected);
 
         // println!("{:#?}", result);
@@ -1078,7 +1041,7 @@ mod tests {
             Pet{ name:String }
             ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
 
         //open a database, creates two rooms and close it
@@ -1102,17 +1065,19 @@ mod tests {
                     r#"mutation mut {
                     _Room{
                         type: "person_only"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
@@ -1136,24 +1101,25 @@ mod tests {
                     r#"mutation mut {
                     _Room{
                         type: "pet_only"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Pet"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Pet"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
                             }]
                         }]
                     }
-
                 }"#,
                     Some(param),
                 )
@@ -1263,7 +1229,7 @@ mod tests {
         }   
         ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1285,24 +1251,25 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
-                            }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
+                            }]       
                             users: [{
                                 verifying_key:$user_id
                             }]
                         }]
                     }
-
                 }"#,
                 Some(param),
             )
@@ -1415,17 +1382,12 @@ mod tests {
                     id:$id
                     authorisations:[{
                         id:$auth_id
-                        credentials: [{
-                            mutate_room:true
-                            mutate_room_users:true
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:false
-                                delete_all:true
-                                mutate_all:true
-                            }]
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:false
+                            delete_all:true
+                            mutate_all:true
                         }]
-                        
                     }]
                 }
             }"#,
@@ -1492,7 +1454,7 @@ mod tests {
         }   
         ";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1514,17 +1476,19 @@ mod tests {
                 r#"mutation mut {
                     _Room{
                         type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
                         authorisations:[{
                             name:"admin"
-                            credentials: [{
-                                mutate_room:true
-                                mutate_room_users:true
-                                rights:[{
-                                    entity:"Person"
-                                    mutate_self:true
-                                    delete_all:true
-                                    mutate_all:true
-                                }]
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
                             }]
                             users: [{
                                 verifying_key:$user_id
@@ -1670,5 +1634,92 @@ mod tests {
             .unwrap();
 
         assert_eq!(2, res.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn export_room_from_database() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random_id();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        type: "whatever"
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+
+        let node = app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // println!("{:#?}", node);
+
+        assert_eq!("{\"32\":\"whatever\"}", node.node._json.unwrap());
+        assert_eq!(1, node.auth_edges.len());
+        assert_eq!(1, node.auth_nodes.len());
+        assert_eq!(0, node.parent_edges.len());
+
+        let auth_node = &node.auth_nodes[0];
+        assert_eq!("{\"32\":\"admin\"}", auth_node.node._json.clone().unwrap());
+        assert_eq!(1, auth_node.right_edges.len());
+        assert_eq!(1, auth_node.right_nodes.len());
+
+        let right_node = &auth_node.right_nodes[0];
+        assert_eq!(
+            "{\"32\":\"Person\",\"33\":true,\"34\":true,\"35\":true}",
+            right_node.node._json.clone().unwrap()
+        );
+        assert_eq!(1, auth_node.user_edges.len());
+        assert_eq!(1, auth_node.user_nodes.len());
     }
 }

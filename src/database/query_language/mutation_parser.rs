@@ -200,7 +200,6 @@ impl MutationParser {
     }
 
     //
-    //
     //propagate the room definition to sub entities to avoid having to write the room everywhere in the query
     //
     fn propagate_room(entity: &mut EntityMutation) -> Result<(), Error> {

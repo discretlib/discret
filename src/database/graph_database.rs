@@ -6,7 +6,9 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{mpsc, oneshot};
 
-use super::authorisation::{AuthorisationMessage, AuthorisationService, RoomAuthorisations};
+use super::authorisation::{
+    AuthorisationMessage, AuthorisationService, RoomAuthorisations, RoomNode,
+};
 use super::configuration;
 use super::daily_log::DailyLogsUpdate;
 use super::deletion::DeletionQuery;
@@ -37,7 +39,10 @@ enum Message {
     SubscribeForEvents(Sender<Receiver<EventMessage>>),
     ComputeDailyLog(),
 }
-
+///
+/// Entry Point for all databases interaction
+///
+///
 #[derive(Clone)]
 pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
@@ -136,10 +141,17 @@ impl GraphDatabaseService {
         })
     }
 
+    ///
+    /// Get the verifying key derived from the key material
+    /// The assiociated signing key is used internaly to sign every change
+    ///
     pub fn verifying_key(&self) -> &Vec<u8> {
         &self.verifying_key
     }
 
+    ///
+    /// Deletion query
+    ///
     pub async fn delete(
         &self,
         deletion: &str,
@@ -157,6 +169,10 @@ impl GraphDatabaseService {
         result
     }
 
+    ///
+    /// GraphQL mutation query
+    ///
+    ///
     pub async fn mutate(
         &self,
         mutation: &str,
@@ -172,7 +188,9 @@ impl GraphDatabaseService {
 
         result
     }
-
+    ///
+    /// GraphQL query
+    ///
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
         let (send, recieve) = oneshot::channel::<Result<String>>();
         let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), send);
@@ -180,13 +198,10 @@ impl GraphDatabaseService {
         recieve.await?
     }
 
-    pub async fn update_data_model(&self, query: &str) -> Result<String> {
-        let (send, recieve) = oneshot::channel::<Result<String>>();
-        let msg = Message::UpdateModel(query.to_string(), send);
-        let _ = self.sender.send(msg).await;
-        recieve.await?
-    }
-
+    ///
+    /// Perform a SQL Selection query on the database
+    /// SQL mutation query are forbidden
+    ///
     pub async fn select<T: Send + Sized + 'static>(
         &self,
         query: String,
@@ -205,6 +220,21 @@ impl GraphDatabaseService {
         receive_response.await?
     }
 
+    ///
+    /// Update the existing data model definition with a new one  
+    ///
+    pub async fn update_data_model(&self, query: &str) -> Result<String> {
+        let (send, recieve) = oneshot::channel::<Result<String>>();
+        let msg = Message::UpdateModel(query.to_string(), send);
+        let _ = self.sender.send(msg).await;
+        recieve.await?
+    }
+
+    ///
+    /// Subscribed for events triggered by the database
+    /// events:
+    ///     ComputedDailyLog: when daily log as changed
+    ///
     pub async fn subcribe_for_events(&self) -> Result<Receiver<EventMessage>> {
         let (send_response, receive_response) = oneshot::channel::<Receiver<EventMessage>>();
 
@@ -214,6 +244,22 @@ impl GraphDatabaseService {
             .await;
 
         Ok(receive_response.await?)
+    }
+
+    ///
+    /// get a database definition of a room
+    /// used for synchronisation
+    ///
+    pub async fn get_room_node(&self, room_id: Vec<u8>) -> Result<Option<RoomNode>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Option<RoomNode>>>();
+
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_node = RoomNode::read(conn, &room_id).map_err(Error::from);
+                let _ = send_response.send(room_node);
+            }))
+            .await?;
+        receive_response.await?
     }
 }
 
@@ -522,20 +568,20 @@ mod tests {
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
-        let paths = fs::read_dir(path).unwrap();
+        // let paths = fs::read_dir(path).unwrap();
 
-        for path in paths {
-            let dir = path.unwrap().path();
-            let paths = fs::read_dir(dir).unwrap();
-            for file in paths {
-                let files = file.unwrap().path();
-                // println!("Name: {}", files.display());
-                let _ = fs::remove_file(&files);
-            }
-        }
+        // for path in paths {
+        //     let dir = path.unwrap().path();
+        //     let paths = fs::read_dir(dir).unwrap();
+        //     for file in paths {
+        //         let files = file.unwrap().path();
+        //         // println!("Name: {}", files.display());
+        //         //let _ = fs::remove_file(&files);
+        //     }
+        // }
     }
 
-    use crate::{cryptography::random, database::query_language::parameter::ParametersAdd};
+    use crate::{cryptography::random_id, database::query_language::parameter::ParametersAdd};
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -544,7 +590,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "selection app",
@@ -589,7 +635,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random();
+        let secret = random_id();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
@@ -639,7 +685,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn load_data_model() {
         init_database_path();
-        let secret = random();
+        let secret = random_id();
         //create a first instance
         {
             let data_model = "
@@ -649,7 +695,7 @@ mod tests {
             }";
             let path: PathBuf = DATA_PATH.into();
             GraphDatabaseService::start(
-                "delete app",
+                "load data_model app",
                 &data_model,
                 &secret,
                 path,
@@ -667,7 +713,7 @@ mod tests {
             }";
             let path: PathBuf = DATA_PATH.into();
             let is_error = GraphDatabaseService::start(
-                "delete app",
+                "load data_model app",
                 &data_model,
                 &secret,
                 path,
@@ -686,7 +732,7 @@ mod tests {
             }";
             let path: PathBuf = DATA_PATH.into();
             GraphDatabaseService::start(
-                "delete app",
+                "load data_model app",
                 &data_model,
                 &secret,
                 path,

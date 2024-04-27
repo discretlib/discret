@@ -92,8 +92,8 @@ pub enum Error {
     #[error("A more recent User definition exists")]
     InvalidUserDate(),
 
-    #[error("credential validity date is set before an existing credential validity")]
-    InvalidCredentialDate(),
+    #[error("Entity Right validity date is set before an existing credential validity")]
+    InvalidRightDate(),
 
     #[error("system entity '{0}' cannot be mutated ouside a Room mutation")]
     InvalidAuthorisationMutation(String),
