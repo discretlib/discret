@@ -66,7 +66,7 @@ impl NodeToMutate {
         Ok(())
     }
 
-    const NODE_MUTATE_QUERY: &'static str = "SELECT id, cdate, mdate, _entity, _json, _binary, _verifying_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
+    const NODE_MUTATE_QUERY: &'static str = "SELECT id, room_id, cdate, mdate, _entity, _json, _binary, _verifying_key, _signature, rowid FROM _node WHERE id=? AND _entity=?";
     const NODE_MUTATE_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(NodeToMutate {
             id: row.get(0)?,
@@ -78,16 +78,17 @@ impl NodeToMutate {
             rooms: HashSet::new(),
             enable_archives: true,
             enable_full_text: true,
-            old_rowid: row.get(8)?,
+            old_rowid: row.get(9)?,
             old_node: Some(Node {
                 id: row.get(0)?,
-                cdate: row.get(1)?,
-                mdate: row.get(2)?,
-                _entity: row.get(3)?,
-                _json: row.get(4)?,
-                _binary: row.get(5)?,
-                _verifying_key: row.get(6)?,
-                _signature: row.get(7)?,
+                room_id: row.get(1)?,
+                cdate: row.get(2)?,
+                mdate: row.get(3)?,
+                _entity: row.get(4)?,
+                _json: row.get(5)?,
+                _binary: row.get(6)?,
+                _verifying_key: row.get(7)?,
+                _signature: row.get(8)?,
             }),
         }))
     };
@@ -473,8 +474,8 @@ impl InsertEntity {
         }
 
         for edg in &self.edge_deletions_log {
-            daily_log.add_room_date(edg.room.clone(), edg.date);
-            daily_log.add_room_date(edg.room.clone(), edg.deletion_date);
+            daily_log.add_room_date(edg.room_id.clone(), edg.date);
+            daily_log.add_room_date(edg.room_id.clone(), edg.deletion_date);
         }
     }
 

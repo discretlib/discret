@@ -28,13 +28,13 @@ impl DailyMutations {
         //println!("Writing daily");
         let mut node_daily_stmt = conn.prepare_cached(
             "INSERT INTO _daily_log (
-                    room,
+                    room_id,
                     date,
                     entry_number,
                     daily_hash,
                     need_recompute
                 ) values (?,?,0,NULL,1)
-                ON CONFLICT(room, date) 
+                ON CONFLICT(room_id, date) 
                 DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
             ",
         )?;
@@ -56,7 +56,7 @@ impl DailyLogsUpdate {
         let mut daily_log_stmt = conn.prepare_cached(
             " 
             SELECT 
-                room,
+                room_id,
                 date
             FROM _daily_log
             WHERE need_recompute = 1
@@ -65,11 +65,11 @@ impl DailyLogsUpdate {
 
         let compute_sql = format!("
                 -- node deletion 
-                SELECT signature FROM _node_deletion_log WHERE room = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
+                SELECT signature FROM _node_deletion_log WHERE room_id = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
                 
                 -- edge deletion 
                 UNION ALL
-                SELECT signature FROM _edge_deletion_log WHERE room = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
+                SELECT signature FROM _edge_deletion_log WHERE room_id = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
                 
                 -- nodes 
                 UNION ALL
@@ -110,7 +110,7 @@ impl DailyLogsUpdate {
                 daily_hash = ?, 
                 need_recompute = 0
             WHERE
-                room = ? AND
+                room_id = ? AND
                 date = ?
             ",
         )?;
@@ -140,7 +140,7 @@ impl DailyLogsUpdate {
 
             update_stmt.execute((entry_number, &daily_hash, &room, date))?;
             self.add_log(DailyLog {
-                room,
+                room_id: room,
                 date,
                 entry_number,
                 daily_hash,
@@ -151,14 +151,14 @@ impl DailyLogsUpdate {
     }
 
     fn add_log(&mut self, log: DailyLog) {
-        let entry = self.room_dates.entry(log.room.clone()).or_default();
+        let entry = self.room_dates.entry(log.room_id.clone()).or_default();
         entry.insert(log);
     }
 }
 
 #[derive(Default, Debug, Clone, Eq, Hash, PartialEq)]
 pub struct DailyLog {
-    pub room: Vec<u8>,
+    pub room_id: Vec<u8>,
     pub date: i64,
     pub entry_number: u32,
     pub daily_hash: Option<Vec<u8>>,
@@ -168,17 +168,17 @@ impl DailyLog {
     pub fn create_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE _daily_log (
-            room BLOB NOT NULL,
+            room_id BLOB NOT NULL,
             date INTEGER NOT NULL,
             entry_number INTEGER NOT NULL DEFAULT 0,
             daily_hash BLOB,
             need_recompute INTEGER, 
-            PRIMARY KEY (room, date)
+            PRIMARY KEY (room_id, date)
         ) WITHOUT ROWID, STRICT",
             [],
         )?;
         conn.execute(
-            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (need_recompute, room, date)",
+            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (need_recompute, room_id, date)",
             [],
         )?;
         Ok(())
@@ -186,7 +186,7 @@ impl DailyLog {
 
     pub const MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(Self {
-            room: row.get(0)?,
+            room_id: row.get(0)?,
             date: row.get(1)?,
             entry_number: row.get(2)?,
             daily_hash: row.get(3)?,
@@ -326,7 +326,7 @@ mod tests {
 
         let daily_edge_log = "
             SELECT 
-                room,
+                room_id,
                 date,
                 entry_number,
                 daily_hash,
@@ -342,7 +342,7 @@ mod tests {
             assert_eq!(date(now()), nd.date);
             assert!(!nd.need_recompute);
             assert_eq!(10, nd.entry_number); //each person has
-            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room);
+            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room_id);
         }
     }
 }

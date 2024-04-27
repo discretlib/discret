@@ -60,7 +60,7 @@ impl Edge {
 
         conn.execute(
             "CREATE TABLE _edge_deletion_log (
-            room BLOB NOT NULL,
+            room_id BLOB NOT NULL,
             src BLOB NOT NULL,
             src_entity TEXT NOT NULL, 
             dest BLOB NOT NULL,
@@ -68,7 +68,7 @@ impl Edge {
             deletion_date INTEGER NOT NULL,
             verifying_key BLOB NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(room, deletion_date, src, label, dest )
+            PRIMARY KEY(room_id, deletion_date, src, label, dest )
         ) WITHOUT ROWID, STRICT",
             [],
         )?;
@@ -330,7 +330,7 @@ impl Default for Edge {
 }
 #[derive(Debug)]
 pub struct EdgeDeletionEntry {
-    pub room: Vec<u8>,
+    pub room_id: Vec<u8>,
     pub src: Vec<u8>,
     pub src_entity: String,
     pub label: String,
@@ -342,15 +342,15 @@ pub struct EdgeDeletionEntry {
 }
 impl EdgeDeletionEntry {
     pub fn build(
-        room: Vec<u8>,
+        room_id: Vec<u8>,
         edge: &Edge,
         deletion_date: i64,
         verifying_key: Vec<u8>,
         signing_key: &impl SigningKey,
     ) -> Self {
-        let signature = Self::sign(&room, edge, deletion_date, &verifying_key, signing_key);
+        let signature = Self::sign(&room_id, edge, deletion_date, &verifying_key, signing_key);
         Self {
-            room,
+            room_id,
             src: edge.src.clone(),
             src_entity: edge.src_entity.clone(),
             label: edge.label.clone(),
@@ -363,14 +363,14 @@ impl EdgeDeletionEntry {
     }
 
     pub fn sign(
-        room: &[u8],
+        room_id: &[u8],
         edge: &Edge,
         deletion_date: i64,
         verifying_key: &[u8],
         signing_key: &impl SigningKey,
     ) -> Vec<u8> {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(room);
+        hasher.update(room_id);
         hasher.update(&edge.src);
         hasher.update(edge.src_entity.as_bytes());
         hasher.update(edge.label.as_bytes());
@@ -383,7 +383,7 @@ impl EdgeDeletionEntry {
 
     pub fn verify(&self) -> Result<()> {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.room);
+        hasher.update(&self.room_id);
         hasher.update(&self.src);
         hasher.update(self.src_entity.as_bytes());
         hasher.update(self.label.as_bytes());
@@ -398,7 +398,7 @@ impl EdgeDeletionEntry {
 
     pub const MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(EdgeDeletionEntry {
-            room: row.get(0)?,
+            room_id: row.get(0)?,
             src: row.get(1)?,
             src_entity: row.get(2)?,
             dest: row.get(3)?,
@@ -414,7 +414,7 @@ impl Writeable for EdgeDeletionEntry {
     fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO _edge_deletion_log (
-            room,
+            room_id,
             src,
             src_entity, 
             dest,
@@ -426,7 +426,7 @@ impl Writeable for EdgeDeletionEntry {
         )?;
 
         insert_stmt.execute((
-            &self.room,
+            &self.room_id,
             &self.src,
             &self.src_entity,
             &self.dest,
@@ -605,7 +605,7 @@ mod tests {
         let mut exists_stmt = conn
             .prepare(
                 "SELECT 
-                room,
+                room_id,
                 src,
                 src_entity, 
                 dest,

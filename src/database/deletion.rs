@@ -128,12 +128,12 @@ impl DeletionQuery {
 
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for edg in &self.edge_log {
-            daily_log.add_room_date(edg.room.clone(), edg.date);
-            daily_log.add_room_date(edg.room.clone(), edg.deletion_date);
+            daily_log.add_room_date(edg.room_id.clone(), edg.date);
+            daily_log.add_room_date(edg.room_id.clone(), edg.deletion_date);
         }
         for log in &self.node_log {
-            daily_log.add_room_date(log.room.clone(), log.mdate);
-            daily_log.add_room_date(log.room.clone(), log.deletion_date);
+            daily_log.add_room_date(log.room_id.clone(), log.mdate);
+            daily_log.add_room_date(log.room_id.clone(), log.deletion_date);
         }
     }
 }

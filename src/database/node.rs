@@ -20,6 +20,7 @@ impl Default for Node {
         let date = now();
         Self {
             id: new_id(),
+            room_id: None,
             cdate: date,
             mdate: date,
             _entity: "".to_string(),
@@ -34,7 +35,7 @@ impl Default for Node {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Node {
     pub id: Vec<u8>,
-    //pub room_id: Vec<u8>,
+    pub room_id: Option<Vec<u8>>,
     pub cdate: i64,
     pub mdate: i64,
     pub _entity: String,
@@ -57,6 +58,7 @@ impl Node {
             "
         CREATE TABLE _node (
             id BLOB NOT NULL,
+            room_id BLOB,
             cdate INTEGER  NOT NULL,
             mdate INTEGER  NOT NULL,
             _entity TEXT  NOT NULL,
@@ -98,13 +100,13 @@ impl Node {
         //log the deletions for synchronisation
         conn.execute(
             "CREATE TABLE _node_deletion_log (
-            room BLOB,
+            room_id BLOB,
             id BLOB,
             entity TEXT,
             deletion_date INTEGER,
             verifying_key BLOB NOT NULL,
             signature BLOB NOT NULL,
-            PRIMARY KEY(room, deletion_date, id, entity )
+            PRIMARY KEY(room_id, deletion_date, id, entity )
         ) WITHOUT ROWID, STRICT",
             [],
         )?;
@@ -115,6 +117,10 @@ impl Node {
     fn len(&self) -> Result<usize> {
         let mut len = 0;
         len += self.id.len();
+        if let Some(rid) = &self.room_id {
+            len += rid.len();
+        }
+
         len += 8; //date
         len += 8; //cdate
         len += self._entity.as_bytes().len();
@@ -136,6 +142,9 @@ impl Node {
     fn hash(&self) -> Result<blake3::Hash> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.id);
+        if let Some(rid) = &self.room_id {
+            hasher.update(rid);
+        }
         hasher.update(&self.cdate.to_le_bytes());
         hasher.update(&self.mdate.to_le_bytes());
         hasher.update(self._entity.as_bytes());
@@ -237,13 +246,14 @@ impl Node {
     pub const NODE_MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(Node {
             id: row.get(0)?,
-            cdate: row.get(1)?,
-            mdate: row.get(2)?,
-            _entity: row.get(3)?,
-            _json: row.get(4)?,
-            _binary: row.get(5)?,
-            _verifying_key: row.get(6)?,
-            _signature: row.get(7)?,
+            room_id: row.get(1)?,
+            cdate: row.get(2)?,
+            mdate: row.get(3)?,
+            _entity: row.get(4)?,
+            _json: row.get(5)?,
+            _binary: row.get(6)?,
+            _verifying_key: row.get(7)?,
+            _signature: row.get(8)?,
         }))
     };
 
@@ -251,7 +261,7 @@ impl Node {
     /// SQL Query to retrieve a Node by its primary key
     ///
     pub const NODE_QUERY: &'static str = "
-    SELECT id , cdate, mdate, _entity,_json, _binary, _verifying_key, _signature  
+    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature  
     FROM _node 
     WHERE id = ? AND 
     _entity = ?";
@@ -311,6 +321,7 @@ impl Node {
         let mut insert_stmt = conn.prepare_cached(
             "INSERT INTO _node ( 
                     id,
+                    room_id,
                     cdate,
                     mdate,
                     _entity,
@@ -319,12 +330,13 @@ impl Node {
                     _verifying_key,
                     _signature
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )",
         )?;
         let archived_entity = format!("{}{}", ARCHIVED_CHAR, &self._entity);
         let _ = insert_stmt.insert((
             &self.id,
+            &self.room_id,
             &self.cdate,
             &self.mdate,
             &archived_entity,
@@ -383,6 +395,7 @@ impl Node {
                 "
             UPDATE _node SET 
                 id = ?,
+                room_id = ?,
                 cdate = ?,
                 mdate = ?,
                 _entity = ?,
@@ -396,6 +409,7 @@ impl Node {
 
             update_node_stmt.execute((
                 &self.id,
+                &self.room_id,
                 &self.cdate,
                 &self.mdate,
                 &self._entity,
@@ -409,6 +423,7 @@ impl Node {
             let mut insert_stmt = conn.prepare_cached(
                 "INSERT INTO _node ( 
                     id,
+                    room_id,
                     cdate,
                     mdate,
                     _entity,
@@ -417,11 +432,12 @@ impl Node {
                     _verifying_key,
                     _signature
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )",
             )?;
             let rowid = insert_stmt.insert((
                 &self.id,
+                &self.room_id,
                 &self.cdate,
                 &self.mdate,
                 &self._entity,
@@ -443,7 +459,7 @@ impl Node {
 }
 #[derive(Debug)]
 pub struct NodeDeletionEntry {
-    pub room: Vec<u8>,
+    pub room_id: Vec<u8>,
     pub id: Vec<u8>,
     pub entity: String,
     pub deletion_date: i64,
@@ -461,7 +477,7 @@ impl NodeDeletionEntry {
     ) -> Self {
         let signature = Self::sign(&room, node, deletion_date, &verifying_key, signing_key);
         Self {
-            room,
+            room_id: room,
             id: node.id.clone(),
             entity: node._entity.clone(),
             deletion_date,
@@ -490,7 +506,7 @@ impl NodeDeletionEntry {
 
     pub fn verify(&self) -> Result<()> {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.room);
+        hasher.update(&self.room_id);
         hasher.update(&self.id);
         hasher.update(self.entity.as_bytes());
         hasher.update(&self.deletion_date.to_le_bytes());
@@ -503,7 +519,7 @@ impl NodeDeletionEntry {
 
     pub const MAPPING: RowMappingFn<Self> = |row| {
         Ok(Box::new(NodeDeletionEntry {
-            room: row.get(0)?,
+            room_id: row.get(0)?,
             id: row.get(1)?,
             entity: row.get(2)?,
             deletion_date: row.get(3)?,
@@ -517,7 +533,7 @@ impl Writeable for NodeDeletionEntry {
     fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO _node_deletion_log (
-                room,
+                room_id,
                 id,
                 entity,
                 deletion_date,
@@ -527,7 +543,7 @@ impl Writeable for NodeDeletionEntry {
         ",
         )?;
         insert_stmt.execute((
-            &self.room,
+            &self.room_id,
             &self.id,
             &self.entity,
             &self.deletion_date,
@@ -641,7 +657,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 "
-        SELECT id , cdate, mdate, _entity,_json, _binary, _verifying_key, _signature 
+        SELECT id ,room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature 
         FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid 
         WHERE _node_fts MATCH ? 
         ORDER BY rank;",
@@ -800,7 +816,7 @@ mod tests {
         let mut exists_stmt = conn
             .prepare(
                 "SELECT  
-                        room,
+                        room_id,
                         id,
                         entity,
                         deletion_date,

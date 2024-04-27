@@ -1550,7 +1550,7 @@ mod tests {
         .unwrap();
 
         let node_log_query = "SELECT  
-            room,
+            room_id,
             id,
             entity,
             deletion_date,
@@ -1586,7 +1586,7 @@ mod tests {
         .unwrap();
 
         let edge_log_query = "SELECT 
-                room,
+                room_id,
                 src,
                 src_entity, 
                 dest,
