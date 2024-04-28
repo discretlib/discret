@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     cryptography::base64_decode,
-    database::configuration::{ID_FIELD, ROOMS_FIELD},
+    database::configuration::{ID_FIELD, ROOM_ID_FIELD},
 };
 
 use super::{
@@ -203,15 +203,15 @@ impl MutationParser {
     //propagate the room definition to sub entities to avoid having to write the room everywhere in the query
     //
     fn propagate_room(entity: &mut EntityMutation) -> Result<(), Error> {
-        let room_field = entity.fields.get(ROOMS_FIELD).cloned();
+        let room_field = entity.fields.get(ROOM_ID_FIELD).cloned();
 
         for field in &mut entity.fields {
-            if !field.0.eq(ROOMS_FIELD) {
+            if !field.0.eq(ROOM_ID_FIELD) {
                 let field = field.1;
                 match &mut field.field_value {
                     MutationFieldValue::Array(inners) => {
                         for inner in inners {
-                            if inner.fields.get(ROOMS_FIELD).is_none() {
+                            if inner.fields.get(ROOM_ID_FIELD).is_none() {
                                 if let Some(room_field) = room_field.clone() {
                                     inner.add_field(room_field)?;
                                 }
@@ -220,7 +220,7 @@ impl MutationParser {
                         }
                     }
                     MutationFieldValue::Entity(inner) => {
-                        if inner.fields.get(ROOMS_FIELD).is_none() {
+                        if inner.fields.get(ROOM_ID_FIELD).is_none() {
                             if let Some(room_field) = room_field.clone() {
                                 inner.add_field(room_field)?;
                             }

@@ -4,7 +4,7 @@ use crate::{
         configuration::{
             AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
             ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD,
-            ROOMS_FIELD, ROOMS_FIELD_SHORT, ROOM_ENT, ROOM_ID_FIELD, SIGNATURE_FIELD,
+            ROOM_ID_FIELD, SIGNATURE_FIELD,
         },
         node::ARCHIVED_CHAR,
     },
@@ -163,21 +163,6 @@ lazy_static::lazy_static! {
                 nullable: false,
                 deprecated: false,
                 mutable: false,
-                is_system: false,
-            },
-        );
-
-
-        fields.insert(
-            ROOMS_FIELD.to_string(),
-            Field {
-                name: ROOMS_FIELD.to_string(),
-                short_name: ROOMS_FIELD_SHORT.to_string(),
-                field_type: FieldType::Array(ROOM_ENT.to_string()),
-                default_value: None,
-                nullable: true,
-                deprecated: false,
-                mutable: true,
                 is_system: false,
             },
         );

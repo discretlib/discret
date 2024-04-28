@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::{collections::HashMap, fmt};
 
 use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot::Sender};
@@ -10,8 +7,8 @@ use crate::{
     cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     database::configuration::{
         AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOMS_FIELD, ROOMS_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT,
-        USER_ENABLED_SHORT, USER_VERIFYING_KEY_SHORT,
+        ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT, USER_ENABLED_SHORT,
+        USER_VERIFYING_KEY_SHORT,
     },
     date_utils::now,
 };
@@ -21,7 +18,7 @@ use super::{
         self, AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ENTITY_RIGHT_ENT_SHORT,
         RIGHT_DELETE_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
         ROOM_ADMIN_FIELD, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD, ROOM_ENT,
-        ROOM_USER_ADMIN_FIELD, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT,
+        ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT,
     },
     daily_log::DailyMutations,
     deletion::DeletionQuery,
@@ -46,7 +43,7 @@ use super::{
 pub struct Room {
     id: Vec<u8>,
     pub mdate: i64,
-    pub parent: HashSet<Vec<u8>>,
+    pub parent: Option<Vec<u8>>,
     pub admins: HashMap<Vec<u8>, Vec<User>>,
     pub user_admins: HashMap<Vec<u8>, Vec<User>>,
     pub authorisations: HashMap<Vec<u8>, Authorisation>,
@@ -300,7 +297,7 @@ pub struct RoomMutationQuery {
     reply: Sender<super::Result<MutationQuery>>,
 }
 impl Writeable for RoomMutationQuery {
-    fn write(&self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
+    fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.mutation_query.write(conn)
     }
 }
@@ -475,7 +472,7 @@ impl RoomAuthorisations {
                 | configuration::ENTITY_RIGHT_ENT
                 | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
                 _ => {
-                    for room_id in &node.rooms {
+                    if let Some(room_id) = &node.node.room_id {
                         match self.rooms.get(room_id) {
                             Some(room) => {
                                 let can = if node.node._verifying_key.eq(&verifying_key) {
@@ -516,7 +513,7 @@ impl RoomAuthorisations {
                 | configuration::ENTITY_RIGHT_ENT
                 | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
                 _ => {
-                    for room_id in &edge.rooms {
+                    if let Some(room_id) = &edge.room_id {
                         match self.rooms.get(room_id) {
                             Some(room) => {
                                 let can = if edge.edge.verifying_key.eq(&verifying_key) {
@@ -598,7 +595,7 @@ impl RoomAuthorisations {
                 match &to_insert.old_node {
                     Some(old_node) => {
                         let same_user = old_node._verifying_key.eq(verifying_key);
-                        for room_id in &to_insert.rooms {
+                        if let Some(room_id) = &to_insert.room_id {
                             if let Some(room) = self.rooms.get(room_id) {
                                 let can = if same_user {
                                     room.can(
@@ -641,7 +638,7 @@ impl RoomAuthorisations {
                         //
                     }
                     None => {
-                        for room_id in &to_insert.rooms {
+                        if let Some(room_id) = &to_insert.room_id {
                             //    println!("{}  {}", base64_encode(&room_id), to_insert.entity);
                             if let Some(room) = self.rooms.get(room_id) {
                                 let can = room.can(
@@ -719,7 +716,7 @@ impl RoomAuthorisations {
                     //no history, no node to insert, it is a reference
                     return Ok(None);
                 }
-                for room_id in &node_insert.rooms {
+                if let Some(room_id) = &node_insert.room_id {
                     if let Some(room) = self.rooms.get(room_id) {
                         if !room.can(
                             verifying_key,
@@ -739,7 +736,7 @@ impl RoomAuthorisations {
 
                 let room = Room {
                     id: node_insert.id.clone(),
-                    parent: node_insert.rooms.clone(),
+                    parent: node_insert.room_id.clone(),
                     ..Default::default()
                 };
                 room
@@ -948,7 +945,7 @@ impl RoomAuthorisations {
             if let Some(json) = &node._json {
                 let user = user_from_json(&node.id, json, node.mdate)?;
                 if let Some(u) = user {
-                    if room_user.has_user(&u.verifying_key) || room_user.parent.is_empty() {
+                    if room_user.has_user(&u.verifying_key) || room_user.parent.is_none() {
                         authorisation.add_user(u)?;
                     } else {
                         let mut found = false;
@@ -979,7 +976,7 @@ impl RoomAuthorisations {
             _Room{
                 id
                 mdate
-                _rooms{ id }
+                room_id
                 admin (order_by(mdate desc)) {
                     id
                     mdate
@@ -1033,20 +1030,11 @@ impl RoomAuthorisations {
                 .as_i64()
                 .unwrap();
 
-            let mut parent = HashSet::new();
-            let parent_array = room_map.get(ROOMS_FIELD).unwrap().as_array().unwrap();
-            for parent_value in parent_array {
-                let parent_map = parent_value.as_object().unwrap();
-                let parent_id = base64_decode(
-                    parent_map
-                        .get(ID_FIELD)
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .as_bytes(),
-                )?;
-                parent.insert(parent_id);
-            }
+            let parent_str = room_map.get(ROOM_ID_FIELD).unwrap().as_str();
+            let parent = match parent_str {
+                Some(str) => Some(base64_decode(str.as_bytes())?),
+                None => None,
+            };
 
             let mut authorisations = HashMap::new();
             let auth_array = room_map
@@ -1148,12 +1136,9 @@ fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
     let mut room = Room {
         id: room_node.node.id.clone(),
         mdate: room_node.node.mdate,
+        parent: room_node.node.room_id.clone(),
         ..Default::default()
     };
-
-    for parent in &room_node.parent_edges {
-        room.parent.insert(parent.dest.clone());
-    }
 
     for auth in &room_node.auth_nodes {
         let mut authorisation = Authorisation {
@@ -1170,6 +1155,7 @@ fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
             let user = parse_user_node(user_node)?;
             authorisation.add_user(user)?;
         }
+        room.add_auth(authorisation)?;
     }
 
     Ok(room)
@@ -1412,9 +1398,7 @@ fn entity_right_from_json(entity_right: &mut EntityRight, json: &str) -> Result<
 ///
 #[derive(Debug)]
 pub struct RoomNode {
-    pub rowid: Option<i64>,
     pub node: Node,
-    pub parent_edges: Vec<Edge>,
 
     pub admin_edges: Vec<Edge>,
     pub admin_nodes: Vec<UserAuthNode>,
@@ -1426,15 +1410,13 @@ pub struct RoomNode {
     pub auth_nodes: Vec<AuthorisationNode>,
 }
 impl RoomNode {
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &self.rowid, &None, &None)?;
-        for p in &self.parent_edges {
-            p.write(conn)?;
-        }
+    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.node.write(conn, false, &None, &None)?;
+
         for a in &self.auth_edges {
             a.write(conn)?;
         }
-        for a in &self.auth_nodes {
+        for a in &mut self.auth_nodes {
             a.write(conn)?;
         }
         Ok(())
@@ -1449,8 +1431,6 @@ impl RoomNode {
             return Ok(None);
         }
         let node = *node.unwrap();
-        let parent_edges = Edge::get_edges(id, ROOMS_FIELD_SHORT, conn)?;
-
         let mut admin_edges = Edge::get_edges(id, ROOM_ADMIN_FIELD_SHORT, conn)?;
         //user insertion order is mandatory
         admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
@@ -1485,9 +1465,7 @@ impl RoomNode {
         }
 
         Ok(Some(Self {
-            rowid: None,
             node,
-            parent_edges,
             admin_edges,
             admin_nodes,
             user_admin_edges,
@@ -1503,7 +1481,6 @@ impl RoomNode {
 ///
 #[derive(Debug)]
 pub struct AuthorisationNode {
-    pub rowid: Option<i64>,
     pub node: Node,
     pub right_edges: Vec<Edge>,
     pub right_nodes: Vec<EntityRightNode>,
@@ -1511,18 +1488,18 @@ pub struct AuthorisationNode {
     pub user_nodes: Vec<UserAuthNode>,
 }
 impl AuthorisationNode {
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &self.rowid, &None, &None)?;
+    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.node.write(conn, false, &None, &None)?;
         for c in &self.right_edges {
             c.write(conn)?;
         }
-        for c in &self.right_nodes {
+        for c in &mut self.right_nodes {
             c.write(conn)?;
         }
         for u in &self.user_edges {
             u.write(conn)?;
         }
-        for u in &self.user_nodes {
+        for u in &mut self.user_nodes {
             u.write(conn)?;
         }
         Ok(())
@@ -1563,7 +1540,6 @@ impl AuthorisationNode {
         }
 
         Ok(Some(Self {
-            rowid: None,
             node,
             right_edges,
             right_nodes,
@@ -1578,12 +1554,11 @@ impl AuthorisationNode {
 ///
 #[derive(Debug)]
 pub struct UserAuthNode {
-    pub rowid: Option<i64>,
     pub node: Node,
 }
 impl UserAuthNode {
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &self.rowid, &None, &None)?;
+    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.node.write(conn, false, &None, &None)?;
         Ok(())
     }
     pub fn read(
@@ -1595,18 +1570,17 @@ impl UserAuthNode {
             return Ok(None);
         }
         let node = *node.unwrap();
-        Ok(Some(Self { rowid: None, node }))
+        Ok(Some(Self { node }))
     }
 }
 
 #[derive(Debug)]
 pub struct EntityRightNode {
-    pub rowid: Option<i64>,
     pub node: Node,
 }
 impl EntityRightNode {
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &self.rowid, &None, &None)?;
+    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.node.write(conn, false, &None, &None)?;
         Ok(())
     }
     pub fn read(
@@ -1618,6 +1592,6 @@ impl EntityRightNode {
             return Ok(None);
         }
         let node = *node.unwrap();
-        Ok(Some(Self { rowid: None, node }))
+        Ok(Some(Self { node }))
     }
 }

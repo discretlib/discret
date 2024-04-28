@@ -113,9 +113,6 @@ pub const SIGNATURE_FIELD: &str = "_signature";
 pub const AUTHORS_FIELD: &str = "_authors";
 pub const AUTHORS_FIELD_SHORT: &str = "0";
 
-pub const ROOMS_FIELD: &str = "_rooms";
-pub const ROOMS_FIELD_SHORT: &str = "1";
-
 //names of some authentication fields used during auth validation
 pub const ROOM_ADMIN_FIELD: &str = "admin";
 pub const ROOM_ADMIN_FIELD_SHORT: &str = "33";

@@ -28,6 +28,7 @@ impl Default for Node {
             _binary: None,
             _verifying_key: vec![],
             _signature: vec![],
+            _local_id: None,
         }
     }
 }
@@ -43,6 +44,7 @@ pub struct Node {
     pub _binary: Option<Vec<u8>>,
     pub _verifying_key: Vec<u8>,
     pub _signature: Vec<u8>,
+    pub _local_id: Option<i64>,
 }
 impl Node {
     ///
@@ -167,7 +169,7 @@ impl Node {
     ///
     pub fn verify(&self) -> Result<()> {
         if !is_valid_id_len(&self.id) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId("id".to_string()));
         }
 
         if self._entity.is_empty() {
@@ -207,7 +209,7 @@ impl Node {
         self._verifying_key = signing_key.export_verifying_key();
 
         if !is_valid_id_len(&self.id) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId("id".to_string()));
         }
 
         if self._entity.is_empty() {
@@ -254,6 +256,7 @@ impl Node {
             _binary: row.get(6)?,
             _verifying_key: row.get(7)?,
             _signature: row.get(8)?,
+            _local_id: row.get(9)?,
         }))
     };
 
@@ -261,7 +264,7 @@ impl Node {
     /// SQL Query to retrieve a Node by its primary key
     ///
     pub const NODE_QUERY: &'static str = "
-    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature  
+    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature, rowid  
     FROM _node 
     WHERE id = ? AND 
     _entity = ?";
@@ -368,15 +371,14 @@ impl Node {
     /// The parameters: rowid, previous_fts are retrieved in a select thread
     ///
     pub fn write(
-        &self,
+        &mut self,
         conn: &Connection,
         index: bool,
-        rowid: &Option<i64>,
         old_fts_str: &Option<String>,
         node_fts_str: &Option<String>,
     ) -> std::result::Result<(), rusqlite::Error> {
         static UPDATE_FTS_QUERY: &str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
-        if let Some(id) = rowid {
+        if let Some(id) = self._local_id {
             if let Some(previous) = old_fts_str {
                 let mut delete_fts_stmt = conn.prepare_cached(
                     "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, ?)",
@@ -446,7 +448,7 @@ impl Node {
                 &self._verifying_key,
                 &self._signature,
             ))?;
-
+            self._local_id = Some(conn.last_insert_rowid());
             if index {
                 if let Some(current) = node_fts_str {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
@@ -530,7 +532,7 @@ impl NodeDeletionEntry {
     };
 }
 impl Writeable for NodeDeletionEntry {
-    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO _node_deletion_log (
                 room_id,
@@ -649,7 +651,6 @@ mod tests {
             &conn,
             true,
             &None,
-            &None,
             &Some(String::from("Lorem ipsum dolor sit amet")),
         )
         .unwrap();
@@ -657,7 +658,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 "
-        SELECT id ,room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature 
+        SELECT id ,room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature, _node.rowid 
         FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid 
         WHERE _node_fts MATCH ? 
         ORDER BY rank;",
@@ -671,15 +672,9 @@ mod tests {
             res.push(node);
         }
         assert_eq!(1, res.len());
-        let id = &res[0].id;
 
         let results = stmt.query_map(["randomtext"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //JSON fields name are not indexed
-
-        let mut rowid_stmt = conn
-            .prepare_cached("SELECT rowid FROM _node WHERE id = ?")
-            .unwrap();
-        let row_id: i64 = rowid_stmt.query_row([id], |row| Ok(row.get(0)?)).unwrap();
 
         node._json = Some(
             r#"{
@@ -687,11 +682,10 @@ mod tests {
         }"#
             .to_string(),
         );
-        //node can be writen without resigning first, which could lead to errors
+
         node.write(
             &conn,
             true,
-            &Some(row_id),
             &Some(String::from("Lorem ipsum dolor sit amet")),
             &Some(String::from("ipsum dolor sit amet Conjectur")),
         )
@@ -709,7 +703,6 @@ mod tests {
         node.write(
             &conn,
             false,
-            &Some(row_id),
             &Some(String::from("ipsum dolor sit amet Conjectur")),
             &Some(String::from("will not be inserted")),
         )
@@ -735,7 +728,7 @@ mod tests {
             ..Default::default()
         };
         node.sign(&signing_key).unwrap();
-        node.write(&conn, false, &None, &None, &None).unwrap();
+        node.write(&conn, false, &None, &None).unwrap();
 
         let new_node = Node::get(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
@@ -770,7 +763,7 @@ mod tests {
             ..Default::default()
         };
         node.sign(&signing_key).unwrap();
-        node.write(&conn, false, &None, &None, &None).unwrap();
+        node.write(&conn, false, &None, &None).unwrap();
 
         let new_node = Node::get(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
@@ -802,10 +795,10 @@ mod tests {
             ..Default::default()
         };
         node.sign(&signing_key).unwrap();
-        node.write(&conn, false, &None, &None, &None).unwrap();
+        node.write(&conn, false, &None, &None).unwrap();
         Node::delete(&node.id, &node._entity, node.mdate, false, &conn).unwrap();
 
-        let node_deletion_log = NodeDeletionEntry::build(
+        let mut node_deletion_log = NodeDeletionEntry::build(
             Vec::new(),
             &node,
             now(),

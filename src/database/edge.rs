@@ -143,11 +143,14 @@ impl Edge {
         }
 
         if !is_valid_id_len(&self.src) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId(format!(
+                "src: '{}'",
+                base64_encode(&self.src)
+            )));
         }
 
         if !is_valid_id_len(&self.dest) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId("dest".to_string()));
         }
         let hash = self.hash();
 
@@ -161,11 +164,14 @@ impl Edge {
     ///
     pub fn sign(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         if !is_valid_id_len(&self.src) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId(format!(
+                "src: '{}'",
+                base64_encode(&self.src)
+            )));
         }
 
         if !is_valid_id_len(&self.dest) {
-            return Err(Error::InvalidId());
+            return Err(Error::InvalidLenghtId("dest".to_string()));
         }
 
         if self.src_entity.is_empty() {
@@ -411,7 +417,7 @@ impl EdgeDeletionEntry {
     };
 }
 impl Writeable for EdgeDeletionEntry {
-    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO _edge_deletion_log (
             room_id,
@@ -592,7 +598,7 @@ mod tests {
         e.write(&conn).unwrap();
         e.delete(&conn).unwrap();
 
-        let log = EdgeDeletionEntry::build(
+        let mut log = EdgeDeletionEntry::build(
             Vec::new(),
             &e,
             now(),

@@ -53,11 +53,11 @@ pub enum Error {
     ChannelSend(String),
 
     #[error(
-        "id length must be between {} and {} bytes",
+        "{0} length must be between {} and {} bytes",
         crate::database::sqlite_database::DB_ID_MIN_SIZE,
         crate::database::sqlite_database::DB_ID_MAX_SIZE
     )]
-    InvalidId(),
+    InvalidLenghtId(String),
 
     #[error("Entity cannot be empty")]
     EmptyNodeEntity(),

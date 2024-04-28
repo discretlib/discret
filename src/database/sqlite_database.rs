@@ -30,7 +30,7 @@ pub type WriteReplyFn = Box<dyn FnOnce(Result<WriteStmt>) + Send + 'static>;
 ///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
 ///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
 pub trait Writeable {
-    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error>;
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error>;
 }
 
 pub enum WriteMessage {
@@ -334,7 +334,7 @@ impl DatabaseReader {
 
 struct Optimize {}
 impl Writeable for Optimize {
-    fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         conn.execute("PRAGMA OPTIMIZE", [])?;
         Ok(())
     }
@@ -690,7 +690,7 @@ mod tests {
         surname: String,
     }
     impl Writeable for InsertPerson {
-        fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
             let mut stmt =
                 conn.prepare_cached("INSERT INTO person (name, surname) VALUES (?, ?)")?;
 

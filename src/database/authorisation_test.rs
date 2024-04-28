@@ -4,7 +4,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random_id},
+        cryptography::{base64_encode, random32},
         database::{
             authorisation::*,
             configuration::Configuration,
@@ -19,8 +19,8 @@ mod tests {
     fn room_admins() {
         let valid_date: i64 = 10000;
         let mut user1 = User {
-            id: random_id().to_vec(),
-            verifying_key: random_id().to_vec(),
+            id: random32().to_vec(),
+            verifying_key: random32().to_vec(),
             date: valid_date,
             enabled: true,
         };
@@ -53,8 +53,8 @@ mod tests {
     fn room_user_admins() {
         let valid_date: i64 = 10000;
         let mut user1 = User {
-            id: random_id().to_vec(),
-            verifying_key: random_id().to_vec(),
+            id: random32().to_vec(),
+            verifying_key: random32().to_vec(),
             date: valid_date,
             enabled: true,
         };
@@ -87,8 +87,8 @@ mod tests {
     fn entity_right() {
         let user_valid_date: i64 = 1000;
         let user1 = User {
-            id: random_id().to_vec(),
-            verifying_key: random_id().to_vec(),
+            id: random32().to_vec(),
+            verifying_key: random32().to_vec(),
             date: user_valid_date,
             enabled: true,
         };
@@ -105,7 +105,7 @@ mod tests {
         let ent_date: i64 = 100;
         let entity = "Person";
         let mut person_right = EntityRight {
-            id: random_id().to_vec(),
+            id: random32().to_vec(),
             valid_from: ent_date,
             entity: entity.to_string(),
             mutate_self: true,
@@ -210,7 +210,7 @@ mod tests {
     async fn room_creation() {
         init_database_path();
         let data_model = "Person{ name:String }";
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -306,7 +306,7 @@ mod tests {
         }
         ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -366,7 +366,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -382,7 +382,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Pet{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "kiki"
                     }
                 }"#,
@@ -396,7 +396,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "another me"
                         pets:[{name:"kiki"}]
                     }
@@ -448,7 +448,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Pet{
-                        _rooms: [{id:$pet_room_id}]
+                        room_id: $pet_room_id
                         name: "kiki"
                     }
                 }"#,
@@ -463,10 +463,10 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "another me"
                         pets:[{
-                            _rooms: [{id:$pet_room_id}]
+                            room_id: $pet_room_id
                             name:"kiki"
                         }]
                     }
@@ -503,7 +503,7 @@ mod tests {
     async fn authorisation_entities_error() {
         init_database_path();
         let data_model = "Person{name:String,}";
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -580,7 +580,7 @@ mod tests {
         }
         ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -639,7 +639,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -677,7 +677,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -716,7 +716,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -822,25 +822,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        let result = app
-            .query(
-                "query q{
-                _Room(order_by(type asc)){
-                    id
-                    type
-                    authorisations{
-                        id
-                        name  
-                        users{ verifying_key }
-                    }
-                }
-            }",
-                None,
-            )
-            .await
-            .unwrap();
-        println!("{}", result);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -953,7 +934,7 @@ mod tests {
         init_database_path();
         let data_model = "Person{ name:String } ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1041,7 +1022,7 @@ mod tests {
             Pet{ name:String }
             ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
 
         //open a database, creates two rooms and close it
@@ -1161,7 +1142,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -1176,7 +1157,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Person{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -1191,7 +1172,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Pet{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -1206,7 +1187,7 @@ mod tests {
         app.mutate(
             r#"mutation mut {
                     Pet{
-                        _rooms: [{id:$room_id}]
+                        room_id: $room_id
                         name: "me"
                     }
 
@@ -1229,7 +1210,7 @@ mod tests {
         }   
         ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1289,12 +1270,12 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                 P1: Person{
-                    _rooms: [{id:$room_id}]
+                    room_id: $room_id
                     name: "me"
                     parents:[{name:"father"},{name:"mother"}]
                 }
                 P2: Person{
-                    _rooms: [{id:$room_id}]
+                    room_id: $room_id
                     name: "another me"
                 }
             }"#,
@@ -1454,7 +1435,7 @@ mod tests {
         }   
         ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1512,12 +1493,12 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                 P1: Person{
-                    _rooms: [{id:$room_id}]
+                    room_id: $room_id
                     name: "me"
                     parents:[{name:"father"},{name:"mother"}]
                 }
                 P2: Person{
-                    _rooms: [{id:$room_id}]
+                    room_id: $room_id
                     name: "another me"
                 }
             }"#,
@@ -1646,7 +1627,7 @@ mod tests {
         }   
         ";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "authorisation app",
@@ -1707,7 +1688,6 @@ mod tests {
         assert_eq!("{\"32\":\"whatever\"}", node.node._json.unwrap());
         assert_eq!(1, node.auth_edges.len());
         assert_eq!(1, node.auth_nodes.len());
-        assert_eq!(0, node.parent_edges.len());
 
         let auth_node = &node.auth_nodes[0];
         assert_eq!("{\"32\":\"admin\"}", auth_node.node._json.clone().unwrap());

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::date_utils::{date, date_next_day};
 
-use super::{configuration::ROOMS_FIELD_SHORT, sqlite_database::RowMappingFn};
+use super::sqlite_database::RowMappingFn;
 
 ///
 /// Stores the modified dates for each rooms during the batch insert.
@@ -63,44 +63,42 @@ impl DailyLogsUpdate {
         ",
         )?;
 
-        let compute_sql = format!("
+        let compute_sql = "
                 -- node deletion 
-                SELECT signature FROM _node_deletion_log WHERE room_id = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
+                SELECT signature 
+                FROM _node_deletion_log 
+                WHERE 
+                    room_id = ?1 AND
+                    deletion_date >= ?2 AND deletion_date < ?3 
                 
                 -- edge deletion 
                 UNION ALL
-                SELECT signature FROM _edge_deletion_log WHERE room_id = ?1 AND deletion_date >= ?2 AND deletion_date < ?3 
+                SELECT signature 
+                FROM _edge_deletion_log 
+                WHERE 
+                    room_id = ?1 AND 
+                    deletion_date >= ?2 AND deletion_date < ?3 
                 
                 -- nodes 
                 UNION ALL
-                SELECT _node._signature as signature
-                FROM _node JOIN _edge on _node.id = _edge.src 
+                SELECT _signature as signature
+                FROM _node 
                 WHERE
-                    _edge.label = '{0}' AND
-                    _edge.dest = ?1 AND
-                    mdate >= ?2 
-                    AND mdate < ?3 
+                    room_id = ?1 AND
+                    mdate >= ?2 AND mdate < ?3 
 
                 -- edges 
                 UNION ALL	
-                SELECT _edge.signature as signature FROM _edge
-                JOIN (
-                    SELECT _node.id
-                    FROM _node 
-                    JOIN _edge rooms on _node.id = rooms.src 
-                    WHERE
-                        rooms.label = '{0}' AND
-                        rooms.dest = ?1 
-                    ) as nodes on nodes.id=_edge.src
+                SELECT _edge.signature as signature 
+                FROM _edge JOIN _node on _node.id =_edge.src
                 WHERE	
-                    _edge.cdate >= ?2
-                    AND
-                    _edge.cdate < ?3
+                    _node.room_id = ?1 AND
+                    _edge.cdate >= ?2 AND _edge.cdate < ?3
 
                 --applies to the whole union
                 ORDER by signature
-        ",ROOMS_FIELD_SHORT);
-        let mut compute_stmt = conn.prepare_cached(&compute_sql)?;
+        ";
+        let mut compute_stmt = conn.prepare_cached(compute_sql)?;
 
         let mut update_stmt = conn.prepare_cached(
             "
@@ -199,7 +197,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_decode, base64_encode, random_id},
+        cryptography::{base64_decode, base64_encode, random32},
         database::{
             configuration::Configuration,
             daily_log::DailyLog,
@@ -231,7 +229,7 @@ mod tests {
 
         let data_model = "Person{ name:String, parents:[Person] nullable }";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
@@ -301,8 +299,8 @@ mod tests {
             .mutate(
                 r#"
         mutation mutmut {
-            P2: Person {_rooms:[{id:$room_id}] name:"Alice" parents:[{name:"someone"}] }
-            P3: Person {_rooms:[{id:$room_id}] name:"Bob"  parents:[{name:"some_other"}] }
+            P2: Person {room_id:$room_id name:"Alice" parents:[{name:"someone"}] }
+            P3: Person {room_id:$room_id name:"Bob"  parents:[{name:"some_other"}] }
         } "#,
                 Some(param),
             )
@@ -319,7 +317,7 @@ mod tests {
                 let daily_log = dates.into_iter().next().unwrap();
                 assert_eq!(date(mutate_date), daily_log.date);
                 assert!(!daily_log.need_recompute);
-                assert_eq!(10, daily_log.entry_number);
+                assert_eq!(6, daily_log.entry_number);
                 assert!(daily_log.daily_hash.is_some());
             }
         }
@@ -341,7 +339,7 @@ mod tests {
         for nd in edge_log {
             assert_eq!(date(now()), nd.date);
             assert!(!nd.need_recompute);
-            assert_eq!(10, nd.entry_number); //each person has
+            assert_eq!(6, nd.entry_number); //each person has
             assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room_id);
         }
     }

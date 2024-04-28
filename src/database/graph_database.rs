@@ -364,7 +364,7 @@ impl GraphDatabase {
         struct Serialized(String, DataModel);
         impl Writeable for Serialized {
             fn write(
-                &self,
+                &mut self,
                 conn: &rusqlite::Connection,
             ) -> std::result::Result<(), rusqlite::Error> {
                 let query =
@@ -581,7 +581,7 @@ mod tests {
         // }
     }
 
-    use crate::{cryptography::random_id, database::query_language::parameter::ParametersAdd};
+    use crate::{cryptography::random32, database::query_language::parameter::ParametersAdd};
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -590,7 +590,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "selection app",
@@ -635,7 +635,7 @@ mod tests {
 
         let data_model = "Person{ name:String }";
 
-        let secret = random_id();
+        let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
             "delete app",
@@ -685,7 +685,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn load_data_model() {
         init_database_path();
-        let secret = random_id();
+        let secret = random32();
         //create a first instance
         {
             let data_model = "

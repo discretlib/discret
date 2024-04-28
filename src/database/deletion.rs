@@ -1,8 +1,7 @@
 use crate::{cryptography::base64_decode, date_utils::now};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use super::{
-    configuration::ROOMS_FIELD_SHORT,
     daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
     node::{Node, NodeDeletionEntry},
@@ -15,7 +14,6 @@ pub struct NodeDelete {
     pub node: Node,
     pub name: String,
     pub short_name: String,
-    pub rooms: HashSet<Vec<u8>>,
     pub date: i64,
     pub enable_archives: bool,
 }
@@ -23,7 +21,7 @@ pub struct NodeDelete {
 pub struct EdgeDelete {
     pub edge: Edge,
     pub src_name: String,
-    pub rooms: HashSet<Vec<u8>>,
+    pub room_id: Option<Vec<u8>>,
     pub date: i64,
 }
 #[derive(Debug)]
@@ -56,47 +54,35 @@ impl DeletionQuery {
                 .unwrap();
 
             let src = base64_decode(src.as_bytes())?;
-            let rooms_query = format!(
-                "SELECT dest FROM _edge WHERE src=? AND label='{}'",
-                ROOMS_FIELD_SHORT
-            );
-            let mut rooms_stmt = conn.prepare_cached(&rooms_query)?;
-            let mut rows = rooms_stmt.query([&src])?;
-            let mut rooms = HashSet::new();
-            while let Some(row) = rows.next()? {
-                rooms.insert(row.get(0)?);
-            }
-
-            if del.references.is_empty() {
-                let node = Node::get(&src, &del.short_name, conn)?;
-                if let Some(node) = node {
+            let node = Node::get(&src, &del.short_name, conn)?;
+            if let Some(node) = node {
+                if del.references.is_empty() {
                     deletion_query.nodes.push(NodeDelete {
                         node: *node,
                         name: del.name.clone(),
                         short_name: del.short_name.clone(),
-                        rooms: rooms.clone(),
                         date,
                         enable_archives: del.enable_archives,
                     })
-                }
-            } else {
-                for edge_deletion in &del.references {
-                    let dest = parameters
-                        .params
-                        .get(&edge_deletion.dest_param)
-                        .unwrap()
-                        .as_string()
-                        .unwrap();
+                } else {
+                    for edge_deletion in &del.references {
+                        let dest = parameters
+                            .params
+                            .get(&edge_deletion.dest_param)
+                            .unwrap()
+                            .as_string()
+                            .unwrap();
 
-                    let dest = base64_decode(dest.as_bytes())?;
-                    let edge = Edge::get(&src, &edge_deletion.label, &dest, conn)?;
-                    if let Some(edge) = edge {
-                        deletion_query.edges.push(EdgeDelete {
-                            edge: *edge,
-                            src_name: del.name.clone(),
-                            rooms: rooms.clone(),
-                            date,
-                        });
+                        let dest = base64_decode(dest.as_bytes())?;
+                        let edge = Edge::get(&src, &edge_deletion.label, &dest, conn)?;
+                        if let Some(edge) = edge {
+                            deletion_query.edges.push(EdgeDelete {
+                                edge: *edge,
+                                src_name: del.name.clone(),
+                                room_id: node.room_id.clone(),
+                                date,
+                            });
+                        }
                     }
                 }
             }
@@ -104,11 +90,14 @@ impl DeletionQuery {
         Ok(deletion_query)
     }
 
-    pub fn delete(&self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
+    pub fn delete(
+        &mut self,
+        conn: &rusqlite::Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
         for edg in &self.edges {
             edg.edge.delete(conn)?;
         }
-        for log in &self.edge_log {
+        for log in &mut self.edge_log {
             log.write(conn)?;
         }
         for nod in &self.nodes {
@@ -120,7 +109,7 @@ impl DeletionQuery {
                 conn,
             )?;
         }
-        for log in &self.node_log {
+        for log in &mut self.node_log {
             log.write(conn)?;
         }
         Ok(())
@@ -181,7 +170,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -230,7 +219,7 @@ mod tests {
         .unwrap();
         let deletion = Arc::new(deletion);
 
-        let delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
+        let mut delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
         delete.delete(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -288,7 +277,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -342,7 +331,7 @@ mod tests {
         .unwrap();
         let deletion = Arc::new(deletion);
 
-        let delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
+        let mut delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
         delete.delete(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
