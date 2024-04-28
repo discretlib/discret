@@ -44,6 +44,11 @@ pub struct Node {
     pub _binary: Option<Vec<u8>>,
     pub _verifying_key: Vec<u8>,
     pub _signature: Vec<u8>,
+
+    //_local_id stores the rowid of the Node for update purpose.
+    // This id only make sense to the local sqlite database.
+    // It will not be transmitted during synchronisation
+    #[serde(skip)]
     pub _local_id: Option<i64>,
 }
 impl Node {

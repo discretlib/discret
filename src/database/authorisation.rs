@@ -289,7 +289,7 @@ pub enum AuthorisationMessage {
         Sender<super::Result<DeletionQuery>>,
     ),
     Load(String, Sender<super::Result<()>>),
-    RoomAdd(RoomNode, mpsc::Sender<super::Result<()>>),
+    RoomAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
 }
 
 pub struct RoomMutationQuery {
@@ -415,8 +415,8 @@ impl AuthorisationService {
                     }
                 }
             }
-            AuthorisationMessage::RoomAdd(room_node, reply) => {
-                match auth.validate_room_node(&room_node) {
+            AuthorisationMessage::RoomAdd(old_room_node, room_node, reply) => {
+                match auth.validate_room_node(old_room_node, &room_node) {
                     Ok(insert) => {
                         let _ = match insert {
                             true => todo!(),
@@ -1079,19 +1079,28 @@ impl RoomAuthorisations {
         Ok(())
     }
 
-    pub fn validate_room_node(&self, room_node: &RoomNode) -> Result<bool> {
+    pub fn validate_room_node(
+        &self,
+        old_room_node: Option<RoomNode>,
+        room_node: &RoomNode,
+    ) -> Result<bool> {
         let insert = match self.rooms.get(&room_node.node.id) {
-            Some(room) => validate_existing_room_node(room, room_node)?,
+            Some(room) => validate_existing_room_node(room, old_room_node, room_node)?,
             None => true,
         };
-
         Ok(insert)
     }
 }
 
 // validate the room node against the existing one
 // returns true if the node has changes to be inserted
-fn validate_existing_room_node(room: &Room, room_node: &RoomNode) -> Result<bool> {
+fn validate_existing_room_node(
+    room: &Room,
+    mut old_room_node: Option<RoomNode>,
+    room_node: &RoomNode,
+) -> Result<bool> {
+    room_node.check_consistency()?;
+
     let mut need_update = false;
 
     for auth in &room.authorisations {
@@ -1161,7 +1170,7 @@ fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
     Ok(room)
 }
 
-fn parse_user_node(user_node: &UserAuthNode) -> Result<User> {
+fn parse_user_node(user_node: &UserNode) -> Result<User> {
     let user_json: serde_json::Value = match &user_node.node._json {
         Some(json) => serde_json::from_str(json)?,
         None => return Err(Error::InvalidNode("Invalid UserAuth node".to_string())),
@@ -1401,15 +1410,105 @@ pub struct RoomNode {
     pub node: Node,
 
     pub admin_edges: Vec<Edge>,
-    pub admin_nodes: Vec<UserAuthNode>,
+    pub admin_nodes: Vec<UserNode>,
 
     pub user_admin_edges: Vec<Edge>,
-    pub user_admin_nodes: Vec<UserAuthNode>,
+    pub user_admin_nodes: Vec<UserNode>,
 
     pub auth_edges: Vec<Edge>,
     pub auth_nodes: Vec<AuthorisationNode>,
 }
 impl RoomNode {
+    pub fn check_consistency(&self) -> Result<()> {
+        self.node.verify()?;
+
+        //check user_admin consistency
+        if self.user_admin_edges.len() != self.user_admin_nodes.len() {
+            return Err(Error::InvalidNode(
+                "RoomNode user_admin edge and node have different size".to_string(),
+            ));
+        }
+        for user_admin_edge in &self.user_admin_edges {
+            user_admin_edge.verify()?;
+            if !user_admin_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid RoomNode user_admin edge src".to_string(),
+                ));
+            }
+            let user_node = self
+                .user_admin_nodes
+                .iter()
+                .find(|user| user.node.id.eq(&user_admin_edge.dest));
+
+            match user_node {
+                Some(user) => user.node.verify()?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "RoomNode has an invalid admin egde".to_string(),
+                    ))
+                }
+            }
+        }
+
+        //check admin consistency
+        if self.admin_edges.len() != self.admin_nodes.len() {
+            return Err(Error::InvalidNode(
+                "RoomNode admin edge and node have different size".to_string(),
+            ));
+        }
+        for admin_edge in &self.admin_edges {
+            admin_edge.verify()?;
+            if !admin_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid RoomNode admin edge src".to_string(),
+                ));
+            }
+            let user_node = self
+                .admin_nodes
+                .iter()
+                .find(|user| user.node.id.eq(&admin_edge.dest));
+
+            match user_node {
+                Some(user) => user.node.verify()?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "RoomNode has an invalid admin egde".to_string(),
+                    ))
+                }
+            }
+        }
+
+        //check authorisation consistency
+        if self.auth_edges.len() != self.auth_nodes.len() {
+            return Err(Error::InvalidNode(
+                "RoomNode authorisation edge and node have different size".to_string(),
+            ));
+        }
+        for auth_edge in &self.auth_edges {
+            auth_edge.verify()?;
+            if !auth_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid RoomNode authorisation edge src".to_string(),
+                ));
+            }
+            let auth_node = self
+                .auth_nodes
+                .iter()
+                .find(|auth| auth.node.id.eq(&auth_edge.dest));
+
+            match auth_node {
+                Some(auth) => auth.check_consistency()?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "RoomNode has an invalid authorisation egde".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         self.node.write(conn, false, &None, &None)?;
 
@@ -1437,7 +1536,7 @@ impl RoomNode {
 
         let mut admin_nodes = Vec::new();
         for edge in &admin_edges {
-            let user_opt = UserAuthNode::read(conn, &edge.dest)?;
+            let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
                 admin_nodes.push(user);
             }
@@ -1449,7 +1548,7 @@ impl RoomNode {
 
         let mut user_admin_nodes = Vec::new();
         for edge in &user_admin_edges {
-            let user_opt = UserAuthNode::read(conn, &edge.dest)?;
+            let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
                 user_admin_nodes.push(user);
             }
@@ -1485,9 +1584,69 @@ pub struct AuthorisationNode {
     pub right_edges: Vec<Edge>,
     pub right_nodes: Vec<EntityRightNode>,
     pub user_edges: Vec<Edge>,
-    pub user_nodes: Vec<UserAuthNode>,
+    pub user_nodes: Vec<UserNode>,
 }
 impl AuthorisationNode {
+    pub fn check_consistency(&self) -> Result<()> {
+        self.node.verify()?;
+        //check right consistency
+        if self.right_edges.len() != self.right_nodes.len() {
+            return Err(Error::InvalidNode(
+                "AuthorisationNode Rights edges and nodes have different size".to_string(),
+            ));
+        }
+        for right_edge in &self.right_edges {
+            right_edge.verify()?;
+            if !right_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid AuthorisationNode Right edge source".to_string(),
+                ));
+            }
+            let right_node = self
+                .right_nodes
+                .iter()
+                .find(|right| right.node.id.eq(&right_edge.dest));
+
+            match right_node {
+                Some(right) => right.node.verify()?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "AuthorisationNode has an invalid Right egde".to_string(),
+                    ))
+                }
+            }
+        }
+
+        //check user consistency
+        if self.user_edges.len() != self.user_nodes.len() {
+            return Err(Error::InvalidNode(
+                "AuthorisationNode user edges and nodes have different size".to_string(),
+            ));
+        }
+        for user_edge in &self.user_edges {
+            user_edge.verify()?;
+            if !user_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid AuthorisationNode user edge source".to_string(),
+                ));
+            }
+            let user_node = self
+                .user_nodes
+                .iter()
+                .find(|user| user.node.id.eq(&user_edge.dest));
+
+            match user_node {
+                Some(user) => user.node.verify()?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "AuthorisationNode has an invalid user egde".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(())
+    }
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         self.node.write(conn, false, &None, &None)?;
         for c in &self.right_edges {
@@ -1533,7 +1692,7 @@ impl AuthorisationNode {
 
         let mut user_nodes = Vec::new();
         for edge in &user_edges {
-            let user_opt = UserAuthNode::read(conn, &edge.dest)?;
+            let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
                 user_nodes.push(user);
             }
@@ -1553,10 +1712,10 @@ impl AuthorisationNode {
 /// User database definition that is used for data synchronisation
 ///
 #[derive(Debug)]
-pub struct UserAuthNode {
+pub struct UserNode {
     pub node: Node,
 }
-impl UserAuthNode {
+impl UserNode {
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         self.node.write(conn, false, &None, &None)?;
         Ok(())

@@ -36,6 +36,7 @@ enum Message {
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
+    RoomAdd(RoomNode, Sender<Result<()>>),
     SubscribeForEvents(Sender<Receiver<EventMessage>>),
     ComputeDailyLog(),
 }
@@ -103,6 +104,11 @@ impl GraphDatabaseService {
                             }
                         }
                     }
+
+                    Message::RoomAdd(room_node, reply) => {
+                        service.add_room(room_node, reply).await;
+                    }
+
                     Message::UpdateModel(value, reply) => {
                         match service.update_data_model(&value).await {
                             Ok(model) => {
@@ -259,6 +265,17 @@ impl GraphDatabaseService {
                 let _ = send_response.send(room_node);
             }))
             .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// add a room in the database format
+    /// used for synchronisation
+    ///
+    pub async fn add_room_node(&self, room: RoomNode) -> Result<()> {
+        let (send_response, receive_response) = oneshot::channel::<Result<()>>();
+        let msg = Message::RoomAdd(room, send_response);
+        let _ = self.sender.send(msg).await;
         receive_response.await?
     }
 }
@@ -541,6 +558,27 @@ impl GraphDatabase {
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
+                    }
+                }
+            }))
+            .await;
+    }
+
+    pub async fn add_room(&mut self, room_node: RoomNode, reply: Sender<Result<()>>) {
+        let auth_service = self.auth_service.clone();
+        let _ = self
+            .graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let room_id = &room_node.node.id;
+                let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
+                match room_node_res {
+                    Ok(old_room_node) => {
+                        let msg = AuthorisationMessage::RoomAdd(old_room_node, room_node, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(err) => {
+                        let _ = reply.send(Err(err));
                     }
                 }
             }))
