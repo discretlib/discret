@@ -461,7 +461,7 @@ impl GraphDatabase {
 
                 match mutation_query {
                     Ok(muta) => {
-                        let msg = AuthorisationMessage::MutationQuery(muta, writer, reply);
+                        let msg = AuthorisationMessage::Mutation(muta, writer, reply);
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(e) => {
@@ -545,7 +545,7 @@ impl GraphDatabase {
                 let deletion_query = DeletionQuery::build(&parameters, deletion, conn);
                 match deletion_query {
                     Ok(del) => {
-                        let query = AuthorisationMessage::DeletionQuery(del, writer, reply);
+                        let query = AuthorisationMessage::Deletion(del, writer, reply);
                         let _ = auth_service.send_blocking(query);
                     }
                     Err(e) => {
@@ -567,8 +567,12 @@ impl GraphDatabase {
                 let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
                 match room_node_res {
                     Ok(old_room_node) => {
-                        let msg =
-                            AuthorisationMessage::RoomAdd(old_room_node, room_node, writer, reply);
+                        let msg = AuthorisationMessage::RoomNodeAdd(
+                            old_room_node,
+                            room_node,
+                            writer,
+                            reply,
+                        );
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(err) => {

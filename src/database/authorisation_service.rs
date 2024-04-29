@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{
-    authorisation_sync::{prepare_new_room, prepare_room_with_history, RoomNode},
+    authorisation_sync::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     configuration::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
         ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
@@ -270,47 +270,47 @@ impl fmt::Display for RightType {
 }
 
 pub enum AuthorisationMessage {
-    MutationQuery(
-        MutationQuery,
-        BufferedDatabaseWriter,
-        Sender<super::Result<MutationQuery>>,
-    ),
-    RoomMutationQuery(Result<()>, RoomMutationQuery),
-    DeletionQuery(
+    Load(String, Sender<super::Result<()>>),
+    Deletion(
         DeletionQuery,
         BufferedDatabaseWriter,
         Sender<super::Result<DeletionQuery>>,
     ),
-    Load(String, Sender<super::Result<()>>),
-    RoomAdd(
+    Mutation(
+        MutationQuery,
+        BufferedDatabaseWriter,
+        Sender<super::Result<MutationQuery>>,
+    ),
+    RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
+    RoomNodeAdd(
         Option<RoomNode>,
         RoomNode,
         BufferedDatabaseWriter,
         Sender<super::Result<()>>,
     ),
-    RoomNodeAddQuery(Result<()>, RoomNodeInsertQuery),
+    RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
 }
 
-pub struct RoomMutationQuery {
+pub struct RoomMutationWriteQuery {
     mutation_query: MutationQuery,
     reply: Sender<super::Result<MutationQuery>>,
 }
-impl Writeable for RoomMutationQuery {
+impl Writeable for RoomMutationWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.mutation_query.write(conn)
     }
 }
-impl RoomMutationQuery {
+impl RoomMutationWriteQuery {
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         self.mutation_query.update_daily_logs(daily_log);
     }
 }
 
-pub struct RoomNodeInsertQuery {
+pub struct RoomNodeWriteQuery {
     room: RoomNode,
     reply: Sender<super::Result<()>>,
 }
-impl Writeable for RoomNodeInsertQuery {
+impl Writeable for RoomNodeWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.room.write(conn)
     }
@@ -366,7 +366,24 @@ impl AuthorisationService {
         self_sender: &mpsc::Sender<AuthorisationMessage>,
     ) {
         match msg {
-            AuthorisationMessage::MutationQuery(mut mutation_query, database_writer, reply) => {
+            AuthorisationMessage::Load(rooms, reply) => {
+                let res = auth.load_json(&rooms);
+                let _ = reply.send(res);
+            }
+
+            AuthorisationMessage::Deletion(mut deletion_query, database_writer, reply) => {
+                match auth.validate_deletion(&mut deletion_query) {
+                    Ok(_) => {
+                        let query = WriteMessage::Deletion(deletion_query, reply);
+                        let _ = database_writer.send(query).await;
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }
+
+            AuthorisationMessage::Mutation(mut mutation_query, database_writer, reply) => {
                 let need_room_insert = match auth.validate_mutation(&mut mutation_query) {
                     Ok(rooms) => !rooms.is_empty(),
                     Err(e) => {
@@ -375,8 +392,8 @@ impl AuthorisationService {
                     }
                 };
                 if need_room_insert {
-                    let query = WriteMessage::RoomMutationQuery(
-                        RoomMutationQuery {
+                    let query = WriteMessage::RoomMutation(
+                        RoomMutationWriteQuery {
                             mutation_query,
                             reply,
                         },
@@ -385,11 +402,12 @@ impl AuthorisationService {
 
                     let _ = database_writer.send(query).await;
                 } else {
-                    let query = WriteMessage::MutationQuery(mutation_query, reply);
+                    let query = WriteMessage::Mutation(mutation_query, reply);
                     let _ = database_writer.send(query).await;
                 }
             }
-            AuthorisationMessage::RoomMutationQuery(result, mut query) => match result {
+
+            AuthorisationMessage::RoomMutationWrite(result, mut query) => match result {
                 Ok(_) => {
                     match auth.validate_mutation(&mut query.mutation_query) {
                         Ok(rooms) => {
@@ -408,47 +426,48 @@ impl AuthorisationService {
                 }
             },
 
-            AuthorisationMessage::Load(rooms, reply) => {
-                let res = auth.load_json(&rooms);
-                let _ = reply.send(res);
-            }
-
-            AuthorisationMessage::DeletionQuery(mut deletion_query, database_writer, reply) => {
-                match auth.validate_deletion(&mut deletion_query) {
-                    Ok(_) => {
-                        let query = WriteMessage::DeletionQuery(deletion_query, reply);
-                        let _ = database_writer.send(query).await;
-                    }
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                    }
+            AuthorisationMessage::RoomNodeAdd(
+                old_room_node,
+                mut room_node,
+                database_writer,
+                reply,
+            ) => match auth.prepare_room_node(old_room_node, &mut room_node) {
+                Ok(insert) => {
+                    let _ = match insert {
+                        true => {
+                            let query = WriteMessage::RoomNode(
+                                RoomNodeWriteQuery {
+                                    room: room_node,
+                                    reply,
+                                },
+                                self_sender.clone(),
+                            );
+                            let _ = database_writer.send(query).await;
+                        }
+                        false => {
+                            let _ = reply.send(Ok(()));
+                        }
+                    };
                 }
-            }
-            AuthorisationMessage::RoomAdd(old_room_node, mut room_node, database_writer, reply) => {
-                match auth.prepare_room_node(old_room_node, &mut room_node) {
-                    Ok(insert) => {
-                        let _ = match insert {
-                            true => {
-                                let query = WriteMessage::RoomNodeAdd(
-                                    RoomNodeInsertQuery {
-                                        room: room_node,
-                                        reply,
-                                    },
-                                    self_sender.clone(),
-                                );
-                                let _ = database_writer.send(query).await;
-                            }
-                            false => {
-                                let _ = reply.send(Ok(()));
-                            }
-                        };
-                    }
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                    }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
                 }
-            }
-            AuthorisationMessage::RoomNodeAddQuery(_, _) => todo!(),
+            },
+            AuthorisationMessage::RoomNodeWrite(res, query) => match res {
+                Ok(_) => {
+                    match parse_room_node(&query.room) {
+                        Ok(room) => {
+                            auth.add_room(room);
+                        }
+                        Err(e) => {
+                            let _ = query.reply.send(Err(e));
+                        }
+                    };
+                }
+                Err(e) => {
+                    let _ = query.reply.send(Err(e));
+                }
+            },
         }
     }
 

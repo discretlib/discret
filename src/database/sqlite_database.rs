@@ -9,7 +9,7 @@ use tokio::sync::{
 use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
-    authorisation_service::{AuthorisationMessage, RoomMutationQuery, RoomNodeInsertQuery},
+    authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
     configuration,
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
@@ -34,12 +34,12 @@ pub trait Writeable {
 }
 
 pub enum WriteMessage {
-    DeletionQuery(DeletionQuery, Sender<Result<DeletionQuery>>),
-    MutationQuery(MutationQuery, Sender<Result<MutationQuery>>),
-    RoomMutationQuery(RoomMutationQuery, mpsc::Sender<AuthorisationMessage>),
-    WriteStmt(WriteStmt, Sender<Result<WriteStmt>>),
+    Deletion(DeletionQuery, Sender<Result<DeletionQuery>>),
+    Mutation(MutationQuery, Sender<Result<MutationQuery>>),
+    RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    Write(WriteStmt, Sender<Result<WriteStmt>>),
     ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
-    RoomNodeAdd(RoomNodeInsertQuery, mpsc::Sender<AuthorisationMessage>),
 }
 
 //Create a sqlcipher database connection
@@ -448,19 +448,19 @@ impl BufferedDatabaseWriter {
                     Ok(_) => {
                         for msg in buffer {
                             match msg {
-                                WriteMessage::DeletionQuery(q, r) => {
+                                WriteMessage::Deletion(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
-                                WriteMessage::MutationQuery(q, r) => {
+                                WriteMessage::Mutation(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
 
-                                WriteMessage::RoomMutationQuery(q, r) => {
+                                WriteMessage::RoomMutation(q, r) => {
                                     let _ = r.blocking_send(
-                                        AuthorisationMessage::RoomMutationQuery(Ok(()), q),
+                                        AuthorisationMessage::RoomMutationWrite(Ok(()), q),
                                     );
                                 }
-                                WriteMessage::WriteStmt(q, r) => {
+                                WriteMessage::Write(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
                                 WriteMessage::ComputeDailyLog(q, r) => {
@@ -468,10 +468,11 @@ impl BufferedDatabaseWriter {
                                         Ok(q),
                                     ));
                                 }
-                                WriteMessage::RoomNodeAdd(q, r) => {
-                                    let _ = r.blocking_send(
-                                        AuthorisationMessage::RoomNodeAddQuery(Ok(()), q),
-                                    );
+                                WriteMessage::RoomNode(q, r) => {
+                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
+                                        Ok(()),
+                                        q,
+                                    ));
                                 }
                             }
                         }
@@ -479,20 +480,20 @@ impl BufferedDatabaseWriter {
                     Err(e) => {
                         for msg in buffer {
                             match msg {
-                                WriteMessage::DeletionQuery(_, r) => {
+                                WriteMessage::Deletion(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
-                                WriteMessage::MutationQuery(_, r) => {
+                                WriteMessage::Mutation(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
-                                WriteMessage::RoomMutationQuery(q, r) => {
+                                WriteMessage::RoomMutation(q, r) => {
                                     let _ =
-                                        r.blocking_send(AuthorisationMessage::RoomMutationQuery(
+                                        r.blocking_send(AuthorisationMessage::RoomMutationWrite(
                                             Err(Error::DatabaseWrite(e.to_string())),
                                             q,
                                         ));
                                 }
-                                WriteMessage::WriteStmt(_, r) => {
+                                WriteMessage::Write(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::ComputeDailyLog(_, r) => {
@@ -500,12 +501,11 @@ impl BufferedDatabaseWriter {
                                         Err(Error::DatabaseWrite(e.to_string())),
                                     ));
                                 }
-                                WriteMessage::RoomNodeAdd(q, r) => {
-                                    let _ =
-                                        r.blocking_send(AuthorisationMessage::RoomNodeAddQuery(
-                                            Err(Error::DatabaseWrite(e.to_string())),
-                                            q,
-                                        ));
+                                WriteMessage::RoomNode(q, r) => {
+                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
+                                        Err(Error::DatabaseWrite(e.to_string())),
+                                        q,
+                                    ));
                                 }
                             }
                         }
@@ -526,28 +526,28 @@ impl BufferedDatabaseWriter {
         let mut daily_log = DailyMutations::default();
         for query in buffer {
             match query {
-                WriteMessage::DeletionQuery(query, _) => {
+                WriteMessage::Deletion(query, _) => {
                     if let Err(e) = query.delete(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
                     query.update_daily_logs(&mut daily_log);
                 }
-                WriteMessage::MutationQuery(query, _) => {
+                WriteMessage::Mutation(query, _) => {
                     if let Err(e) = query.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
                     query.update_daily_logs(&mut daily_log);
                 }
-                WriteMessage::RoomMutationQuery(query, _) => {
+                WriteMessage::RoomMutation(query, _) => {
                     if let Err(e) = query.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
                     query.update_daily_logs(&mut daily_log);
                 }
-                WriteMessage::RoomNodeAdd(room_node, _) => {
+                WriteMessage::RoomNode(room_node, _) => {
                     if let Err(e) = room_node.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
@@ -555,7 +555,7 @@ impl BufferedDatabaseWriter {
                     //room add does not update_daily_log
                     //because room definitions are always synchronized at the start of a p2p connection
                 }
-                WriteMessage::WriteStmt(stmt, _) => {
+                WriteMessage::Write(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
@@ -579,7 +579,7 @@ impl BufferedDatabaseWriter {
     ///
     pub async fn write(&self, stmt: WriteStmt) -> Result<WriteStmt> {
         let (reply, reciev) = oneshot::channel::<Result<WriteStmt>>();
-        let _ = self.sender.send(WriteMessage::WriteStmt(stmt, reply)).await;
+        let _ = self.sender.send(WriteMessage::Write(stmt, reply)).await;
         reciev.await?
     }
 
@@ -808,7 +808,7 @@ mod tests {
         for _i in 0..loop_number {
             let (reply, reciev) = oneshot::channel::<Result<WriteStmt, Error>>();
 
-            let query = WriteMessage::WriteStmt(
+            let query = WriteMessage::Write(
                 Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
@@ -854,7 +854,7 @@ mod tests {
         for _i in 0..loop_number {
             let (reply, reciev) = oneshot::channel::<Result<WriteStmt, Error>>();
 
-            let query = WriteMessage::WriteStmt(
+            let query = WriteMessage::Write(
                 Box::new(InsertPerson {
                     name: "Steven".to_string(),
                     surname: "Bob".to_string(),
