@@ -1,5 +1,6 @@
-pub mod authorisation;
-pub mod authorisation_test;
+pub mod authorisation_service;
+pub mod authorisation_sync;
+pub mod authorisation_sync_test;
 pub mod configuration;
 pub mod daily_log;
 pub mod deletion;

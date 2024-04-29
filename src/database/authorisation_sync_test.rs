@@ -6,7 +6,7 @@ mod tests {
     use crate::{
         cryptography::{base64_encode, random32},
         database::{
-            authorisation::*,
+            authorisation_service::*,
             configuration::Configuration,
             edge::EdgeDeletionEntry,
             graph_database::GraphDatabaseService,

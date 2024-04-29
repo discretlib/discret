@@ -108,6 +108,15 @@ impl Edge {
         len
     }
 
+    pub fn eq(&self, edg: &Edge) -> bool {
+        self.src.eq(&edg.src)
+            && self.src_entity.eq(&edg.src_entity)
+            && self.label.eq(&edg.label)
+            && self.dest.eq(&edg.dest)
+            && self.cdate.eq(&edg.cdate)
+            && self.verifying_key.eq(&edg.verifying_key)
+    }
+
     fn hash(&self) -> blake3::Hash {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.src);

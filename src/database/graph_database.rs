@@ -1,33 +1,26 @@
 use lru::LruCache;
 use rusqlite::{OptionalExtension, ToSql};
-use std::collections::HashMap;
-use std::{fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::oneshot::Sender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::authorisation::{
-    AuthorisationMessage, AuthorisationService, RoomAuthorisations, RoomNode,
-};
-use super::configuration;
-use super::daily_log::DailyLogsUpdate;
-use super::deletion::DeletionQuery;
-use super::event_service::{EventMessage, EventService, EventServiceMessage};
-use super::query_language::deletion_parser::DeletionParser;
-use super::sqlite_database::{DatabaseReader, RowMappingFn, WriteMessage};
 use super::{
-    configuration::Configuration,
+    authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
+    authorisation_sync::RoomNode,
+    configuration::{Configuration, SYSTEM_DATA_MODEL},
+    daily_log::DailyLogsUpdate,
+    deletion::DeletionQuery,
+    event_service::{EventMessage, EventService, EventServiceMessage},
     mutation_query::MutationQuery,
     query::{PreparedQueries, Query},
     query_language::{
-        data_model_parser::DataModel, mutation_parser::MutationParser, parameter::Parameters,
-        query_parser::QueryParser,
+        data_model_parser::DataModel, deletion_parser::DeletionParser,
+        mutation_parser::MutationParser, parameter::Parameters, query_parser::QueryParser,
     },
-    sqlite_database::Database,
+    sqlite_database::{Database, DatabaseReader, RowMappingFn, WriteMessage, Writeable},
     Error, Result,
 };
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
-use crate::database::sqlite_database::Writeable;
 
 const LRU_SIZE: usize = 128;
 
@@ -372,8 +365,7 @@ impl GraphDatabase {
             self.data_model = dam;
         }
 
-        self.data_model
-            .update_system(configuration::SYSTEM_DATA_MODEL)?;
+        self.data_model.update_system(SYSTEM_DATA_MODEL)?;
         self.data_model.update(model)?;
 
         let str = serde_json::to_string(&self.data_model)?;

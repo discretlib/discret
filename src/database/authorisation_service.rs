@@ -1,30 +1,23 @@
 use std::{collections::HashMap, fmt};
 
-use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot::Sender};
 
 use crate::{
     cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
-    database::configuration::{
-        AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT, USER_ENABLED_SHORT,
-        USER_VERIFYING_KEY_SHORT,
-    },
     date_utils::now,
 };
 
 use super::{
+    authorisation_sync::{validate_existing_room_node, validate_new_room_node, RoomNode},
     configuration::{
-        self, AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ENTITY_RIGHT_ENT_SHORT,
-        RIGHT_DELETE_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
-        ROOM_ADMIN_FIELD, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD, ROOM_ENT,
-        ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT,
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
+        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
     },
     daily_log::DailyMutations,
     deletion::DeletionQuery,
-    edge::{Edge, EdgeDeletionEntry},
+    edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
-    node::{Node, NodeDeletionEntry},
+    node::NodeDeletionEntry,
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
@@ -41,7 +34,7 @@ use super::{
 ///
 #[derive(Default, Clone, Debug)]
 pub struct Room {
-    id: Vec<u8>,
+    pub id: Vec<u8>,
     pub mdate: i64,
     pub parent: Option<Vec<u8>>,
     pub admins: HashMap<Vec<u8>, Vec<User>>,
@@ -156,10 +149,10 @@ impl Room {
 ///
 #[derive(Default, Clone, Debug)]
 pub struct Authorisation {
-    id: Vec<u8>,
-    mdate: i64,
-    users: HashMap<Vec<u8>, Vec<User>>,
-    rights: HashMap<String, Vec<EntityRight>>,
+    pub id: Vec<u8>,
+    pub mdate: i64,
+    pub users: HashMap<Vec<u8>, Vec<User>>,
+    pub rights: HashMap<String, Vec<EntityRight>>,
 }
 
 impl Authorisation {
@@ -416,7 +409,7 @@ impl AuthorisationService {
                 }
             }
             AuthorisationMessage::RoomAdd(old_room_node, room_node, reply) => {
-                match auth.validate_room_node(old_room_node, &room_node) {
+                match auth.validate_room_node(old_room_node, room_node) {
                     Ok(insert) => {
                         let _ = match insert {
                             true => todo!(),
@@ -1082,184 +1075,26 @@ impl RoomAuthorisations {
     pub fn validate_room_node(
         &self,
         old_room_node: Option<RoomNode>,
-        room_node: &RoomNode,
+        mut room_node: RoomNode,
     ) -> Result<bool> {
+        room_node.check_consistency()?;
         let insert = match self.rooms.get(&room_node.node.id) {
-            Some(room) => validate_existing_room_node(room, old_room_node, room_node)?,
-            None => true,
+            Some(room) => match old_room_node {
+                Some(old) => validate_existing_room_node(room, &old, &mut room_node)?,
+                None => {
+                    return Err(Error::InvalidNode(
+                        "should have an existing room node".to_string(),
+                    ))
+                }
+            },
+
+            None => {
+                validate_new_room_node(&room_node)?;
+                true
+            }
         };
         Ok(insert)
     }
-}
-
-// validate the room node against the existing one
-// returns true if the node has changes to be inserted
-fn validate_existing_room_node(
-    room: &Room,
-    mut old_room_node: Option<RoomNode>,
-    room_node: &RoomNode,
-) -> Result<bool> {
-    room_node.check_consistency()?;
-
-    let mut need_update = false;
-
-    for auth in &room.authorisations {
-        let id = auth.0;
-        if !room_node.auth_edges.iter().any(|e| e.dest.eq(id)) {
-            return Err(Error::CannotRemove(
-                "Authorisation".to_string(),
-                "Room".to_string(),
-            ));
-        }
-    }
-
-    //process known nodes first
-
-    for auth_node in &room_node.auth_nodes {
-        auth_node.node.verify()?;
-        let signer = &auth_node.node._verifying_key;
-        let date = auth_node.node.mdate;
-        if !room.is_admin(signer, date) {
-            return Err(Error::AuthorisationRejected(
-                "Authorisation".to_string(),
-                base64_encode(&room.id),
-            ));
-        }
-
-        let id = &auth_node.node.id;
-        let authorisation = room.authorisations.get(id);
-        match authorisation {
-            Some(_authorisation) => todo!(),
-            None => {
-                need_update = true;
-                let _signer = &auth_node.node._verifying_key;
-                let _date = auth_node.node.mdate;
-            }
-        }
-    }
-
-    Ok(need_update)
-}
-
-fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
-    let mut room = Room {
-        id: room_node.node.id.clone(),
-        mdate: room_node.node.mdate,
-        parent: room_node.node.room_id.clone(),
-        ..Default::default()
-    };
-
-    for auth in &room_node.auth_nodes {
-        let mut authorisation = Authorisation {
-            id: auth.node.id.clone(),
-            mdate: auth.node.mdate,
-            ..Default::default()
-        };
-        for right_node in &auth.right_nodes {
-            let entity_right = parse_entity_right_node(right_node)?;
-            authorisation.add_right(entity_right)?;
-        }
-
-        for user_node in &auth.user_nodes {
-            let user = parse_user_node(user_node)?;
-            authorisation.add_user(user)?;
-        }
-        room.add_auth(authorisation)?;
-    }
-
-    Ok(room)
-}
-
-fn parse_user_node(user_node: &UserNode) -> Result<User> {
-    let user_json: serde_json::Value = match &user_node.node._json {
-        Some(json) => serde_json::from_str(json)?,
-        None => return Err(Error::InvalidNode("Invalid UserAuth node".to_string())),
-    };
-
-    if !user_json.is_object() {
-        return Err(Error::InvalidNode("Invalid UserAuth node".to_string()));
-    }
-    let user_map = user_json.as_object().unwrap();
-    let verifying_key = match user_map.get(USER_VERIFYING_KEY_SHORT) {
-        Some(v) => match v.as_str() {
-            Some(v) => base64_decode(v.as_bytes())?,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let enabled = match user_map.get(USER_ENABLED_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let date = user_node.node.mdate;
-
-    let user = User {
-        id: user_node.node.id.clone(),
-        verifying_key,
-        date,
-        enabled,
-    };
-
-    Ok(user)
-}
-
-fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<EntityRight> {
-    let right_json: serde_json::Value = match &entity_right_node.node._json {
-        Some(json) => serde_json::from_str(json)?,
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    if !right_json.is_object() {
-        return Err(Error::InvalidNode("Invalid EntityRight node".to_string()));
-    }
-    let right_map = right_json.as_object().unwrap();
-
-    let entity = match right_map.get(RIGHT_ENTITY_SHORT) {
-        Some(v) => match v.as_str() {
-            Some(v) => v.to_string(),
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let mutate_self = match right_map.get(RIGHT_MUTATE_SELF_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let delete_all = match right_map.get(RIGHT_MUTATE_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let mutate_all = match right_map.get(RIGHT_DELETE_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let entity_right = EntityRight {
-        id: entity_right_node.node.id.clone(),
-        valid_from: entity_right_node.node.mdate,
-        entity,
-        mutate_self,
-        delete_all,
-        mutate_all,
-    };
-    Ok(entity_right)
 }
 
 fn load_auth_from_json(value: &serde_json::Value) -> Result<Authorisation> {
@@ -1396,361 +1231,4 @@ fn entity_right_from_json(entity_right: &mut EntityRight, json: &str) -> Result<
         }
     }
     Ok(())
-}
-
-//
-// The following code handle the room Database representation and manipulations used during synchronisation
-//
-
-///
-/// room database definition that is used for data synchronisation
-///
-#[derive(Debug)]
-pub struct RoomNode {
-    pub node: Node,
-
-    pub admin_edges: Vec<Edge>,
-    pub admin_nodes: Vec<UserNode>,
-
-    pub user_admin_edges: Vec<Edge>,
-    pub user_admin_nodes: Vec<UserNode>,
-
-    pub auth_edges: Vec<Edge>,
-    pub auth_nodes: Vec<AuthorisationNode>,
-}
-impl RoomNode {
-    pub fn check_consistency(&self) -> Result<()> {
-        self.node.verify()?;
-
-        //check user_admin consistency
-        if self.user_admin_edges.len() != self.user_admin_nodes.len() {
-            return Err(Error::InvalidNode(
-                "RoomNode user_admin edge and node have different size".to_string(),
-            ));
-        }
-        for user_admin_edge in &self.user_admin_edges {
-            user_admin_edge.verify()?;
-            if !user_admin_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid RoomNode user_admin edge src".to_string(),
-                ));
-            }
-            let user_node = self
-                .user_admin_nodes
-                .iter()
-                .find(|user| user.node.id.eq(&user_admin_edge.dest));
-
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode has an invalid admin egde".to_string(),
-                    ))
-                }
-            }
-        }
-
-        //check admin consistency
-        if self.admin_edges.len() != self.admin_nodes.len() {
-            return Err(Error::InvalidNode(
-                "RoomNode admin edge and node have different size".to_string(),
-            ));
-        }
-        for admin_edge in &self.admin_edges {
-            admin_edge.verify()?;
-            if !admin_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid RoomNode admin edge src".to_string(),
-                ));
-            }
-            let user_node = self
-                .admin_nodes
-                .iter()
-                .find(|user| user.node.id.eq(&admin_edge.dest));
-
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode has an invalid admin egde".to_string(),
-                    ))
-                }
-            }
-        }
-
-        //check authorisation consistency
-        if self.auth_edges.len() != self.auth_nodes.len() {
-            return Err(Error::InvalidNode(
-                "RoomNode authorisation edge and node have different size".to_string(),
-            ));
-        }
-        for auth_edge in &self.auth_edges {
-            auth_edge.verify()?;
-            if !auth_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid RoomNode authorisation edge src".to_string(),
-                ));
-            }
-            let auth_node = self
-                .auth_nodes
-                .iter()
-                .find(|auth| auth.node.id.eq(&auth_edge.dest));
-
-            match auth_node {
-                Some(auth) => auth.check_consistency()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode has an invalid authorisation egde".to_string(),
-                    ))
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &None, &None)?;
-
-        for a in &self.auth_edges {
-            a.write(conn)?;
-        }
-        for a in &mut self.auth_nodes {
-            a.write(conn)?;
-        }
-        Ok(())
-    }
-
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
-        if node.is_none() {
-            return Ok(None);
-        }
-        let node = *node.unwrap();
-        let mut admin_edges = Edge::get_edges(id, ROOM_ADMIN_FIELD_SHORT, conn)?;
-        //user insertion order is mandatory
-        admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
-
-        let mut admin_nodes = Vec::new();
-        for edge in &admin_edges {
-            let user_opt = UserNode::read(conn, &edge.dest)?;
-            if let Some(user) = user_opt {
-                admin_nodes.push(user);
-            }
-        }
-
-        let mut user_admin_edges = Edge::get_edges(id, ROOM_USER_ADMIN_FIELD_SHORT, conn)?;
-        //user insertion order is mandatory
-        user_admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
-
-        let mut user_admin_nodes = Vec::new();
-        for edge in &user_admin_edges {
-            let user_opt = UserNode::read(conn, &edge.dest)?;
-            if let Some(user) = user_opt {
-                user_admin_nodes.push(user);
-            }
-        }
-
-        let auth_edges = Edge::get_edges(id, ROOM_AUTHORISATION_FIELD_SHORT, conn)?;
-        let mut auth_nodes = Vec::new();
-        for edge in &auth_edges {
-            let auth_opt = AuthorisationNode::read(conn, &edge.dest)?;
-            if let Some(auth) = auth_opt {
-                auth_nodes.push(auth);
-            }
-        }
-
-        Ok(Some(Self {
-            node,
-            admin_edges,
-            admin_nodes,
-            user_admin_edges,
-            user_admin_nodes,
-            auth_edges,
-            auth_nodes,
-        }))
-    }
-}
-
-///
-/// authorisation database definition that is used for data synchronisation
-///
-#[derive(Debug)]
-pub struct AuthorisationNode {
-    pub node: Node,
-    pub right_edges: Vec<Edge>,
-    pub right_nodes: Vec<EntityRightNode>,
-    pub user_edges: Vec<Edge>,
-    pub user_nodes: Vec<UserNode>,
-}
-impl AuthorisationNode {
-    pub fn check_consistency(&self) -> Result<()> {
-        self.node.verify()?;
-        //check right consistency
-        if self.right_edges.len() != self.right_nodes.len() {
-            return Err(Error::InvalidNode(
-                "AuthorisationNode Rights edges and nodes have different size".to_string(),
-            ));
-        }
-        for right_edge in &self.right_edges {
-            right_edge.verify()?;
-            if !right_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid AuthorisationNode Right edge source".to_string(),
-                ));
-            }
-            let right_node = self
-                .right_nodes
-                .iter()
-                .find(|right| right.node.id.eq(&right_edge.dest));
-
-            match right_node {
-                Some(right) => right.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "AuthorisationNode has an invalid Right egde".to_string(),
-                    ))
-                }
-            }
-        }
-
-        //check user consistency
-        if self.user_edges.len() != self.user_nodes.len() {
-            return Err(Error::InvalidNode(
-                "AuthorisationNode user edges and nodes have different size".to_string(),
-            ));
-        }
-        for user_edge in &self.user_edges {
-            user_edge.verify()?;
-            if !user_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid AuthorisationNode user edge source".to_string(),
-                ));
-            }
-            let user_node = self
-                .user_nodes
-                .iter()
-                .find(|user| user.node.id.eq(&user_edge.dest));
-
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "AuthorisationNode has an invalid user egde".to_string(),
-                    ))
-                }
-            }
-        }
-
-        Ok(())
-    }
-    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &None, &None)?;
-        for c in &self.right_edges {
-            c.write(conn)?;
-        }
-        for c in &mut self.right_nodes {
-            c.write(conn)?;
-        }
-        for u in &self.user_edges {
-            u.write(conn)?;
-        }
-        for u in &mut self.user_nodes {
-            u.write(conn)?;
-        }
-        Ok(())
-    }
-
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, AUTHORISATION_ENT_SHORT, conn)?;
-        if node.is_none() {
-            return Ok(None);
-        }
-        let node = *node.unwrap();
-
-        let mut right_edges = Edge::get_edges(id, AUTH_RIGHTS_FIELD_SHORT, conn)?;
-        //rights insertion must respect must be done in the right order
-        right_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
-
-        let mut right_nodes = Vec::new();
-        for edge in &right_edges {
-            let right_opt = EntityRightNode::read(conn, &edge.dest)?;
-            if let Some(cred) = right_opt {
-                right_nodes.push(cred);
-            }
-        }
-
-        let mut user_edges = Edge::get_edges(id, AUTH_USER_FIELD_SHORT, conn)?;
-        //user insertion order is mandatory
-        user_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
-
-        let mut user_nodes = Vec::new();
-        for edge in &user_edges {
-            let user_opt = UserNode::read(conn, &edge.dest)?;
-            if let Some(user) = user_opt {
-                user_nodes.push(user);
-            }
-        }
-
-        Ok(Some(Self {
-            node,
-            right_edges,
-            right_nodes,
-            user_edges,
-            user_nodes,
-        }))
-    }
-}
-
-///
-/// User database definition that is used for data synchronisation
-///
-#[derive(Debug)]
-pub struct UserNode {
-    pub node: Node,
-}
-impl UserNode {
-    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &None, &None)?;
-        Ok(())
-    }
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, USER_AUTH_ENT_SHORT, conn)?;
-        if node.is_none() {
-            return Ok(None);
-        }
-        let node = *node.unwrap();
-        Ok(Some(Self { node }))
-    }
-}
-
-#[derive(Debug)]
-pub struct EntityRightNode {
-    pub node: Node,
-}
-impl EntityRightNode {
-    pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.node.write(conn, false, &None, &None)?;
-        Ok(())
-    }
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, ENTITY_RIGHT_ENT_SHORT, conn)?;
-        if node.is_none() {
-            return Ok(None);
-        }
-        let node = *node.unwrap();
-        Ok(Some(Self { node }))
-    }
 }

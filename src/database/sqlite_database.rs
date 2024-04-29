@@ -9,7 +9,8 @@ use tokio::sync::{
 use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
-    authorisation::{AuthorisationMessage, RoomMutationQuery, RoomNode},
+    authorisation_service::{AuthorisationMessage, RoomMutationQuery},
+    authorisation_sync::RoomNode,
     configuration,
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,

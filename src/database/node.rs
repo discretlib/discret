@@ -146,6 +146,35 @@ impl Node {
         Ok(len)
     }
 
+    pub fn eq(&self, node: &Node) -> bool {
+        let room_id = match (&self.room_id, &node.room_id) {
+            (Some(a), Some(b)) => a.eq(b),
+            (None, None) => true,
+            _ => false,
+        };
+
+        let _json = match (&self._json, &node._json) {
+            (Some(a), Some(b)) => a.eq(b),
+            (None, None) => true,
+            _ => false,
+        };
+
+        let _binary = match (&self._binary, &node._binary) {
+            (Some(a), Some(b)) => a.eq(b),
+            (None, None) => true,
+            _ => false,
+        };
+
+        room_id
+            && _json
+            && _binary
+            && self.id.eq(&node.id)
+            && self.cdate.eq(&node.cdate)
+            && self.mdate.eq(&node.mdate)
+            && self._entity.eq(&node._entity)
+            && self._verifying_key.eq(&node._verifying_key)
+    }
+
     fn hash(&self) -> Result<blake3::Hash> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.id);
