@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{
-    authorisation_sync::{validate_existing_room_node, validate_new_room_node, RoomNode},
+    authorisation_sync::{prepare_new_room, prepare_room_with_history, RoomNode},
     configuration::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
         ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
@@ -282,7 +282,13 @@ pub enum AuthorisationMessage {
         Sender<super::Result<DeletionQuery>>,
     ),
     Load(String, Sender<super::Result<()>>),
-    RoomAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
+    RoomAdd(
+        Option<RoomNode>,
+        RoomNode,
+        BufferedDatabaseWriter,
+        Sender<super::Result<()>>,
+    ),
+    RoomNodeAddQuery(Result<()>, RoomNodeInsertQuery),
 }
 
 pub struct RoomMutationQuery {
@@ -297,6 +303,16 @@ impl Writeable for RoomMutationQuery {
 impl RoomMutationQuery {
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         self.mutation_query.update_daily_logs(daily_log);
+    }
+}
+
+pub struct RoomNodeInsertQuery {
+    room: RoomNode,
+    reply: Sender<super::Result<()>>,
+}
+impl Writeable for RoomNodeInsertQuery {
+    fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.room.write(conn)
     }
 }
 
@@ -408,11 +424,20 @@ impl AuthorisationService {
                     }
                 }
             }
-            AuthorisationMessage::RoomAdd(old_room_node, room_node, reply) => {
-                match auth.validate_room_node(old_room_node, room_node) {
+            AuthorisationMessage::RoomAdd(old_room_node, mut room_node, database_writer, reply) => {
+                match auth.prepare_room_node(old_room_node, &mut room_node) {
                     Ok(insert) => {
                         let _ = match insert {
-                            true => todo!(),
+                            true => {
+                                let query = WriteMessage::RoomNodeAdd(
+                                    RoomNodeInsertQuery {
+                                        room: room_node,
+                                        reply,
+                                    },
+                                    self_sender.clone(),
+                                );
+                                let _ = database_writer.send(query).await;
+                            }
                             false => {
                                 let _ = reply.send(Ok(()));
                             }
@@ -423,6 +448,7 @@ impl AuthorisationService {
                     }
                 }
             }
+            AuthorisationMessage::RoomNodeAddQuery(_, _) => todo!(),
         }
     }
 
@@ -559,6 +585,7 @@ impl RoomAuthorisations {
 
             rooms.append(&mut rooms_ent);
         }
+
         Ok(rooms)
     }
 
@@ -1072,15 +1099,15 @@ impl RoomAuthorisations {
         Ok(())
     }
 
-    pub fn validate_room_node(
+    pub fn prepare_room_node(
         &self,
         old_room_node: Option<RoomNode>,
-        mut room_node: RoomNode,
+        room_node: &mut RoomNode,
     ) -> Result<bool> {
         room_node.check_consistency()?;
         let insert = match self.rooms.get(&room_node.node.id) {
             Some(room) => match old_room_node {
-                Some(old) => validate_existing_room_node(room, &old, &mut room_node)?,
+                Some(old) => prepare_room_with_history(room, &old, room_node)?,
                 None => {
                     return Err(Error::InvalidNode(
                         "should have an existing room node".to_string(),
@@ -1089,7 +1116,7 @@ impl RoomAuthorisations {
             },
 
             None => {
-                validate_new_room_node(&room_node)?;
+                prepare_new_room(room_node)?;
                 true
             }
         };

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// One of the two tables that defines the graph database
 ///
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Edge {
     pub src: Vec<u8>,
     pub src_entity: String,
@@ -217,7 +217,7 @@ impl Edge {
     ///
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut insert_stmt = conn.prepare_cached(
-            "INSERT INTO _edge (src, src_entity, label, dest, cdate, verifying_key, signature) 
+            "INSERT OR REPLACE INTO _edge (src, src_entity, label, dest, cdate, verifying_key, signature) 
                             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )?;
 
@@ -570,7 +570,9 @@ mod tests {
 
         let mut new_edge = Edge::get(&from, label, &to, &conn).unwrap().unwrap();
         new_edge.sign(&signing_key).unwrap();
-        new_edge.write(&conn).expect_err("edge allready exist");
+        new_edge
+            .write(&conn)
+            .expect("edge allready exist and has been replaced");
 
         let edges = Edge::get_edges(&from, label, &conn).unwrap();
         assert_eq!(1, edges.len());

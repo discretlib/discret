@@ -35,10 +35,11 @@ pub struct RoomNode {
 
     pub auth_edges: Vec<Edge>,
     pub auth_nodes: Vec<AuthorisationNode>,
-
-    pub need_update: bool,
 }
 impl RoomNode {
+    ///
+    /// validate signature and basic data consistency
+    ///
     pub fn check_consistency(&self) -> Result<()> {
         self.node.verify()?;
 
@@ -129,10 +130,13 @@ impl RoomNode {
         Ok(())
     }
 
+    ///
+    /// write in the database
+    ///
+    /// it is assumed that duplication check has allready been performed
+    ///
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        if self.need_update {
-            self.node.write(conn, false, &None, &None)?;
-        }
+        self.node.write(conn, false, &None, &None)?;
 
         for a in &self.admin_edges {
             a.write(conn)?;
@@ -210,7 +214,6 @@ impl RoomNode {
             user_admin_nodes,
             auth_edges,
             auth_nodes,
-            need_update: true,
         }))
     }
 }
@@ -218,7 +221,7 @@ impl RoomNode {
 ///
 /// authorisation database definition that is used for data synchronisation
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthorisationNode {
     pub node: Node,
     pub right_edges: Vec<Edge>,
@@ -228,6 +231,9 @@ pub struct AuthorisationNode {
     pub need_update: bool,
 }
 impl AuthorisationNode {
+    ///
+    /// validate signature and basic data consistency
+    ///
     pub fn check_consistency(&self) -> Result<()> {
         self.node.verify()?;
         //check right consistency
@@ -355,7 +361,7 @@ impl AuthorisationNode {
 ///
 /// User database definition that is used for data synchronisation
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserNode {
     pub node: Node,
 }
@@ -379,7 +385,7 @@ impl UserNode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntityRightNode {
     pub node: Node,
 }
@@ -403,9 +409,11 @@ impl EntityRightNode {
     }
 }
 
-// validate the room node against the existing one
-// returns true if the node has changes to be inserted
-pub fn validate_existing_room_node(
+///
+/// validate the room node against the existing one
+/// returns true if the node has changes to be inserted in the database
+///
+pub fn prepare_room_with_history(
     room: &Room,
     old_room_node: &RoomNode,
     room_node: &mut RoomNode,
@@ -417,12 +425,10 @@ pub fn validate_existing_room_node(
     for old_edge in &old_room_node.admin_edges {
         let admin_edge = &room_node.admin_edges.iter().find(|edge| edge.eq(&old_edge));
         if admin_edge.is_none() {
-            return Err(Error::InvalidNode(
-                "RoomNode does not contain a previouly existing Administrator user edge"
-                    .to_string(),
-            ));
+            room_node.admin_edges.push(old_edge.clone());
         }
     }
+    room_node.admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
 
     for old_user in &old_room_node.admin_nodes {
         let admin_node = room_node
@@ -440,12 +446,13 @@ pub fn validate_existing_room_node(
                 }
             },
             None => {
-                return Err(Error::InvalidNode(
-                    "RoomNode does not contain a previouly existing Administrator node".to_string(),
-                ))
+                room_node.admin_nodes.push(old_user.clone());
             }
         }
     }
+    room_node
+        .admin_nodes
+        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
 
     //
     // Find new admins and add them to the cloned room
@@ -479,12 +486,12 @@ pub fn validate_existing_room_node(
             .iter()
             .find(|edge| edge.eq(&old_edge));
         if user_admin_edge.is_none() {
-            return Err(Error::InvalidNode(
-                "RoomNode does not contain a previouly existing User Administrator edge"
-                    .to_string(),
-            ));
+            room_node.user_admin_edges.push(old_edge.clone());
         }
     }
+    room_node
+        .user_admin_edges
+        .sort_by(|a, b| b.cdate.cmp(&a.cdate));
 
     for old_user in &old_room_node.user_admin_nodes {
         let user_admin_node = room_node
@@ -502,14 +509,15 @@ pub fn validate_existing_room_node(
                 }
             },
             None => {
-                return Err(Error::InvalidNode(
-                    "RoomNode does not contain a previouly existing User Administrator node"
-                        .to_string(),
-                ))
+                room_node.user_admin_nodes.push(old_user.clone());
             }
         }
     }
+    room_node
+        .user_admin_nodes
+        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
 
+    //
     //
     // Find new admins and add them to the cloned room
     // the cloned room will be then used to validate every other room update
@@ -539,31 +547,17 @@ pub fn validate_existing_room_node(
     }
 
     //check for update on the room itself
-    //run after the user admin updates because the modification could have been made by a new user
-    if old_room_node.node.mdate < room_node.node.mdate {
-        match room.is_admin(&room_node.node._verifying_key, room_node.node.mdate) {
-            true => {
-                room_node.node._local_id = old_room_node.node._local_id;
-                room_node.need_update = true;
-            }
-            false => {
-                return Err(Error::InvalidNode(
-                    "RoomNode mutation is not authorised".to_string(),
-                ))
-            }
-        }
-    } else {
-        room_node.node = old_room_node.node.clone();
-        room_node.need_update = false;
+    if !old_room_node.node.eq(&room_node.node) {
+        return Err(Error::InvalidNode(
+            "RoomNode mutation is not authorised".to_string(),
+        ));
     }
 
     //check authorisation
     for old_edge in &old_room_node.auth_edges {
         let auth_edge = &room_node.auth_edges.iter().find(|edge| edge.eq(&old_edge));
         if auth_edge.is_none() {
-            return Err(Error::InvalidNode(
-                "RoomNode does not contain a previouly existing Authorisation edge".to_string(),
-            ));
+            room_node.auth_edges.push(old_edge.clone());
         }
     }
 
@@ -584,22 +578,19 @@ pub fn validate_existing_room_node(
                             ));
                         }
                         need_update = true;
-                        validate_existing_auth_node(&room, old_auth, new_auth)?;
+                        prepare_auth_with_history(&room, old_auth, new_auth)?;
                     }
                     false => {
                         new_auth.node = old_auth.node.clone();
                         new_auth.need_update = false;
-                        if validate_existing_auth_node(&room, old_auth, new_auth)? {
+                        if prepare_auth_with_history(&room, old_auth, new_auth)? {
                             need_update = true;
                         }
                     }
                 };
             }
             None => {
-                return Err(Error::InvalidNode(
-                    "RoomNode does not contain a previouly existing User Authorisation node"
-                        .to_string(),
-                ))
+                room_node.auth_nodes.push(old_auth.clone());
             }
         }
     }
@@ -613,7 +604,7 @@ pub fn validate_existing_room_node(
         if old_auth.is_none() {
             match room.is_admin(&new_auth.node._verifying_key, new_auth.node.mdate) {
                 true => {
-                    validate_new_auth_node(&room, new_auth)?;
+                    prepare_new_auth(&room, new_auth)?;
                     need_update = true;
                 }
                 false => {
@@ -627,14 +618,14 @@ pub fn validate_existing_room_node(
 
     //parse room node to ensure that the json defintion is valid
     parse_room_node(room_node)?;
-    //parse new node
-    //return
+
     Ok(need_update)
 }
 
-// validate the room node against the existing one
-// returns true if the node has changes to be inserted
-pub fn validate_new_room_node(room_node: &RoomNode) -> Result<()> {
+///
+/// validate the new room by checking its rights and parsing it to validate json
+///
+pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
     let room = parse_room_node(room_node)?;
     //verify rights
     for admin in &room_node.admin_nodes {
@@ -681,7 +672,7 @@ pub fn validate_new_room_node(room_node: &RoomNode) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_existing_auth_node(
+fn prepare_auth_with_history(
     room: &Room,
     old_auth: &AuthorisationNode,
     new_auth: &mut AuthorisationNode,
@@ -692,12 +683,10 @@ pub fn validate_existing_auth_node(
     for old_edge in &old_auth.user_edges {
         let user_edge = &new_auth.user_edges.iter().find(|edge| edge.eq(&old_edge));
         if user_edge.is_none() {
-            return Err(Error::InvalidNode(
-                "RoomNode Authorisation does not contain a previouly existing User edge"
-                    .to_string(),
-            ));
+            new_auth.user_edges.push(old_edge.clone());
         }
     }
+    new_auth.user_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
 
     for old_user in &old_auth.user_nodes {
         let user_node = new_auth
@@ -715,13 +704,13 @@ pub fn validate_existing_auth_node(
                 }
             },
             None => {
-                return Err(Error::InvalidNode(
-                    "RoomNode Authorisation does not contain a previouly existing User  node"
-                        .to_string(),
-                ))
+                new_auth.user_nodes.push(old_user.clone());
             }
         }
     }
+    new_auth
+        .user_nodes
+        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
 
     //
     // verify new users
@@ -750,12 +739,10 @@ pub fn validate_existing_auth_node(
     for old_edge in &old_auth.right_edges {
         let right_edge = &new_auth.right_edges.iter().find(|edge| edge.eq(&old_edge));
         if right_edge.is_none() {
-            return Err(Error::InvalidNode(
-                "RoomNode Authorisation does not contain a previouly existing Right edge"
-                    .to_string(),
-            ));
+            new_auth.right_edges.push(old_edge.clone());
         }
     }
+    new_auth.right_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
 
     for old_right in &old_auth.right_nodes {
         let right_node = new_auth
@@ -774,13 +761,13 @@ pub fn validate_existing_auth_node(
                 }
             },
             None => {
-                return Err(Error::InvalidNode(
-                    "RoomNode Authorisation does not contain a previouly existing Right node"
-                        .to_string(),
-                ))
+                new_auth.right_nodes.push(old_right.clone());
             }
         }
     }
+    new_auth
+        .right_nodes
+        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
 
     //
     // verify new right
@@ -807,7 +794,7 @@ pub fn validate_existing_auth_node(
     Ok(need_update)
 }
 
-pub fn validate_new_auth_node(room: &Room, new_auth: &AuthorisationNode) -> Result<()> {
+fn prepare_new_auth(room: &Room, new_auth: &AuthorisationNode) -> Result<()> {
     for new_user in &new_auth.user_nodes {
         if !room.is_user_admin(&new_user.node._verifying_key, new_user.node.mdate) {
             return Err(Error::InvalidNode(
@@ -824,14 +811,26 @@ pub fn validate_new_auth_node(room: &Room, new_auth: &AuthorisationNode) -> Resu
     }
     Ok(())
 }
-
-fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
+///
+/// Parse RoomNode into a Room
+///
+pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
     let mut room = Room {
         id: room_node.node.id.clone(),
         mdate: room_node.node.mdate,
         parent: room_node.node.room_id.clone(),
         ..Default::default()
     };
+
+    for user in &room_node.admin_nodes {
+        let user = parse_user_node(user)?;
+        room.add_admin_user(user)?;
+    }
+
+    for user in &room_node.user_admin_nodes {
+        let user = parse_user_node(user)?;
+        room.add_user_admin_user(user)?;
+    }
 
     for auth in &room_node.auth_nodes {
         let mut authorisation = Authorisation {
@@ -944,4 +943,190 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
         mutate_all,
     };
     Ok(entity_right)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use crate::{
+        cryptography::{base64_encode, random32},
+        database::{
+            authorisation_service::RightType,
+            authorisation_sync::*,
+            configuration::Configuration,
+            graph_database::GraphDatabaseService,
+            query_language::parameter::{Parameters, ParametersAdd},
+        },
+        date_utils::now,
+    };
+    const DATA_PATH: &str = "test/data/database/authorisation_service_test/";
+    fn init_database_path() {
+        let path: PathBuf = DATA_PATH.into();
+        fs::create_dir_all(&path).unwrap();
+        let paths = fs::read_dir(path).unwrap();
+
+        for path in paths {
+            let dir = path.unwrap().path();
+            let paths = fs::read_dir(dir).unwrap();
+            for file in paths {
+                let files = file.unwrap().path();
+                // println!("Name: {}", files.display());
+                let _ = fs::remove_file(&files);
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn export_room_from_database() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+
+        let node: RoomNode = app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+
+        node.check_consistency().unwrap();
+        // println!("{:#?}", node);
+        assert_eq!(1, node.auth_edges.len());
+        assert_eq!(1, node.auth_nodes.len());
+
+        let auth_node = &node.auth_nodes[0];
+        assert_eq!("{\"32\":\"admin\"}", auth_node.node._json.clone().unwrap());
+        assert_eq!(1, auth_node.right_edges.len());
+        assert_eq!(1, auth_node.right_nodes.len());
+
+        let right_node = &auth_node.right_nodes[0];
+        assert_eq!(
+            "{\"32\":\"Person\",\"33\":true,\"34\":true,\"35\":true}",
+            right_node.node._json.clone().unwrap()
+        );
+        assert_eq!(1, auth_node.user_edges.len());
+        assert_eq!(1, auth_node.user_nodes.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parse_room_node_test() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+
+        let node = app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let room = parse_room_node(&node).unwrap();
+        assert!(room.can(app.verifying_key(), "Person", now(), &RightType::DeleteAll));
+        assert!(!room.can(app.verifying_key(), "Persons", now(), &RightType::DeleteAll));
+    }
 }

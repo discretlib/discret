@@ -168,9 +168,13 @@ impl MutationQuery {
                 None => return Err(Error::InvalidJsonObject(json.to_string())),
             };
 
+            let mut is_update = false;
             let mut node_updated = false;
             for field_entry in &entity.fields {
                 let field: &MutationField = field_entry.1;
+                if field.name.eq(ID_FIELD) {
+                    is_update = true;
+                }
                 if !field.name.eq(ID_FIELD) && !field.name.eq(ROOM_ID_FIELD) {
                     match &field.field_type {
                         FieldType::Array(_) => match &field.field_value {
@@ -283,7 +287,7 @@ impl MutationQuery {
                     }
                 }
             }
-            if !node_updated {
+            if !node_updated && is_update {
                 node_to_mutate.node = None;
             } else if let Some(node) = &mut node_to_mutate.node {
                 let json_data = serde_json::to_string(&json)?;

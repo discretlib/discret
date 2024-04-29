@@ -115,11 +115,11 @@ pub const AUTHORS_FIELD_SHORT: &str = "0";
 
 //names of some authentication fields used during auth validation
 pub const ROOM_ADMIN_FIELD: &str = "admin";
-pub const ROOM_ADMIN_FIELD_SHORT: &str = "33";
+pub const ROOM_ADMIN_FIELD_SHORT: &str = "32";
 pub const ROOM_USER_ADMIN_FIELD: &str = "user_admin";
-pub const ROOM_USER_ADMIN_FIELD_SHORT: &str = "34";
+pub const ROOM_USER_ADMIN_FIELD_SHORT: &str = "33";
 pub const ROOM_AUTHORISATION_FIELD: &str = "authorisations";
-pub const ROOM_AUTHORISATION_FIELD_SHORT: &str = "35";
+pub const ROOM_AUTHORISATION_FIELD_SHORT: &str = "34";
 
 //names of some authentication fields used during auth validation
 pub const AUTH_RIGHTS_FIELD: &str = "rights";
@@ -137,11 +137,9 @@ pub const RIGHT_DELETE_SHORT: &str = "35";
 
 pub const SYSTEM_DATA_MODEL: &str = "    
     _Room {
-        type: String,
         admin: [_UserAuth],
         user_admin: [_UserAuth],
-        authorisations:[_Authorisation],
-        index(type)
+        authorisations:[_Authorisation]
     }
     
     _Authorisation {

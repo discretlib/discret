@@ -251,7 +251,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]

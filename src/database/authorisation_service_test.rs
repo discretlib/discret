@@ -189,7 +189,7 @@ mod tests {
         ));
     }
 
-    const DATA_PATH: &str = "test/data/database/authorisation/";
+    const DATA_PATH: &str = "test/data/database/authorisation_service_test/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
@@ -231,7 +231,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -261,7 +260,6 @@ mod tests {
             .query(
                 "query q{
                     _Room{
-                        type
                         admin{
                             enabled
                         }
@@ -287,7 +285,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
         assert_eq!(result, expected);
         // println!("{:#?}", result);
     }
@@ -327,7 +325,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "first"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -413,7 +410,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                 _Room{
-                    type: "pet_room"
                     admin: [{
                         verifying_key:$user_id
                     }]
@@ -601,7 +597,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -690,8 +685,7 @@ mod tests {
         let result = app
             .query(
                 "query q{
-                    _Room(order_by(type asc)){
-                        type
+                    _Room{
                         authorisations{
                             name  
                             rights (order_by(mdate desc)){
@@ -707,7 +701,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"whatever\",\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]\n}";
+        let expected =  "{\n\"_Room\":[{\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
     }
 
@@ -737,7 +731,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -930,91 +923,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn room_update_names() {
-        init_database_path();
-        let data_model = "Person{ name:String } ";
-
-        let secret = random32();
-        let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
-            "authorisation app",
-            data_model,
-            &secret,
-            path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
-
-        let user_id = base64_encode(app.verifying_key());
-
-        let mut param = Parameters::default();
-        param.add("user_id", user_id.clone()).unwrap();
-        let room = app
-            .mutate(
-                r#"mutation mut {
-                    _Room{
-                        type: "whatever"
-                        admin: [{
-                            verifying_key:$user_id
-                        }]
-                        authorisations:[{
-                            name:"admin"
-                        }]
-                    }
-                }"#,
-                Some(param),
-            )
-            .await
-            .unwrap();
-
-        let room_insert = &room.mutate_entities[0];
-        let room_id = base64_encode(&room_insert.node_to_mutate.id);
-
-        let authorisation_insert = &room_insert.sub_nodes.get("authorisations").unwrap()[0];
-        let auth_id = base64_encode(&authorisation_insert.node_to_mutate.id);
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-
-        app.mutate(
-            r#"mutation mut {
-                _Room{
-                    id:$room_id
-                    type: "new_type"
-                    authorisations:[{
-                        id:$auth_id
-                        name:"new_admin"  
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .unwrap();
-
-        let result = app
-            .query(
-                "query q{
-                    _Room(order_by(type asc)){
-                        type
-                        admin{ enabled }
-                        authorisations{ name }
-                    }
-                }",
-                None,
-            )
-            .await
-            .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"new_type\",\"admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"new_admin\"}]}]\n}";
-        assert_eq!(result, expected);
-
-        // println!("{:#?}", result);
-        // println!("{}", result);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn room_load() {
         init_database_path();
         let data_model = "
@@ -1045,7 +953,6 @@ mod tests {
                 .mutate(
                     r#"mutation mut {
                     _Room{
-                        type: "person_only"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1081,7 +988,6 @@ mod tests {
                 .mutate(
                     r#"mutation mut {
                     _Room{
-                        type: "pet_only"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1122,20 +1028,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        let result = app
-            .query(
-                "query q{
-                    _Room(order_by(type asc)){
-                        type
-                    }
-                }",
-                None,
-            )
-            .await
-            .unwrap();
-        let expected = "{\n\"_Room\":[{\"type\":\"person_only\"},{\"type\":\"pet_only\"}]\n}";
-        assert_eq!(result, expected);
 
         let mut param = Parameters::default();
         param.add("room_id", ids.0.clone()).unwrap();
@@ -1231,7 +1123,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1456,7 +1347,6 @@ mod tests {
             .mutate(
                 r#"mutation mut {
                     _Room{
-                        type: "whatever"
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1617,89 +1507,5 @@ mod tests {
         assert_eq!(2, res.len());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn export_room_from_database() {
-        init_database_path();
-        let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
-
-        let secret = random32();
-        let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
-            "authorisation app",
-            data_model,
-            &secret,
-            path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
-
-        let user_id = base64_encode(app.verifying_key());
-
-        let mut param = Parameters::default();
-        param.add("user_id", user_id.clone()).unwrap();
-
-        let room = app
-            .mutate(
-                r#"mutation mut {
-                    _Room{
-                        type: "whatever"
-                        admin: [{
-                            verifying_key:$user_id
-                        }]
-                        user_admin: [{
-                            verifying_key:$user_id
-                        }]
-                        authorisations:[{
-                            name:"admin"
-                            rights:[{
-                                entity:"Person"
-                                mutate_self:true
-                                delete_all:true
-                                mutate_all:true
-                            }]
-                            users: [{
-                                verifying_key:$user_id
-                            }]
-                        }]
-                    }
-
-                }"#,
-                Some(param),
-            )
-            .await
-            .unwrap();
-
-        let room_insert = &room.mutate_entities[0];
-
-        let node = app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
-            .await
-            .unwrap()
-            .unwrap();
-
-        // println!("{:#?}", node);
-
-        assert_eq!("{\"32\":\"whatever\"}", node.node._json.unwrap());
-        assert_eq!(1, node.auth_edges.len());
-        assert_eq!(1, node.auth_nodes.len());
-
-        let auth_node = &node.auth_nodes[0];
-        assert_eq!("{\"32\":\"admin\"}", auth_node.node._json.clone().unwrap());
-        assert_eq!(1, auth_node.right_edges.len());
-        assert_eq!(1, auth_node.right_nodes.len());
-
-        let right_node = &auth_node.right_nodes[0];
-        assert_eq!(
-            "{\"32\":\"Person\",\"33\":true,\"34\":true,\"35\":true}",
-            right_node.node._json.clone().unwrap()
-        );
-        assert_eq!(1, auth_node.user_edges.len());
-        assert_eq!(1, auth_node.user_nodes.len());
-    }
+   
 }

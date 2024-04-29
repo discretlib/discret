@@ -558,6 +558,7 @@ impl GraphDatabase {
 
     pub async fn add_room(&mut self, room_node: RoomNode, reply: Sender<Result<()>>) {
         let auth_service = self.auth_service.clone();
+        let writer = self.graph_database.writer.clone();
         let _ = self
             .graph_database
             .reader
@@ -566,7 +567,8 @@ impl GraphDatabase {
                 let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
                 match room_node_res {
                     Ok(old_room_node) => {
-                        let msg = AuthorisationMessage::RoomAdd(old_room_node, room_node, reply);
+                        let msg =
+                            AuthorisationMessage::RoomAdd(old_room_node, room_node, writer, reply);
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(err) => {
