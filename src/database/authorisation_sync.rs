@@ -1,6 +1,7 @@
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
-use crate::cryptography::base64_decode;
+use crate::cryptography::{base64_decode, base64_encode};
 
 use super::{
     authorisation_service::{Authorisation, EntityRight, Room, User},
@@ -23,7 +24,7 @@ use super::{
 ///
 /// room database definition that is used for data synchronisation
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomNode {
     pub node: Node,
 
@@ -221,7 +222,7 @@ impl RoomNode {
 ///
 /// authorisation database definition that is used for data synchronisation
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorisationNode {
     pub node: Node,
     pub right_edges: Vec<Edge>,
@@ -361,7 +362,7 @@ impl AuthorisationNode {
 ///
 /// User database definition that is used for data synchronisation
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserNode {
     pub node: Node,
 }
@@ -385,7 +386,7 @@ impl UserNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityRightNode {
     pub node: Node,
 }
@@ -420,6 +421,7 @@ pub fn prepare_room_with_history(
 ) -> Result<bool> {
     let mut need_update = false;
     let mut room = room.clone();
+    room_node.node._local_id = old_room_node.node._local_id;
 
     //ensure that existing admin edges exists in the room_node
     for old_edge in &old_room_node.admin_edges {
@@ -627,6 +629,7 @@ pub fn prepare_room_with_history(
 ///
 pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
     let room = parse_room_node(room_node)?;
+
     //verify rights
     for admin in &room_node.admin_nodes {
         if !room.is_admin(&admin.node._verifying_key, admin.node.mdate) {
@@ -637,6 +640,7 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
     }
 
     for user_admin in &room_node.user_admin_nodes {
+        //println!("{}", base64_encode(&user_admin.node._verifying_key));
         if !room.is_admin(&user_admin.node._verifying_key, user_admin.node.mdate) {
             return Err(Error::InvalidNode(
                 "New RoomNode User Administrator not authorised".to_string(),
@@ -665,7 +669,7 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
             false => {
                 return Err(Error::InvalidNode(
                     "New RoomNode Authorisation not authorised".to_string(),
-                ))
+                ));
             }
         }
     }
@@ -829,6 +833,7 @@ pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
 
     for user in &room_node.user_admin_nodes {
         let user = parse_user_node(user)?;
+        //println!("{}", base64_encode(&user.verifying_key));
         room.add_user_admin_user(user)?;
     }
 
@@ -954,27 +959,16 @@ mod tests {
         database::{
             authorisation_service::RightType,
             authorisation_sync::*,
-            configuration::Configuration,
+            configuration::{Configuration, ROOM_AUTHORISATION_FIELD},
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::now,
     };
-    const DATA_PATH: &str = "test/data/database/authorisation_service_test/";
+    const DATA_PATH: &str = "test/data/database/authorisation_synch_test/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
-        let paths = fs::read_dir(path).unwrap();
-
-        for path in paths {
-            let dir = path.unwrap().path();
-            let paths = fs::read_dir(dir).unwrap();
-            for file in paths {
-                let files = file.unwrap().path();
-                // println!("Name: {}", files.display());
-                let _ = fs::remove_file(&files);
-            }
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1044,6 +1038,12 @@ mod tests {
 
         node.check_consistency().unwrap();
         // println!("{:#?}", node);
+        assert_eq!(1, node.admin_edges.len());
+        assert_eq!(1, node.admin_edges.len());
+
+        assert_eq!(1, node.user_admin_edges.len());
+        assert_eq!(1, node.user_admin_nodes.len());
+
         assert_eq!(1, node.auth_edges.len());
         assert_eq!(1, node.auth_nodes.len());
 
@@ -1128,5 +1128,375 @@ mod tests {
         let room = parse_room_node(&node).unwrap();
         assert!(room.can(app.verifying_key(), "Person", now(), &RightType::DeleteAll));
         assert!(!room.can(app.verifying_key(), "Persons", now(), &RightType::DeleteAll));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reinsert_room_node() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = base64_encode(app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+        let node = app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+
+        app.add_room_node(node.clone()).await.unwrap();
+
+        let mut param = Parameters::default();
+        param.add("user_id", user_id.clone()).unwrap();
+        param.add("room_id", room_id.clone()).unwrap();
+        app.mutate(
+            r#"mutation mut {
+                _Room{
+                    id:$room_id
+                    authorisations:[{
+                        name:"new"
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:true
+                            delete_all:true
+                            mutate_all:true
+                        }]
+                        users: [{
+                            verifying_key:$user_id
+                        }]
+                    }]
+                }
+
+            }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        app.mutate(
+            r#"mutation mut {
+            Person{
+                room_id: $room_id
+                name:"someone"
+            }
+
+        }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        //add the old rooom definition, the new defition will not be replaced
+        app.add_room_node(node.clone()).await.unwrap();
+
+        //we are still able to insert data
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        app.mutate(
+            r#"mutation mut {
+            Person{
+                room_id: $room_id
+                name:"someone 2"
+            }
+
+        }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let result = app
+            .query(
+                "query d {
+            Person(order_by(name desc)){
+                name
+            }
+
+        }",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            "{\n\"Person\":[{\"name\":\"someone 2\"},{\"name\":\"someone\"}]\n}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transfert_room() {
+        init_database_path();
+        let data_model = "
+        Person{ 
+            name:String, 
+            parents:[Person]
+        }   
+        ";
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let first_app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+        let first_user_id = base64_encode(first_app.verifying_key());
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let second_app = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+        let second_user_id = base64_encode(second_app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", first_user_id.clone()).unwrap();
+        let room = first_app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                        authorisations:[{
+                            name:"admin"
+                            rights:[{
+                                entity:"Person"
+                                mutate_self:true
+                                delete_all:true
+                                mutate_all:true
+                            }]
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let auth_insert = &room_insert.sub_nodes.get(ROOM_AUTHORISATION_FIELD).unwrap()[0];
+        let auth_id = base64_encode(&auth_insert.node_to_mutate.id);
+
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        first_app
+            .mutate(
+                r#"mutation mut {
+            Person{
+                room_id: $room_id
+                name:"someone"
+            }
+
+        }"#,
+                Some(param),
+            )
+            .await
+            .expect("first_user can insert");
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        second_app
+            .mutate(
+                r#"mutation mut {
+                Person{
+                    room_id: $room_id
+                    name:"someone"
+                }
+    
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect_err("second_user cannot insert");
+
+        //add second_user to the authorisation
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", second_user_id.clone()).unwrap();
+
+        first_app
+            .mutate(
+                r#"mutation mut {
+                _Room{
+                    id:$room_id
+                    authorisations:[{
+                        id:$auth_id
+                        users: [{
+                            verifying_key:$user_id
+                        }]
+                    }]
+                }
+
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("first user can modify the room");
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", second_user_id.clone()).unwrap();
+
+        second_app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        id:$room_id
+                        authorisations:[{
+                            id:$auth_id
+                            users: [{
+                                verifying_key:$user_id
+                            }]
+                        }]
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .expect_err("second user cannot modify the room");
+
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+
+        second_app
+            .mutate(
+                r#"mutation mut {
+                Person{
+                    room_id: $room_id
+                    name:"someone"
+                }
+    
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("second_user can now insert");
+
+        // //add the old rooom definition, the new defition will not be replaced
+        // first_app.add_room_node(node.clone()).await.unwrap();
+
+        // //we are still able to insert data
+        // let mut param = Parameters::default();
+        // param.add("room_id", room_id.clone()).unwrap();
+        // first_app
+        //     .mutate(
+        //         r#"mutation mut {
+        //     Person{
+        //         room_id: $room_id
+        //         name:"someone 2"
+        //     }
+
+        // }"#,
+        //         Some(param),
+        //     )
+        //     .await
+        //     .unwrap();
+
+        // let result = first_app
+        //     .query(
+        //         "query d {
+        //     Person(order_by(name desc)){
+        //         name
+        //     }
+
+        // }",
+        //         None,
+        //     )
+        //     .await
+        //     .unwrap();
+        // assert_eq!(
+        //     result,
+        //     "{\n\"Person\":[{\"name\":\"someone 2\"},{\"name\":\"someone\"}]\n}"
+        // );
     }
 }

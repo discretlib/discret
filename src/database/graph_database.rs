@@ -564,6 +564,7 @@ impl GraphDatabase {
             .reader
             .send_async(Box::new(move |conn| {
                 let room_id = &room_node.node.id;
+                
                 let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
                 match room_node_res {
                     Ok(old_room_node) => {

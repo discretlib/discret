@@ -460,18 +460,18 @@ impl BufferedDatabaseWriter {
                                         AuthorisationMessage::RoomMutationWrite(Ok(()), q),
                                     );
                                 }
+                                WriteMessage::RoomNode(q, r) => {
+                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
+                                        Ok(()),
+                                        q,
+                                    ));
+                                }
                                 WriteMessage::Write(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
                                 WriteMessage::ComputeDailyLog(q, r) => {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
                                         Ok(q),
-                                    ));
-                                }
-                                WriteMessage::RoomNode(q, r) => {
-                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
-                                        Ok(()),
-                                        q,
                                     ));
                                 }
                             }
@@ -493,18 +493,18 @@ impl BufferedDatabaseWriter {
                                             q,
                                         ));
                                 }
+                                WriteMessage::RoomNode(q, r) => {
+                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
+                                        Err(Error::DatabaseWrite(e.to_string())),
+                                        q,
+                                    ));
+                                }
                                 WriteMessage::Write(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::ComputeDailyLog(_, r) => {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
                                         Err(Error::DatabaseWrite(e.to_string())),
-                                    ));
-                                }
-                                WriteMessage::RoomNode(q, r) => {
-                                    let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
-                                        Err(Error::DatabaseWrite(e.to_string())),
-                                        q,
                                     ));
                                 }
                             }

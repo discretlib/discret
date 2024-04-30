@@ -458,6 +458,7 @@ impl AuthorisationService {
                     match parse_room_node(&query.room) {
                         Ok(room) => {
                             auth.add_room(room);
+                            let _ = query.reply.send(Ok(()));
                         }
                         Err(e) => {
                             let _ = query.reply.send(Err(e));
@@ -1124,12 +1125,13 @@ impl RoomAuthorisations {
         room_node: &mut RoomNode,
     ) -> Result<bool> {
         room_node.check_consistency()?;
+
         let insert = match self.rooms.get(&room_node.node.id) {
             Some(room) => match old_room_node {
                 Some(old) => prepare_room_with_history(room, &old, room_node)?,
                 None => {
                     return Err(Error::InvalidNode(
-                        "should have an existing room node".to_string(),
+                        "the room exists should have an existing old_room_node".to_string(),
                     ))
                 }
             },

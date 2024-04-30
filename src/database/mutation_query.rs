@@ -64,9 +64,9 @@ impl Default for NodeToMutate {
     fn default() -> Self {
         Self {
             id: Vec::new(),
+            room_id: None,
             entity: "".to_string(),
             date: now(),
-            room_id: None,
             old_fts_str: None,
             node_fts_str: None,
             node: None,
@@ -103,8 +103,11 @@ impl MutationQuery {
     ) -> Result<MutationQuery> {
         mutation.variables.validate_params(parameters)?;
         let mut mutate_queries = vec![];
+
+        //make sure that everything is mutated at the same exact date
+        let date = now();
         for entity in &mutation.mutations {
-            let query = Self::get_mutate_query(entity, parameters, conn)?;
+            let query = Self::get_mutate_query(entity, parameters, conn, date)?;
             mutate_queries.push(query);
         }
         let query = MutationQuery {
@@ -135,13 +138,14 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
+        date: i64,
     ) -> Result<InsertEntity> {
         let mut query = InsertEntity {
             name: entity.aliased_name(),
             ..Default::default()
         };
 
-        let mut node_to_mutate = Self::create_node_to_mutate(entity, parameters, conn)?;
+        let mut node_to_mutate = Self::create_node_to_mutate(entity, parameters, conn, date)?;
 
         let mut json = if let Some(old_node) = &mut node_to_mutate.old_node {
             match &old_node._json {
@@ -182,7 +186,7 @@ impl MutationQuery {
                                 let mut insert_queries = vec![];
                                 for mutation in mutations {
                                     let insert_query =
-                                        Self::get_mutate_query(mutation, parameters, conn)?;
+                                        Self::get_mutate_query(mutation, parameters, conn, date)?;
 
                                     let target_id = insert_query.node_to_mutate.id.clone();
 
@@ -226,7 +230,7 @@ impl MutationQuery {
                                     query.edge_deletions.push(e);
                                 }
                                 let insert_query =
-                                    Self::get_mutate_query(mutation, parameters, conn)?;
+                                    Self::get_mutate_query(mutation, parameters, conn, date)?;
 
                                 let target_id = insert_query.node_to_mutate.id.clone();
                                 let edge = Edge {
@@ -306,6 +310,7 @@ impl MutationQuery {
         entity: &EntityMutation,
         parameters: &Parameters,
         conn: &Connection,
+        date: i64,
     ) -> Result<NodeToMutate> {
         let entity_name = &entity.name;
         let entity_short = &entity.short_name;
@@ -328,11 +333,11 @@ impl MutationQuery {
                         };
                         let mut new_node = *old_node.clone();
                         new_node.room_id = node_room.clone();
-                        new_node.mdate = now();
+                        new_node.mdate = date;
 
                         NodeToMutate {
                             id: old_node.id.clone(),
-                            date: new_node.mdate,
+                            date,
                             room_id: node_room.clone(),
                             node: Some(new_node),
                             old_node: Some(*old_node),
@@ -362,6 +367,7 @@ impl MutationQuery {
                     id: node.id.clone(),
                     room_id: node.room_id.clone(),
                     entity: entity_name.clone(),
+                    date,
                     enable_archives: entity.enable_archives,
                     enable_full_text: entity.enable_full_text,
                     node: Some(node),
