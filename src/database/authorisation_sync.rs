@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::cryptography::{base64_decode, base64_encode};
+use crate::cryptography::base64_decode;
 
 use super::{
     authorisation_service::{Authorisation, EntityRight, Room, User},
@@ -430,7 +430,7 @@ pub fn prepare_room_with_history(
             room_node.admin_edges.push(old_edge.clone());
         }
     }
-    room_node.admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
+    room_node.admin_edges.sort_by(|a, b| a.cdate.cmp(&b.cdate));
 
     for old_user in &old_room_node.admin_nodes {
         let admin_node = room_node
@@ -454,7 +454,7 @@ pub fn prepare_room_with_history(
     }
     room_node
         .admin_nodes
-        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
+        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
 
     //
     // Find new admins and add them to the cloned room
@@ -493,7 +493,7 @@ pub fn prepare_room_with_history(
     }
     room_node
         .user_admin_edges
-        .sort_by(|a, b| b.cdate.cmp(&a.cdate));
+        .sort_by(|a, b| a.cdate.cmp(&b.cdate));
 
     for old_user in &old_room_node.user_admin_nodes {
         let user_admin_node = room_node
@@ -517,7 +517,7 @@ pub fn prepare_room_with_history(
     }
     room_node
         .user_admin_nodes
-        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
+        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
 
     //
     //
@@ -690,7 +690,7 @@ fn prepare_auth_with_history(
             new_auth.user_edges.push(old_edge.clone());
         }
     }
-    new_auth.user_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
+    new_auth.user_edges.sort_by(|a, b| a.cdate.cmp(&b.cdate));
 
     for old_user in &old_auth.user_nodes {
         let user_node = new_auth
@@ -714,7 +714,7 @@ fn prepare_auth_with_history(
     }
     new_auth
         .user_nodes
-        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
+        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
 
     //
     // verify new users
@@ -746,7 +746,7 @@ fn prepare_auth_with_history(
             new_auth.right_edges.push(old_edge.clone());
         }
     }
-    new_auth.right_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
+    new_auth.right_edges.sort_by(|a, b| a.cdate.cmp(&b.cdate));
 
     for old_right in &old_auth.right_nodes {
         let right_node = new_auth
@@ -771,7 +771,7 @@ fn prepare_auth_with_history(
     }
     new_auth
         .right_nodes
-        .sort_by(|a, b| b.node.mdate.cmp(&a.node.mdate));
+        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
 
     //
     // verify new right
@@ -955,7 +955,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random32},
+        cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
             authorisation_service::RightType,
             authorisation_sync::*,
@@ -1447,7 +1447,6 @@ mod tests {
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
-
         second_app
             .mutate(
                 r#"mutation mut {
@@ -1462,41 +1461,372 @@ mod tests {
             .await
             .expect("second_user can now insert");
 
-        // //add the old rooom definition, the new defition will not be replaced
-        // first_app.add_room_node(node.clone()).await.unwrap();
+        //remove second_user to the authorisation
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("auth_id", auth_id.clone()).unwrap();
+        param.add("user_id", second_user_id.clone()).unwrap();
 
-        // //we are still able to insert data
-        // let mut param = Parameters::default();
-        // param.add("room_id", room_id.clone()).unwrap();
-        // first_app
-        //     .mutate(
-        //         r#"mutation mut {
-        //     Person{
-        //         room_id: $room_id
-        //         name:"someone 2"
-        //     }
+        first_app
+            .mutate(
+                r#"mutation mut {
+                        _Room{
+                            id:$room_id
+                            authorisations:[{
+                                id:$auth_id
+                                users: [{
+                                    verifying_key:$user_id
+                                    enabled: false
+                                }]
+                            }]
+                        }
+        
+                    }"#,
+                Some(param),
+            )
+            .await
+            .expect("first user can modify the room");
 
-        // }"#,
-        //         Some(param),
-        //     )
-        //     .await
-        //     .unwrap();
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
 
-        // let result = first_app
-        //     .query(
-        //         "query d {
-        //     Person(order_by(name desc)){
-        //         name
-        //     }
+        //   println!("{:#?}", &node.auth_nodes);
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
 
-        // }",
-        //         None,
-        //     )
-        //     .await
-        //     .unwrap();
-        // assert_eq!(
-        //     result,
-        //     "{\n\"Person\":[{\"name\":\"someone 2\"},{\"name\":\"someone\"}]\n}"
-        // );
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        second_app
+            .mutate(
+                r#"mutation mut {
+            Person{
+                room_id: $room_id
+                name:"someone"
+            }
+
+        }"#,
+                Some(param),
+            )
+            .await
+            .expect_err("second_user cannot insert anymore");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn admin_rights() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let first_app = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+        let first_user_id = base64_encode(first_app.verifying_key());
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let second_app = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+        let second_user_id = base64_encode(second_app.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("user_id", first_user_id.clone()).unwrap();
+        let room = first_app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("second_user", second_user_id.clone()).unwrap();
+        first_app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        id: $room_id
+                        admin: [{
+                            verifying_key:$second_user
+                        }]
+                        user_admin: [{
+                            verifying_key:$second_user
+                        }]
+                       
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .expect("first_app can mutate room");
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("second_user", second_user_id.clone()).unwrap();
+        second_app
+            .mutate(
+                r#"mutation mut {
+                        _Room{
+                            id: $room_id
+                            admin: [{
+                                verifying_key:$second_user
+                            }]
+                            user_admin: [{
+                                verifying_key:$second_user
+                            }]
+                           
+                        }
+                    }"#,
+                Some(param),
+            )
+            .await
+            .expect_err("second app cannot mutate room");
+
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let third_user = base64_encode(&random32());
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("third_user", third_user.clone()).unwrap();
+
+        first_app
+            .mutate(
+                r#"mutation mut {
+                _Room{
+                    id: $room_id
+                    admin: [{
+                        verifying_key:$third_user
+                    }]
+                    user_admin: [{
+                        verifying_key:$third_user
+                    }]
+                   
+                }
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("first_app can mutate room");
+
+        let third_user = base64_encode(&random32());
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("third_user", third_user.clone()).unwrap();
+
+        second_app
+            .mutate(
+                r#"mutation mut {
+                _Room{
+                    id: $room_id
+                    admin: [{
+                        verifying_key:$third_user
+                    }]
+                    user_admin: [{
+                        verifying_key:$third_user
+                    }]
+                   
+                }
+            }"#,
+                Some(param),
+            )
+            .await
+            .expect("second_app can mutate room");
+
+        let node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app.add_room_node(node.clone()).await.unwrap();
+
+        let node = second_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        first_app.add_room_node(node.clone()).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invalid() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let first_app = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+        let first_user_id = base64_encode(first_app.verifying_key());
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let second_app = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let mut param = Parameters::default();
+        param.add("user_id", first_user_id.clone()).unwrap();
+        let room = first_app
+            .mutate(
+                r#"mutation mut {
+                    _Room{
+                        admin: [{
+                            verifying_key:$user_id
+                        }]
+                        user_admin: [{
+                            verifying_key:$user_id
+                        }]
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+
+        let mut node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //will invalidate the signature
+        node.node.mdate = 0;
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app
+            .add_room_node(node.clone())
+            .await
+            .expect_err("invalid signature");
+
+        let mut node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //will trigger a consistency error
+        node.user_admin_nodes = Vec::new();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app
+            .add_room_node(node.clone())
+            .await
+            .expect_err("consistency error");
+
+        let bad_signing = Ed25519SigningKey::create_from(&random32());
+        let mut node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //will trigger a right error
+        node.admin_nodes[0].node.sign(&bad_signing).unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app
+            .add_room_node(node.clone())
+            .await
+            .expect_err("right error");
+
+        let mut node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //trigger a consistency error
+        node.admin_edges[0].dest = random32().to_vec();
+        node.admin_edges[0].sign(&bad_signing).unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app
+            .add_room_node(node.clone())
+            .await
+            .expect_err("edge must point to a node that is is in the corresponding *_edge");
+
+        let mut node = first_app
+            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        //does not trigger right error
+        node.admin_edges[0].sign(&bad_signing).unwrap();
+        //serialize and deserialize to get rid of the local_id
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app
+            .add_room_node(node.clone())
+            .await
+            .expect("no right error, protected by a previous consitency check, the edge point a node that will be verified");
     }
 }

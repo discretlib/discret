@@ -63,7 +63,7 @@ impl Room {
         let entry = self.admins.entry(user.verifying_key.clone()).or_default();
 
         if let Some(last_user) = entry.last() {
-            if last_user.date >= user.date {
+            if last_user.date > user.date {
                 return Err(Error::InvalidUserDate());
             }
         }
@@ -90,7 +90,7 @@ impl Room {
             .or_default();
 
         if let Some(last_user) = entry.last() {
-            if last_user.date >= user.date {
+            if last_user.date > user.date {
                 return Err(Error::InvalidUserDate());
             }
         }
@@ -161,7 +161,7 @@ impl Authorisation {
 
         let date = right.valid_from;
         if let Some(last) = entry.last() {
-            if last.valid_from >= date {
+            if last.valid_from > date {
                 return Err(Error::InvalidRightDate());
             }
         }
@@ -182,9 +182,8 @@ impl Authorisation {
 
     pub fn add_user(&mut self, user: User) -> Result<()> {
         let entry = self.users.entry(user.verifying_key.clone()).or_default();
-
         if let Some(last_user) = entry.last() {
-            if last_user.date >= user.date {
+            if last_user.date > user.date {
                 return Err(Error::InvalidUserDate());
             }
         }
