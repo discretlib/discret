@@ -887,7 +887,6 @@ fn parse_user_node(user_node: &UserNode) -> Result<User> {
     let date = user_node.node.mdate;
 
     let user = User {
-        id: user_node.node.id.clone(),
         verifying_key,
         date,
         enabled,
@@ -940,7 +939,6 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
     };
 
     let entity_right = EntityRight {
-        id: entity_right_node.node.id.clone(),
         valid_from: entity_right_node.node.mdate,
         entity,
         mutate_self,

@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
 
-    use std::{fs, path::PathBuf};
+    use std::{collections::HashMap, fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random32},
+        cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
             authorisation_service::*,
             configuration::Configuration,
@@ -19,7 +19,6 @@ mod tests {
     fn room_admins() {
         let valid_date: i64 = 10000;
         let mut user1 = User {
-            id: random32().to_vec(),
             verifying_key: random32().to_vec(),
             date: valid_date,
             enabled: true,
@@ -53,7 +52,6 @@ mod tests {
     fn room_user_admins() {
         let valid_date: i64 = 10000;
         let mut user1 = User {
-            id: random32().to_vec(),
             verifying_key: random32().to_vec(),
             date: valid_date,
             enabled: true,
@@ -87,7 +85,6 @@ mod tests {
     fn entity_right() {
         let user_valid_date: i64 = 1000;
         let user1 = User {
-            id: random32().to_vec(),
             verifying_key: random32().to_vec(),
             date: user_valid_date,
             enabled: true,
@@ -105,7 +102,6 @@ mod tests {
         let ent_date: i64 = 100;
         let entity = "Person";
         let mut person_right = EntityRight {
-            id: random32().to_vec(),
             valid_from: ent_date,
             entity: entity.to_string(),
             mutate_self: true,
@@ -187,6 +183,68 @@ mod tests {
             person_right.valid_from,
             &RightType::MutateAll
         ));
+    }
+
+    #[test]
+    fn get_room_for_user() {
+        let user_valid_date: i64 = 1000;
+        let user1 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let user2 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let user3 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let mut room = Room {
+            id: random32().to_vec(),
+            ..Default::default()
+        };
+        room.add_admin_user(user1.clone()).unwrap();
+        room.add_user_admin_user(user2.clone()).unwrap();
+
+        let mut auth = Authorisation::default();
+        auth.add_user(user3.clone()).unwrap();
+
+        room.add_auth(auth).unwrap();
+
+        let mut room_auth = RoomAuthorisations {
+            signing_key: Ed25519SigningKey::new(),
+            rooms: HashMap::new(),
+        };
+
+        room_auth.add_room(room);
+
+        let room_list = room_auth.get_rooms_for_user(&random32().to_vec(), user_valid_date);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user1.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user2.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user3.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user1.verifying_key, 0);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user2.verifying_key, 0);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.get_rooms_for_user(&user3.verifying_key, 0);
+        assert_eq!(0, room_list.len());
     }
 
     const DATA_PATH: &str = "test/data/database/authorisation_service_test/";
@@ -1506,6 +1564,4 @@ mod tests {
 
         assert_eq!(2, res.len());
     }
-
-   
 }
