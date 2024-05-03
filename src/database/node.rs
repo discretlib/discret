@@ -1,7 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::{
-    edge::Edge,
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
@@ -533,6 +532,7 @@ impl Node {
                 q.push(',');
             }
         }
+        //if a node exists with a more recent date, the id is filtered (we do not want to insert older data)
         let query = format!(
             "SELECT id FROM _node WHERE  mdate >= {} AND id in ({}) AND substr(_entity,1,1) != '{}'",
             date, q, ARCHIVED_CHAR
@@ -545,96 +545,6 @@ impl Node {
             let id: Vec<u8> = row.get(0)?;
             node_ids.remove(&id);
         }
-        Ok(())
-    }
-}
-
-//
-// data structure to get a node and all its edges
-// used during synchronisation
-// index,  old_fts_str, node_fts_str is intended to be filled by the reciever
-//
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FullNode {
-    pub node: Node,
-    pub edges: Vec<Edge>,
-    pub index: bool,
-    pub old_fts_str: Option<String>,
-    pub node_fts_str: Option<String>,
-}
-impl FullNode {
-    pub fn get(node_ids: HashSet<Vec<u8>>, conn: &Connection) -> Result<Vec<FullNode>> {
-        let it = &mut node_ids.iter().peekable();
-        let mut q = String::new();
-        while let Some(_) = it.next() {
-            q.push('?');
-            if it.peek().is_some() {
-                q.push(',');
-            }
-        }
-
-        let query = format!("
-        SELECT 
-            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, 
-            _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature
-        FROM _node
-        LEFT JOIN _edge ON _node.id = _edge.src 
-        WHERE 
-            substr(_node._entity,1,1) != '{}' AND
-            _node.id in ({}) 
-        ",ARCHIVED_CHAR, q);
-
-        let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
-
-        let mut map: HashMap<Vec<u8>, Self> = HashMap::new();
-        while let Some(row) = rows.next()? {
-            let id: Vec<u8> = row.get(0)?;
-            let entry = map.entry(id.clone()).or_insert({
-                let node = Node {
-                    id: id.clone(),
-                    room_id: row.get(1)?,
-                    cdate: row.get(2)?,
-                    mdate: row.get(3)?,
-                    _entity: row.get(4)?,
-                    _json: row.get(5)?,
-                    _binary: row.get(6)?,
-                    _verifying_key: row.get(7)?,
-                    _signature: row.get(8)?,
-                    _local_id: None,
-                };
-
-                FullNode {
-                    node,
-                    edges: Vec::new(),
-                    index: false,
-                    old_fts_str: None,
-                    node_fts_str: None,
-                }
-            });
-
-            let src_opt: Option<Vec<u8>> = row.get(9)?;
-            if let Some(src) = src_opt {
-                let edge = Edge {
-                    src,
-                    src_entity: row.get(10)?,
-                    label: row.get(11)?,
-                    dest: row.get(12)?,
-                    cdate: row.get(13)?,
-                    verifying_key: row.get(14)?,
-                    signature: row.get(15)?,
-                };
-                entry.edges.push(edge);
-            }
-        }
-
-        let res: Vec<FullNode> = map.into_iter().map(|(_, node)| node).collect();
-        Ok(res)
-    }
-
-    pub fn write(&mut self, conn: &Connection) -> Result<()> {
-        self.node
-            .write(conn, self.index, &self.old_fts_str, &self.node_fts_str)?;
         Ok(())
     }
 }
@@ -733,6 +643,32 @@ impl Writeable for NodeDeletionEntry {
             &self.signature,
         ))?;
         Ok(())
+    }
+}
+
+///
+/// Extract all text from a json object for full text search
+///
+pub fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
+    match val {
+        serde_json::Value::String(v) => {
+            buff.push_str(v);
+            buff.push(' ');
+            Ok(())
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                extract_json(v, buff)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => {
+            for v in map {
+                extract_json(v.1, buff)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1056,114 +992,5 @@ mod tests {
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
         assert_eq!(0, ids.len());
-    }
-
-    #[test]
-    fn get_full_node() {
-        let conn = Connection::open_in_memory().unwrap();
-        Node::create_tables(&conn).unwrap();
-        Edge::create_tables(&conn).unwrap();
-
-        let signing_key = Ed25519SigningKey::new();
-        let entity = "Pet";
-        let room_id1 = random32();
-        let date = 1000;
-        let mut raw_node = Node {
-            room_id: Some(room_id1.to_vec()),
-            _entity: String::from(entity),
-            mdate: date,
-            ..Default::default()
-        };
-        raw_node.sign(&signing_key).unwrap();
-        raw_node.write(&conn, false, &None, &None).unwrap();
-
-        let mut node_ids = HashSet::new();
-        node_ids.insert(raw_node.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
-        assert_eq!(1, nodes.len());
-        assert_eq!(raw_node.id, nodes[0].node.id);
-
-        let mut node_with_one_edge = Node {
-            room_id: Some(room_id1.to_vec()),
-            _entity: String::from(entity),
-            mdate: date,
-            ..Default::default()
-        };
-        node_with_one_edge.sign(&signing_key).unwrap();
-        node_with_one_edge
-            .write(&conn, false, &None, &None)
-            .unwrap();
-
-        let mut edge = Edge {
-            src: node_with_one_edge.id.clone(),
-            src_entity: String::from(entity),
-            label: "afield".to_string(),
-            cdate: date,
-            dest: raw_node.id.clone(),
-            verifying_key: Vec::new(),
-            signature: Vec::new(),
-        };
-        edge.sign(&signing_key).unwrap();
-        edge.write(&conn).unwrap();
-
-        let mut node_ids = HashSet::new();
-        node_ids.insert(node_with_one_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
-        assert_eq!(1, nodes.len());
-        let full = &nodes[0];
-        assert_eq!(node_with_one_edge.id, full.node.id);
-        assert_eq!(1, full.edges.len());
-        assert_eq!(edge.src, full.edges[0].src);
-
-        let mut node_with_two_edge = Node {
-            room_id: Some(room_id1.to_vec()),
-            _entity: String::from(entity),
-            mdate: date,
-            ..Default::default()
-        };
-        node_with_two_edge.sign(&signing_key).unwrap();
-        node_with_two_edge
-            .write(&conn, false, &None, &None)
-            .unwrap();
-
-        let mut edge = Edge {
-            src: node_with_two_edge.id.clone(),
-            src_entity: String::from(entity),
-            label: "afield".to_string(),
-            cdate: date,
-            dest: raw_node.id.clone(),
-            verifying_key: Vec::new(),
-            signature: Vec::new(),
-        };
-        edge.sign(&signing_key).unwrap();
-        edge.write(&conn).unwrap();
-
-        let mut edge = Edge {
-            src: node_with_two_edge.id.clone(),
-            src_entity: String::from(entity),
-            label: "another_field".to_string(),
-            cdate: date,
-            dest: raw_node.id.clone(),
-            verifying_key: Vec::new(),
-            signature: Vec::new(),
-        };
-        edge.sign(&signing_key).unwrap();
-        edge.write(&conn).unwrap();
-
-        let mut node_ids = HashSet::new();
-        node_ids.insert(node_with_two_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
-        assert_eq!(1, nodes.len());
-        let full = &nodes[0];
-        assert_eq!(node_with_two_edge.id, full.node.id);
-        assert_eq!(2, full.edges.len());
-
-        let mut node_ids = HashSet::new();
-        node_ids.insert(raw_node.id.clone());
-        node_ids.insert(node_with_one_edge.id.clone());
-        node_ids.insert(node_with_two_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
-        assert_eq!(3, nodes.len());
-        
     }
 }

@@ -9,6 +9,7 @@ pub mod event_service;
 pub mod graph_database;
 pub mod mutation_query;
 pub mod node;
+pub mod node_full;
 pub mod query;
 pub mod query_language;
 pub mod query_test;
@@ -31,6 +32,12 @@ pub enum Error {
 
     #[error("Invalid JSON Object {0}")]
     InvalidJsonObject(String),
+
+    #[error("Cannot parse field {0} value into a {1}")]
+    InvalidJsonFieldValue(String, String),
+
+    #[error("Missing json field {0}")]
+    MissingJsonField(String),
 
     #[error("{0}")]
     DatabaseWrite(String),
@@ -119,4 +126,7 @@ pub enum Error {
 
     #[error("Entity right is missing an entity name")]
     EntityRightMissingName(),
+
+    #[error("{0}")]
+    InvalidFullNode(String),
 }

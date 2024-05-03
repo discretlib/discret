@@ -17,6 +17,7 @@ use super::{
     event_service::EventServiceMessage,
     mutation_query::MutationQuery,
     node::Node,
+    node_full::FullNode,
     Error, Result,
 };
 
@@ -38,6 +39,11 @@ pub enum WriteMessage {
     Mutation(MutationQuery, Sender<Result<MutationQuery>>),
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    FullNode(
+        Vec<FullNode>,
+        Vec<Vec<u8>>,
+        mpsc::Sender<Result<Vec<Vec<u8>>>>,
+    ),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
     ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
 }
@@ -474,6 +480,9 @@ impl BufferedDatabaseWriter {
                                         Ok(q),
                                     ));
                                 }
+                                WriteMessage::FullNode(_, invalid_nodes, r) => {
+                                    let _ = r.blocking_send(Ok(invalid_nodes));
+                                }
                             }
                         }
                     }
@@ -506,6 +515,10 @@ impl BufferedDatabaseWriter {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
                                         Err(Error::DatabaseWrite(e.to_string())),
                                     ));
+                                }
+                                WriteMessage::FullNode(_, _, r) => {
+                                    let _ =
+                                        r.blocking_send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                             }
                         }
@@ -565,6 +578,14 @@ impl BufferedDatabaseWriter {
                     if let Err(e) = daily_mutations.compute(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
+                    }
+                }
+                WriteMessage::FullNode(full_nodes, _, _) => {
+                    for node_full in full_nodes {
+                        if let Err(e) = node_full.write(conn) {
+                            conn.execute("ROLLBACK", [])?;
+                            return Err(e);
+                        }
                     }
                 }
             }

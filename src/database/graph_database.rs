@@ -12,6 +12,7 @@ use super::{
     deletion::DeletionQuery,
     event_service::{EventMessage, EventService, EventServiceMessage},
     mutation_query::MutationQuery,
+    node_full::FullNode,
     query::{PreparedQueries, Query},
     query_language::{
         data_model_parser::DataModel, deletion_parser::DeletionParser,
@@ -322,7 +323,7 @@ impl GraphDatabase {
             rooms: HashMap::new(),
         };
 
-        let auth_service = AuthorisationService::start(auth);
+        let auth_service = AuthorisationService::start(auth, graph_database.writer.clone());
         let event_service = EventService::new();
         let database = Self {
             data_model,
@@ -451,8 +452,6 @@ impl GraphDatabase {
         reply: Sender<Result<MutationQuery>>,
     ) {
         let auth_service = self.auth_service.clone();
-        let writer = self.graph_database.writer.clone();
-
         let _ = self
             .graph_database
             .reader
@@ -461,7 +460,7 @@ impl GraphDatabase {
 
                 match mutation_query {
                     Ok(muta) => {
-                        let msg = AuthorisationMessage::Mutation(muta, writer, reply);
+                        let msg = AuthorisationMessage::Mutation(muta, reply);
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(e) => {
@@ -536,8 +535,6 @@ impl GraphDatabase {
         reply: Sender<Result<DeletionQuery>>,
     ) {
         let auth_service = self.auth_service.clone();
-        let writer = self.graph_database.writer.clone();
-
         let _ = self
             .graph_database
             .reader
@@ -545,7 +542,7 @@ impl GraphDatabase {
                 let deletion_query = DeletionQuery::build(&parameters, deletion, conn);
                 match deletion_query {
                     Ok(del) => {
-                        let query = AuthorisationMessage::Deletion(del, writer, reply);
+                        let query = AuthorisationMessage::Deletion(del, reply);
                         let _ = auth_service.send_blocking(query);
                     }
                     Err(e) => {
@@ -558,26 +555,76 @@ impl GraphDatabase {
 
     pub async fn add_room(&mut self, room_node: RoomNode, reply: Sender<Result<()>>) {
         let auth_service = self.auth_service.clone();
-        let writer = self.graph_database.writer.clone();
         let _ = self
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
                 let room_id = &room_node.node.id;
-                
+
                 let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
                 match room_node_res {
                     Ok(old_room_node) => {
-                        let msg = AuthorisationMessage::RoomNodeAdd(
-                            old_room_node,
-                            room_node,
-                            writer,
-                            reply,
-                        );
+                        let msg =
+                            AuthorisationMessage::RoomNodeAdd(old_room_node, room_node, reply);
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(err) => {
                         let _ = reply.send(Err(err));
+                    }
+                }
+            }))
+            .await;
+    }
+
+    pub async fn add_full_nodes(
+        &self,
+        nodes: Vec<FullNode>,
+        reply: mpsc::Sender<Result<Vec<Vec<u8>>>>,
+    ) {
+        let mut invalid_nodes = Vec::new();
+        let mut valid_nodes = Vec::new();
+
+        for mut node in nodes {
+            let entity_name = self.data_model.name_for(&node.node._entity);
+            match entity_name {
+                Some(name) => {
+                    match self.data_model.get_entity(&name) {
+                        Ok(ent) => {
+                            match node.entity_validation(ent) {
+                                Ok(_) => valid_nodes.push(node),
+                                Err(_) => {
+                                    //silent error. will just indicate peer that some node is erroneous
+                                    invalid_nodes.push(node.node.id)
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            //silent error. will just indicate peer that some node is erroneous
+                            invalid_nodes.push(node.node.id);
+                        }
+                    }
+                }
+                None => {
+                    //silent error. will just indicate peer that some node is erroneous
+                    invalid_nodes.push(node.node.id);
+                }
+            }
+        }
+        let auth_service = self.auth_service.clone();
+        let _ = self
+            .graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let val_nodes =
+                    FullNode::prepare_for_insert(valid_nodes, conn).map_err(Error::from);
+                match val_nodes {
+                    Ok(val_nodes) => {
+                        let msg =
+                            AuthorisationMessage::AddFullNode(val_nodes, invalid_nodes, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(e) => {
+                        let _ = reply.blocking_send(Err(e));
                     }
                 }
             }))

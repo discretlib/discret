@@ -9,7 +9,7 @@ use super::{
     configuration::{ID_FIELD, ROOM_ID_FIELD},
     daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
-    node::Node,
+    node::{extract_json, Node},
     query_language::{
         mutation_parser::{EntityMutation, MutationField, MutationFieldValue, MutationParser},
         parameter::Parameters,
@@ -565,29 +565,6 @@ impl Default for InsertEntity {
             edge_insertions: Vec::new(),
             sub_nodes: HashMap::new(),
         }
-    }
-}
-
-fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
-    match val {
-        serde_json::Value::String(v) => {
-            buff.push_str(v);
-            buff.push(' ');
-            Ok(())
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                extract_json(v, buff)?;
-            }
-            Ok(())
-        }
-        serde_json::Value::Object(map) => {
-            for v in map {
-                extract_json(v.1, buff)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
     }
 }
 

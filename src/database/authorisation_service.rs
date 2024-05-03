@@ -18,31 +18,24 @@ use super::{
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
+    node_full::FullNode,
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
 
 pub enum AuthorisationMessage {
     Load(String, Sender<super::Result<()>>),
-    Deletion(
-        DeletionQuery,
-        BufferedDatabaseWriter,
-        Sender<super::Result<DeletionQuery>>,
-    ),
-    Mutation(
-        MutationQuery,
-        BufferedDatabaseWriter,
-        Sender<super::Result<MutationQuery>>,
-    ),
+    Deletion(DeletionQuery, Sender<super::Result<DeletionQuery>>),
+    Mutation(MutationQuery, Sender<super::Result<MutationQuery>>),
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
-    RoomNodeAdd(
-        Option<RoomNode>,
-        RoomNode,
-        BufferedDatabaseWriter,
-        Sender<super::Result<()>>,
-    ),
+    RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomForUser(Vec<u8>, i64, Sender<Vec<Vec<u8>>>),
+    AddFullNode(
+        Vec<FullNode>,
+        Vec<Vec<u8>>,
+        mpsc::Sender<Result<Vec<Vec<u8>>>>,
+    ),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -76,7 +69,7 @@ pub struct AuthorisationService {
     room_mutation_sender: mpsc::Sender<AuthorisationMessage>,
 }
 impl AuthorisationService {
-    pub fn start(mut auth: RoomAuthorisations) -> Self {
+    pub fn start(mut auth: RoomAuthorisations, database_writer: BufferedDatabaseWriter) -> Self {
         let (sender, mut receiver) = mpsc::channel::<AuthorisationMessage>(100);
 
         //special channel to receive RoomMutationQuery from the database writer
@@ -91,7 +84,7 @@ impl AuthorisationService {
                     msg = receiver.recv() =>{
                         match msg {
                             Some(msg) => {
-                                Self::process_message(msg, &mut auth,&self_sender).await;
+                                Self::process_message(msg, &mut auth, &database_writer, &self_sender).await;
                             },
                             None => break,
                         }
@@ -99,7 +92,7 @@ impl AuthorisationService {
                     msg = room_mutation_receiver.recv() =>{
                         match msg {
                             Some(msg) => {
-                                Self::process_message(msg, &mut auth,&self_sender).await;
+                                Self::process_message(msg, &mut auth,&database_writer, &self_sender).await;
                             },
                             None => break,
                         }
@@ -117,6 +110,7 @@ impl AuthorisationService {
     pub async fn process_message(
         msg: AuthorisationMessage,
         auth: &mut RoomAuthorisations,
+        database_writer: &BufferedDatabaseWriter,
         self_sender: &mpsc::Sender<AuthorisationMessage>,
     ) {
         match msg {
@@ -125,7 +119,7 @@ impl AuthorisationService {
                 let _ = reply.send(res);
             }
 
-            AuthorisationMessage::Deletion(mut deletion_query, database_writer, reply) => {
+            AuthorisationMessage::Deletion(mut deletion_query, reply) => {
                 match auth.validate_deletion(&mut deletion_query) {
                     Ok(_) => {
                         let query = WriteMessage::Deletion(deletion_query, reply);
@@ -137,7 +131,7 @@ impl AuthorisationService {
                 }
             }
 
-            AuthorisationMessage::Mutation(mut mutation_query, database_writer, reply) => {
+            AuthorisationMessage::Mutation(mut mutation_query, reply) => {
                 let need_room_insert = match auth.validate_mutation(&mut mutation_query) {
                     Ok(rooms) => !rooms.is_empty(),
                     Err(e) => {
@@ -180,33 +174,30 @@ impl AuthorisationService {
                 }
             },
 
-            AuthorisationMessage::RoomNodeAdd(
-                old_room_node,
-                mut room_node,
-                database_writer,
-                reply,
-            ) => match auth.prepare_room_node(old_room_node, &mut room_node) {
-                Ok(insert) => {
-                    let _ = match insert {
-                        true => {
-                            let query = WriteMessage::RoomNode(
-                                RoomNodeWriteQuery {
-                                    room: room_node,
-                                    reply,
-                                },
-                                self_sender.clone(),
-                            );
-                            let _ = database_writer.send(query).await;
-                        }
-                        false => {
-                            let _ = reply.send(Ok(()));
-                        }
-                    };
+            AuthorisationMessage::RoomNodeAdd(old_room_node, mut room_node, reply) => {
+                match auth.prepare_room_node(old_room_node, &mut room_node) {
+                    Ok(insert) => {
+                        let _ = match insert {
+                            true => {
+                                let query = WriteMessage::RoomNode(
+                                    RoomNodeWriteQuery {
+                                        room: room_node,
+                                        reply,
+                                    },
+                                    self_sender.clone(),
+                                );
+                                let _ = database_writer.send(query).await;
+                            }
+                            false => {
+                                let _ = reply.send(Ok(()));
+                            }
+                        };
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
                 }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            },
+            }
             AuthorisationMessage::RoomNodeWrite(res, query) => match res {
                 Ok(_) => {
                     match parse_room_node(&query.room) {
@@ -226,6 +217,21 @@ impl AuthorisationService {
             AuthorisationMessage::RoomForUser(verifying_key, date, reply) => {
                 let rooms = auth.get_rooms_for_user(&verifying_key, date);
                 let _ = reply.send(rooms);
+            }
+
+            AuthorisationMessage::AddFullNode(valid_nodes, mut invalid_node, reply) => {
+                let mut write_nodes = Vec::new();
+
+                for node in valid_nodes {
+                    match auth.validate_full_node(&node) {
+                        true => write_nodes.push(node),
+                        false => invalid_node.push(node.node.id),
+                    }
+                }
+
+                let query = WriteMessage::FullNode(write_nodes, invalid_node, reply);
+
+                let _ = database_writer.send(query).await;
             }
         }
     }
@@ -905,6 +911,63 @@ impl RoomAuthorisations {
             }
         };
         Ok(insert)
+    }
+
+    pub fn validate_full_node(&self, node: &FullNode) -> bool {
+        if node.node.verify().is_err() {
+            return false;
+        }
+        let required_right = match &node.old_verifying_key {
+            Some(old_key) => match old_key.eq(&node.node._verifying_key) {
+                true => RightType::MutateSelf,
+                false => RightType::MutateAll,
+            },
+            None => RightType::MutateSelf,
+        };
+        let room_id = &node.node.room_id;
+        if room_id.is_none() {
+            return false;
+        }
+        let room_id = room_id.clone().unwrap();
+
+        let room = self.rooms.get(&room_id);
+        if room.is_none() {
+            return false;
+        }
+        let room = room.unwrap();
+
+        if node.entity_name.is_none() {
+            return false;
+        }
+        let entity_name = &node.entity_name.clone().unwrap();
+        if !room.can(
+            &node.node._verifying_key,
+            entity_name,
+            node.node.mdate,
+            &required_right,
+        ) {
+            return false;
+        }
+
+        for edge in &node.edges {
+            let required_right = match &node.old_verifying_key {
+                Some(old_key) => match old_key.eq(&edge.verifying_key) {
+                    true => RightType::MutateSelf,
+                    false => RightType::MutateAll,
+                },
+                None => RightType::MutateSelf,
+            };
+            if !room.can(
+                &edge.verifying_key,
+                entity_name,
+                edge.cdate,
+                &required_right,
+            ) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
