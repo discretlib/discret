@@ -4,7 +4,7 @@ use crate::cryptography::base64_decode;
 
 use super::{
     edge::Edge,
-    node::{extract_json, Node, ARCHIVED_CHAR},
+    node::{extract_json, Node, NodeIdentifier, ARCHIVED_CHAR},
     query_language::{data_model_parser::Entity, FieldType},
     sqlite_database::Writeable,
     Error, Result,
@@ -34,14 +34,19 @@ pub struct FullNode {
     pub node_fts_str: Option<String>,
 }
 impl FullNode {
-    pub fn get_nodes(node_ids: HashSet<Vec<u8>>, conn: &Connection) -> Result<Vec<FullNode>> {
+    pub fn get_nodes(
+        node_ids: HashSet<NodeIdentifier>,
+        conn: &Connection,
+    ) -> Result<Vec<FullNode>> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
-        while let Some(_) = it.next() {
+        let mut ids = Vec::new();
+        while let Some(nid) = it.next() {
             q.push('?');
             if it.peek().is_some() {
                 q.push(',');
             }
+            ids.push(&nid.id);
         }
 
         let query = format!("
@@ -56,7 +61,7 @@ impl FullNode {
         ",ARCHIVED_CHAR, q);
 
         let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
+        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
 
         let mut map: HashMap<Vec<u8>, Self> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -322,6 +327,7 @@ mod tests {
             authorisation_sync::RoomNode,
             configuration::Configuration,
             graph_database::GraphDatabaseService,
+            node::NodeIdentifier,
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::now,
@@ -355,7 +361,11 @@ mod tests {
         raw_node.write(&conn, false, &None, &None).unwrap();
 
         let mut node_ids = HashSet::new();
-        node_ids.insert(raw_node.id.clone());
+        node_ids.insert(NodeIdentifier {
+            id: raw_node.id.clone(),
+            mdate: date,
+            signature: raw_node._signature.clone(),
+        });
         let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
@@ -384,7 +394,11 @@ mod tests {
         edge.write(&conn).unwrap();
 
         let mut node_ids = HashSet::new();
-        node_ids.insert(node_with_one_edge.id.clone());
+        node_ids.insert(NodeIdentifier {
+            id: node_with_one_edge.id.clone(),
+            mdate: date,
+            signature: node_with_one_edge._signature.clone(),
+        });
         let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
@@ -428,7 +442,11 @@ mod tests {
         edge.write(&conn).unwrap();
 
         let mut node_ids = HashSet::new();
-        node_ids.insert(node_with_two_edge.id.clone());
+        node_ids.insert(NodeIdentifier {
+            id: node_with_two_edge.id.clone(),
+            mdate: date,
+            signature: node_with_two_edge._signature.clone(),
+        });
         let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
@@ -436,9 +454,21 @@ mod tests {
         assert_eq!(2, full.edges.len());
 
         let mut node_ids = HashSet::new();
-        node_ids.insert(raw_node.id.clone());
-        node_ids.insert(node_with_one_edge.id.clone());
-        node_ids.insert(node_with_two_edge.id.clone());
+        node_ids.insert(NodeIdentifier {
+            id: raw_node.id.clone(),
+            mdate: date,
+            signature: raw_node._signature.clone(),
+        });
+        node_ids.insert(NodeIdentifier {
+            id: node_with_one_edge.id.clone(),
+            mdate: date,
+            signature: node_with_one_edge._signature.clone(),
+        });
+        node_ids.insert(NodeIdentifier {
+            id: node_with_two_edge.id.clone(),
+            mdate: date,
+            signature: node_with_two_edge._signature.clone(),
+        });
         let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(3, nodes.len());
     }
@@ -621,7 +651,7 @@ mod tests {
 
         //node_ids sent over network
         let ser = bincode::serialize(&node_ids).unwrap();
-        let node_ids: HashSet<Vec<u8>> = bincode::deserialize(&ser).unwrap();
+        let node_ids: HashSet<NodeIdentifier> = bincode::deserialize(&ser).unwrap();
 
         let filtered_nodes = second_app
             .filter_existing_node(node_ids, now())
@@ -631,7 +661,7 @@ mod tests {
 
         //filtered_nodes sent over network
         let ser = bincode::serialize(&filtered_nodes).unwrap();
-        let filtered_nodes: HashSet<Vec<u8>> = bincode::deserialize(&ser).unwrap();
+        let filtered_nodes: HashSet<NodeIdentifier> = bincode::deserialize(&ser).unwrap();
 
         let full_nodes: Vec<FullNode> = first_app.get_full_nodes(filtered_nodes).await.unwrap();
         assert_eq!(3, full_nodes.len());

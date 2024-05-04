@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, hash::Hash};
 
 use super::{
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
@@ -494,11 +494,12 @@ impl Node {
         room_id: &Vec<u8>,
         day: i64,
         conn: &Connection,
-    ) -> Result<HashSet<Vec<u8>>> {
+    ) -> Result<HashSet<NodeIdentifier>> {
         let mut id_set = HashSet::new();
 
         let query = format!(
-            "SELECT id FROM _node 
+            "SELECT id, mdate, _signature
+            FROM _node 
             WHERE room_id=? AND
             mdate >= ? AND mdate < ? AND 
             substr(_entity,1,1) != '{}'",
@@ -509,7 +510,12 @@ impl Node {
         let mut rows = stmt.query((room_id, date(day), date_next_day(day)))?;
 
         while let Some(row) = rows.next()? {
-            id_set.insert(row.get(0)?);
+            let node = NodeIdentifier {
+                id: row.get(0)?,
+                mdate: row.get(1)?,
+                signature: row.get(2)?,
+            };
+            id_set.insert(node);
         }
         Ok(id_set)
     }
@@ -520,32 +526,76 @@ impl Node {
     // the set is provided by the get_ids_for_room_at method
     //
     pub fn retain_missing_id(
-        node_ids: &mut HashSet<Vec<u8>>,
-        date: i64,
+        node_ids: &mut HashSet<NodeIdentifier>,
+        day: i64,
         conn: &Connection,
     ) -> Result<()> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
-        while let Some(_) = it.next() {
+        let mut ids = Vec::new();
+        while let Some(node) = it.next() {
             q.push('?');
             if it.peek().is_some() {
                 q.push(',');
             }
+            ids.push(&node.id);
         }
-        //if a node exists with a more recent date, the id is filtered (we do not want to insert older data)
+
         let query = format!(
-            "SELECT id FROM _node WHERE mdate >= {} AND id in ({}) AND substr(_entity,1,1) != '{}'",
-            date, q, ARCHIVED_CHAR
+            "SELECT id, mdate ,_signature
+            FROM _node 
+            WHERE 
+                mdate >= {} AND 
+                id in ({}) 
+                AND substr(_entity,1,1) != '{}'",
+            date(day),
+            q,
+            ARCHIVED_CHAR
         );
 
         let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
+        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
 
         while let Some(row) = rows.next()? {
-            let id: Vec<u8> = row.get(0)?;
-            node_ids.remove(&id);
+            let existing = NodeIdentifier {
+                id: row.get(0)?,
+                mdate: row.get(1)?,
+                signature: row.get(2)?,
+            };
+
+            if let Some(new) = node_ids.get(&existing) {
+                //remove the incoming node if it is older to that the existing one
+                if new.mdate < existing.mdate {
+                    node_ids.remove(&existing);
+                } else
+                //Removes the incoming node if
+                //  mdate are equals AND
+                //      signature is lower than the existing one: arbitrary heuristic to handle the unlucky case of two updates at the same millisecond
+                //      OR signature are equals: no need to update
+                if (new.mdate.eq(&existing.mdate)) && (new.signature <= existing.signature) {
+                    node_ids.remove(&existing);
+                }
+            }
         }
         Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NodeIdentifier {
+    pub id: Vec<u8>,
+    pub mdate: i64,
+    pub signature: Vec<u8>,
+}
+impl Eq for NodeIdentifier {}
+impl PartialEq for NodeIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Hash for NodeIdentifier {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
     }
 }
 

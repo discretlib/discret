@@ -5,7 +5,7 @@ use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc}
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::node::Node;
+use super::node::{Node, NodeIdentifier};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     authorisation_sync::RoomNode,
@@ -287,8 +287,9 @@ impl GraphDatabaseService {
         &self,
         room_id: Vec<u8>,
         date: i64,
-    ) -> Result<HashSet<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+    ) -> Result<HashSet<NodeIdentifier>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
                 let room_node = Node::get_daily_nodes_for_room(&room_id, date, conn);
@@ -303,10 +304,11 @@ impl GraphDatabaseService {
     ///
     pub async fn filter_existing_node(
         &self,
-        mut node_ids: HashSet<Vec<u8>>,
+        mut node_ids: HashSet<NodeIdentifier>,
         date: i64,
-    ) -> Result<HashSet<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+    ) -> Result<HashSet<NodeIdentifier>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
                 match Node::retain_missing_id(&mut node_ids, date, conn).map_err(Error::from) {
@@ -325,7 +327,7 @@ impl GraphDatabaseService {
     ///
     /// get full node definition
     ///
-    pub async fn get_full_nodes(&self, node_ids: HashSet<Vec<u8>>) -> Result<Vec<FullNode>> {
+    pub async fn get_full_nodes(&self, node_ids: HashSet<NodeIdentifier>) -> Result<Vec<FullNode>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
