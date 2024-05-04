@@ -1,5 +1,5 @@
 /target
 /Cargo.lock
-/test
+/test_data
 /justfile
 /todo.txt

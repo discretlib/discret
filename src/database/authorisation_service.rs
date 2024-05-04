@@ -950,6 +950,9 @@ impl RoomAuthorisations {
         }
 
         for edge in &node.edges {
+            if edge.verify().is_err() {
+                return false;
+            }
             let required_right = match &node.old_verifying_key {
                 Some(old_key) => match old_key.eq(&edge.verifying_key) {
                     true => RightType::MutateSelf,

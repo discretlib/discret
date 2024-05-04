@@ -588,7 +588,7 @@ mod tests {
 
     use super::*;
 
-    const DATA_PATH: &str = "test/data/database/mutation_query";
+    const DATA_PATH: &str = "test_data/database/mutation_query";
     fn init_database_path(file: &str) -> Result<PathBuf> {
         let mut path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path)?;

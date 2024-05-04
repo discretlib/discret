@@ -963,7 +963,7 @@ mod tests {
         },
         date_utils::now,
     };
-    const DATA_PATH: &str = "test/data/database/authorisation_synch_test/";
+    const DATA_PATH: &str = "test_data/database/authorisation_synch_test/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();

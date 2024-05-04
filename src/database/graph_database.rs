@@ -31,6 +31,7 @@ enum Message {
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
     RoomAdd(RoomNode, Sender<Result<()>>),
+    FullNodeAdd(Vec<FullNode>, mpsc::Sender<Result<Vec<Vec<u8>>>>),
     SubscribeForEvents(Sender<Receiver<EventMessage>>),
     ComputeDailyLog(),
 }
@@ -101,6 +102,10 @@ impl GraphDatabaseService {
 
                     Message::RoomAdd(room_node, reply) => {
                         service.add_room(room_node, reply).await;
+                    }
+
+                    Message::FullNodeAdd(nodes, reply) => {
+                        service.add_full_nodes(nodes, reply).await;
                     }
 
                     Message::UpdateModel(value, reply) => {
@@ -271,6 +276,15 @@ impl GraphDatabaseService {
         let msg = Message::RoomAdd(room, send_response);
         let _ = self.sender.send(msg).await;
         receive_response.await?
+    }
+
+    pub async fn add_full_node(
+        &self,
+        nodes: Vec<FullNode>,
+        reply: mpsc::Sender<Result<Vec<Vec<u8>>>>,
+    ) {
+        let msg = Message::FullNodeAdd(nodes, reply);
+        let _ = self.sender.send(msg).await;
     }
 }
 
@@ -648,7 +662,7 @@ fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<Pat
 #[cfg(test)]
 mod tests {
 
-    const DATA_PATH: &str = "test/data/database/graph_database/";
+    const DATA_PATH: &str = "test_data/database/graph_database/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();

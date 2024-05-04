@@ -733,7 +733,7 @@ mod tests {
         json_object('name', name, 'surname', surname)
     FROM person";
 
-    const DATA_PATH: &str = "test/data/database/graph_service";
+    const DATA_PATH: &str = "test_data/database/sqlite_database";
     fn init_database_path(file: &str) -> Result<PathBuf, Error> {
         let mut path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path)?;

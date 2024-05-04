@@ -207,7 +207,7 @@ mod tests {
         date_utils::{date, now},
     };
 
-    const DATA_PATH: &str = "test/data/database/daily_log/";
+    const DATA_PATH: &str = "test_data/database/daily_log/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();

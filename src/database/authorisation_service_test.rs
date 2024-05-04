@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(0, room_list.len());
     }
 
-    const DATA_PATH: &str = "test/data/database/authorisation_service_test/";
+    const DATA_PATH: &str = "test_data/database/authorisation_service_test/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();

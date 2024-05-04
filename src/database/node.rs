@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     cryptography::{base64_encode, import_verifying_key, new_id, SigningKey},
-    date_utils::now,
+    date_utils::{date, date_next_day, now},
 };
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -490,9 +490,9 @@ impl Node {
     // retrieve all node id for a room at a specific date
     // used for synchonisation
     //
-    pub fn get_ids_for_room_at(
+    pub fn get_ids_for_room_and_day(
         room_id: &Vec<u8>,
-        date: i64,
+        day: i64,
         conn: &Connection,
     ) -> Result<HashSet<Vec<u8>>> {
         let mut id_set = HashSet::new();
@@ -500,13 +500,13 @@ impl Node {
         let query = format!(
             "SELECT id FROM _node 
             WHERE room_id=? AND
-            mdate=? AND  
+            mdate >= ? AND mdate < ? AND 
             substr(_entity,1,1) != '{}'",
             ARCHIVED_CHAR
         );
         let mut stmt = conn.prepare_cached(&query)?;
 
-        let mut rows = stmt.query((room_id, date))?;
+        let mut rows = stmt.query((room_id, date(day), date_next_day(day)))?;
 
         while let Some(row) = rows.next()? {
             id_set.insert(row.get(0)?);
@@ -534,7 +534,7 @@ impl Node {
         }
         //if a node exists with a more recent date, the id is filtered (we do not want to insert older data)
         let query = format!(
-            "SELECT id FROM _node WHERE  mdate >= {} AND id in ({}) AND substr(_entity,1,1) != '{}'",
+            "SELECT id FROM _node WHERE mdate >= {} AND id in ({}) AND substr(_entity,1,1) != '{}'",
             date, q, ARCHIVED_CHAR
         );
 
@@ -979,15 +979,15 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let mut ids = Node::get_ids_for_room_at(&room_id1.to_vec(), date, &conn).unwrap();
+        let mut ids = Node::get_ids_for_room_and_day(&room_id1.to_vec(), date, &conn).unwrap();
         assert_eq!(3, ids.len());
 
-        let date2 = 3000;
+        let date2 = now();
         node3.mdate = date2;
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let ids_2 = Node::get_ids_for_room_at(&room_id1.to_vec(), date, &conn).unwrap();
+        let ids_2 = Node::get_ids_for_room_and_day(&room_id1.to_vec(), date, &conn).unwrap();
         assert_eq!(2, ids_2.len());
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
