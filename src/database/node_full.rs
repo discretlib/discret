@@ -34,7 +34,7 @@ pub struct FullNode {
     pub node_fts_str: Option<String>,
 }
 impl FullNode {
-    pub fn get(node_ids: HashSet<Vec<u8>>, conn: &Connection) -> Result<Vec<FullNode>> {
+    pub fn get_nodes(node_ids: HashSet<Vec<u8>>, conn: &Connection) -> Result<Vec<FullNode>> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
         while let Some(_) = it.next() {
@@ -125,10 +125,11 @@ impl FullNode {
             for f in &entity.fields {
                 let name = f.0;
                 let field = f.1;
+                let short_name = &field.short_name;
                 if !field.is_system {
                     match field.field_type {
                         FieldType::Boolean => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     if value.as_bool().is_none() {
                                         return Err(Error::InvalidJsonFieldValue(
@@ -145,7 +146,7 @@ impl FullNode {
                             };
                         }
                         FieldType::Float => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     if value.as_f64().is_none() {
                                         return Err(Error::InvalidJsonFieldValue(
@@ -162,7 +163,7 @@ impl FullNode {
                             };
                         }
                         FieldType::Base64 => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     match value.as_str() {
                                         Some(str) => base64_decode(str.as_bytes())?,
@@ -182,7 +183,7 @@ impl FullNode {
                             };
                         }
                         FieldType::Integer => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     if value.as_i64().is_none() {
                                         return Err(Error::InvalidJsonFieldValue(
@@ -199,7 +200,7 @@ impl FullNode {
                             };
                         }
                         FieldType::String => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     if value.as_str().is_none() {
                                         return Err(Error::InvalidJsonFieldValue(
@@ -216,7 +217,7 @@ impl FullNode {
                             };
                         }
                         FieldType::Json => {
-                            match json.get(name) {
+                            match json.get(short_name) {
                                 Some(value) => {
                                     if !value.is_object() && !value.is_array() {
                                         return Err(Error::InvalidJsonFieldValue(
@@ -293,7 +294,6 @@ impl FullNode {
             };
         }
         let result: Vec<FullNode> = node_map.into_iter().map(|entry| entry.1).collect();
-
         Ok(result)
     }
 }
@@ -302,6 +302,11 @@ impl Writeable for FullNode {
     fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         self.node
             .write(conn, self.index, &self.old_fts_str, &self.node_fts_str)?;
+
+        for edge in &self.edges {
+            edge.write(conn)?;
+        }
+
         Ok(())
     }
 }
@@ -314,6 +319,7 @@ mod tests {
     use crate::{
         cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
+            authorisation_sync::RoomNode,
             configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
@@ -350,7 +356,7 @@ mod tests {
 
         let mut node_ids = HashSet::new();
         node_ids.insert(raw_node.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
+        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
 
@@ -379,7 +385,7 @@ mod tests {
 
         let mut node_ids = HashSet::new();
         node_ids.insert(node_with_one_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
+        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_one_edge.id, full.node.id);
@@ -423,7 +429,7 @@ mod tests {
 
         let mut node_ids = HashSet::new();
         node_ids.insert(node_with_two_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
+        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_two_edge.id, full.node.id);
@@ -433,7 +439,7 @@ mod tests {
         node_ids.insert(raw_node.id.clone());
         node_ids.insert(node_with_one_edge.id.clone());
         node_ids.insert(node_with_two_edge.id.clone());
-        let nodes = FullNode::get(node_ids, &conn).unwrap();
+        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
         assert_eq!(3, nodes.len());
     }
 
@@ -520,30 +526,35 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
-            "authorisation app",
-            data_model,
-            &secret,
-            path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
+        let first_app =
+            GraphDatabaseService::start("app", data_model, &secret, path, Configuration::default())
+                .await
+                .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let first_user_id = base64_encode(first_app.verifying_key());
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let second_app =
+            GraphDatabaseService::start("app", data_model, &secret, path, Configuration::default())
+                .await
+                .unwrap();
+
+        let second_user_id = base64_encode(second_app.verifying_key());
 
         let mut param = Parameters::default();
-        param.add("user_id", user_id.clone()).unwrap();
+        param.add("first_user_id", first_user_id.clone()).unwrap();
+        param.add("second_user_id", second_user_id.clone()).unwrap();
 
-        let room = app
+        let room = first_app
             .mutate(
                 r#"mutation mut {
                     _Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verifying_key:$first_user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verifying_key:$first_user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -554,7 +565,9 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verifying_key:$first_user_id
+                            },{
+                                verifying_key:$second_user_id
                             }]
                         }]
                     }
@@ -566,15 +579,15 @@ mod tests {
             .unwrap();
 
         let room_insert = &room.mutate_entities[0];
-        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+        let room_id = &room_insert.node_to_mutate.id;
+        let room_id_b64 = base64_encode(&room_id);
 
         let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-
-        let mutat = app
+        param.add("room_id", room_id_b64.clone()).unwrap();
+        let mutat = first_app
             .mutate(
                 r#"mutation mut {
-                Person{
+                P1: Person{
                     room_id: $room_id
                     name: "me"
                     parents:[{name:"father"},{name:"mother"}]
@@ -587,16 +600,63 @@ mod tests {
 
         let ent = &mutat.mutate_entities[0];
         assert_eq!("P1", ent.name);
-        let id1 = base64_encode(&ent.node_to_mutate.id);
-        let parents = ent.sub_nodes.get("parents").unwrap();
+        let _id1 = base64_encode(&ent.node_to_mutate.id);
 
-        let father_id = base64_encode(&parents[0].node_to_mutate.id);
+        let node = first_app
+            .get_room_node(room_id.clone())
+            .await
+            .unwrap()
+            .unwrap();
 
-        let ent = &mutat.mutate_entities[1];
-        assert_eq!("P2", ent.name);
-        let id2 = base64_encode(&ent.node_to_mutate.id);
+        //room sent over network
+        let ser = bincode::serialize(&node).unwrap();
+        let node: RoomNode = bincode::deserialize(&ser).unwrap();
+        second_app.add_room_node(node.clone()).await.unwrap();
 
-        let mut param = Parameters::default();
-        param.add("id", id2.clone()).unwrap();
+        let node_ids = first_app
+            .get_daily_id_for_room(room_id.clone(), now())
+            .await
+            .unwrap();
+        assert_eq!(3, node_ids.len());
+
+        //node_ids sent over network
+        let ser = bincode::serialize(&node_ids).unwrap();
+        let node_ids: HashSet<Vec<u8>> = bincode::deserialize(&ser).unwrap();
+
+        let filtered_nodes = second_app
+            .filter_existing_node(node_ids, now())
+            .await
+            .unwrap();
+        assert_eq!(3, filtered_nodes.len());
+
+        //filtered_nodes sent over network
+        let ser = bincode::serialize(&filtered_nodes).unwrap();
+        let filtered_nodes: HashSet<Vec<u8>> = bincode::deserialize(&ser).unwrap();
+
+        let full_nodes: Vec<FullNode> = first_app.get_full_nodes(filtered_nodes).await.unwrap();
+        assert_eq!(3, full_nodes.len());
+
+        //full_nodes sent over network
+        let ser = bincode::serialize(&full_nodes).unwrap();
+        let full_nodes: Vec<FullNode> = bincode::deserialize(&ser).unwrap();
+
+        let v = second_app.add_full_node(full_nodes).await.unwrap();
+        assert_eq!(0, v.len());
+
+        let result = second_app
+            .query(
+                "query q{
+            Person{
+                name
+                parents(order_by(name desc)){name}
+            }
+        }",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // println!("{:?}", result);
+        assert_eq!(result, "{\n\"Person\":[{\"name\":\"me\",\"parents\":[{\"name\":\"mother\"},{\"name\":\"father\"}]}]\n}");
     }
 }

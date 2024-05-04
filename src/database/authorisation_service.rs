@@ -31,11 +31,7 @@ pub enum AuthorisationMessage {
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomForUser(Vec<u8>, i64, Sender<Vec<Vec<u8>>>),
-    AddFullNode(
-        Vec<FullNode>,
-        Vec<Vec<u8>>,
-        mpsc::Sender<Result<Vec<Vec<u8>>>>,
-    ),
+    AddFullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -228,7 +224,6 @@ impl AuthorisationService {
                         false => invalid_node.push(node.node.id),
                     }
                 }
-
                 let query = WriteMessage::FullNode(write_nodes, invalid_node, reply);
 
                 let _ = database_writer.send(query).await;

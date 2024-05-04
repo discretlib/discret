@@ -1,9 +1,11 @@
 use lru::LruCache;
 use rusqlite::{OptionalExtension, ToSql};
+use std::collections::HashSet;
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::node::Node;
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     authorisation_sync::RoomNode,
@@ -31,7 +33,7 @@ enum Message {
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
     RoomAdd(RoomNode, Sender<Result<()>>),
-    FullNodeAdd(Vec<FullNode>, mpsc::Sender<Result<Vec<Vec<u8>>>>),
+    FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
     SubscribeForEvents(Sender<Receiver<EventMessage>>),
     ComputeDailyLog(),
 }
@@ -278,13 +280,71 @@ impl GraphDatabaseService {
         receive_response.await?
     }
 
-    pub async fn add_full_node(
+    ///
+    /// get all node id for a room at a specific day
+    ///
+    pub async fn get_daily_id_for_room(
         &self,
-        nodes: Vec<FullNode>,
-        reply: mpsc::Sender<Result<Vec<Vec<u8>>>>,
-    ) {
-        let msg = Message::FullNodeAdd(nodes, reply);
+        room_id: Vec<u8>,
+        date: i64,
+    ) -> Result<HashSet<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_node = Node::get_daily_nodes_for_room(&room_id, date, conn);
+                let _ = send_response.send(room_node);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// filter the nodes ids that exists at this specific date
+    ///
+    pub async fn filter_existing_node(
+        &self,
+        mut node_ids: HashSet<Vec<u8>>,
+        date: i64,
+    ) -> Result<HashSet<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                match Node::retain_missing_id(&mut node_ids, date, conn).map_err(Error::from) {
+                    Ok(_) => {
+                        let _ = send_response.send(Ok(node_ids));
+                    }
+                    Err(e) => {
+                        let _ = send_response.send(Err(e));
+                    }
+                }
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get full node definition
+    ///
+    pub async fn get_full_nodes(&self, node_ids: HashSet<Vec<u8>>) -> Result<Vec<FullNode>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_node = FullNode::get_nodes(node_ids, conn);
+                let _ = send_response.send(room_node);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// insert the full node list
+    /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
+    ///
+    pub async fn add_full_node(&self, nodes: Vec<FullNode>) -> Result<Vec<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
+        let msg = Message::FullNodeAdd(nodes, send_response);
         let _ = self.sender.send(msg).await;
+        receive_response.await?
     }
 }
 
@@ -590,11 +650,7 @@ impl GraphDatabase {
             .await;
     }
 
-    pub async fn add_full_nodes(
-        &self,
-        nodes: Vec<FullNode>,
-        reply: mpsc::Sender<Result<Vec<Vec<u8>>>>,
-    ) {
+    pub async fn add_full_nodes(&self, nodes: Vec<FullNode>, reply: Sender<Result<Vec<Vec<u8>>>>) {
         let mut invalid_nodes = Vec::new();
         let mut valid_nodes = Vec::new();
 
@@ -606,19 +662,22 @@ impl GraphDatabase {
                         Ok(ent) => {
                             match node.entity_validation(ent) {
                                 Ok(_) => valid_nodes.push(node),
-                                Err(_) => {
+                                Err(_e) => {
+                                    // println!("{}", e);
                                     //silent error. will just indicate peer that some node is erroneous
                                     invalid_nodes.push(node.node.id)
                                 }
                             }
                         }
-                        Err(_) => {
+                        Err(_e) => {
+                            //println!("{}", e);
                             //silent error. will just indicate peer that some node is erroneous
                             invalid_nodes.push(node.node.id);
                         }
                     }
                 }
                 None => {
+                    // println!("missing entity");
                     //silent error. will just indicate peer that some node is erroneous
                     invalid_nodes.push(node.node.id);
                 }
@@ -638,7 +697,7 @@ impl GraphDatabase {
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(e) => {
-                        let _ = reply.blocking_send(Err(e));
+                        let _ = reply.send(Err(e));
                     }
                 }
             }))

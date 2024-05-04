@@ -24,30 +24,6 @@ use super::{
 pub type RowMappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
 pub type QueryFn = Box<dyn FnOnce(&Connection) + Send + 'static>;
 
-pub type WriteStmt = Box<dyn Writeable + Send>;
-pub type WriteReplyFn = Box<dyn FnOnce(Result<WriteStmt>) + Send + 'static>;
-
-/// Trait use to write content in the database
-///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
-///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
-pub trait Writeable {
-    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error>;
-}
-
-pub enum WriteMessage {
-    Deletion(DeletionQuery, Sender<Result<DeletionQuery>>),
-    Mutation(MutationQuery, Sender<Result<MutationQuery>>),
-    RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
-    RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
-    FullNode(
-        Vec<FullNode>,
-        Vec<Vec<u8>>,
-        mpsc::Sender<Result<Vec<Vec<u8>>>>,
-    ),
-    Write(WriteStmt, Sender<Result<WriteStmt>>),
-    ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
-}
-
 //Create a sqlcipher database connection
 //
 //path: database file path
@@ -338,12 +314,24 @@ impl DatabaseReader {
     }
 }
 
-struct Optimize {}
-impl Writeable for Optimize {
-    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        conn.execute("PRAGMA OPTIMIZE", [])?;
-        Ok(())
-    }
+pub type WriteStmt = Box<dyn Writeable + Send>;
+pub type WriteReplyFn = Box<dyn FnOnce(Result<WriteStmt>) + Send + 'static>;
+
+/// Trait use to write content in the database
+///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process
+///   writes happens in batched transaction, and we want to avoid any errors that would results in the rollback of a potentially large number of inserts
+pub trait Writeable {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error>;
+}
+
+pub enum WriteMessage {
+    Deletion(DeletionQuery, Sender<Result<DeletionQuery>>),
+    Mutation(MutationQuery, Sender<Result<MutationQuery>>),
+    RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    FullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    Write(WriteStmt, Sender<Result<WriteStmt>>),
+    ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
 }
 
 /// Main entry point to insert data in the database
@@ -481,7 +469,7 @@ impl BufferedDatabaseWriter {
                                     ));
                                 }
                                 WriteMessage::FullNode(_, invalid_nodes, r) => {
-                                    let _ = r.blocking_send(Ok(invalid_nodes));
+                                    let _ = r.send(Ok(invalid_nodes));
                                 }
                             }
                         }
@@ -517,8 +505,7 @@ impl BufferedDatabaseWriter {
                                     ));
                                 }
                                 WriteMessage::FullNode(_, _, r) => {
-                                    let _ =
-                                        r.blocking_send(Err(Error::DatabaseWrite(e.to_string())));
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                             }
                         }
@@ -633,6 +620,14 @@ impl BufferedDatabaseWriter {
     }
 }
 
+struct Optimize {}
+impl Writeable for Optimize {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        conn.execute("PRAGMA OPTIMIZE", [])?;
+        Ok(())
+    }
+}
+
 ///
 /// Maximum allowed size for a row
 /// set to a relatively low value to avoid large rows that would eats lots of ram and bandwith during synchronisation
@@ -704,7 +699,6 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::cryptography::hash;
     use crate::database::Error;

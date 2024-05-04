@@ -490,7 +490,7 @@ impl Node {
     // retrieve all node id for a room at a specific date
     // used for synchonisation
     //
-    pub fn get_ids_for_room_and_day(
+    pub fn get_daily_nodes_for_room(
         room_id: &Vec<u8>,
         day: i64,
         conn: &Connection,
@@ -979,7 +979,7 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let mut ids = Node::get_ids_for_room_and_day(&room_id1.to_vec(), date, &conn).unwrap();
+        let mut ids = Node::get_daily_nodes_for_room(&room_id1.to_vec(), date, &conn).unwrap();
         assert_eq!(3, ids.len());
 
         let date2 = now();
@@ -987,7 +987,7 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let ids_2 = Node::get_ids_for_room_and_day(&room_id1.to_vec(), date, &conn).unwrap();
+        let ids_2 = Node::get_daily_nodes_for_room(&room_id1.to_vec(), date, &conn).unwrap();
         assert_eq!(2, ids_2.len());
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
