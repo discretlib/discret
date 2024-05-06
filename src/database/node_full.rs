@@ -331,6 +331,7 @@ mod tests {
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::now,
+        event_service::EventService,
     };
 
     use super::*;
@@ -556,19 +557,31 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let first_app =
-            GraphDatabaseService::start("app", data_model, &secret, path, Configuration::default())
-                .await
-                .unwrap();
+        let first_app = GraphDatabaseService::start(
+            "app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
 
         let first_user_id = base64_encode(first_app.verifying_key());
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let second_app =
-            GraphDatabaseService::start("app", data_model, &secret, path, Configuration::default())
-                .await
-                .unwrap();
+        let second_app = GraphDatabaseService::start(
+            "app",
+            data_model,
+            &secret,
+            path,
+            Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
 
         let second_user_id = base64_encode(second_app.verifying_key());
 

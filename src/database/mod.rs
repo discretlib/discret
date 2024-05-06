@@ -5,7 +5,6 @@ pub mod configuration;
 pub mod daily_log;
 pub mod deletion;
 pub mod edge;
-pub mod event_service;
 pub mod graph_database;
 pub mod mutation_query;
 pub mod node;

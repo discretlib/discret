@@ -13,6 +13,7 @@ mod tests {
             node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
+        event_service::EventService,
     };
 
     #[test]
@@ -276,6 +277,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -370,6 +372,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -565,6 +568,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -642,6 +646,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -776,6 +781,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -999,6 +1005,7 @@ mod tests {
                 &secret,
                 path.clone(),
                 Configuration::default(),
+                EventService::new(),
             )
             .await
             .unwrap();
@@ -1083,6 +1090,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1168,6 +1176,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1392,6 +1401,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();

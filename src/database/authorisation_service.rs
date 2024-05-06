@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use tokio::sync::{mpsc, oneshot::Sender};
 
@@ -30,7 +33,7 @@ pub enum AuthorisationMessage {
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
-    RoomForUser(Vec<u8>, i64, Sender<Vec<Vec<u8>>>),
+    RoomForUser(Vec<u8>, i64, Sender<HashSet<Vec<u8>>>),
     AddFullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
 }
 
@@ -769,11 +772,11 @@ impl RoomAuthorisations {
         Ok(())
     }
 
-    pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> Vec<Vec<u8>> {
-        let mut result = Vec::new();
+    pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Vec<u8>> {
+        let mut result = HashSet::new();
         for room in &self.rooms {
             if room.1.is_user_valid_at(&verifying_key, date) {
-                result.push(room.0.clone());
+                result.insert(room.0.clone());
             }
         }
         result

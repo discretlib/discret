@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
 use crate::date_utils::{date, date_next_day};
 
@@ -192,6 +193,37 @@ impl DailyLog {
         }))
     };
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct RoomLog {
+    pub date: i64,
+    pub entry_number: u32,
+    pub daily_hash: Vec<u8>,
+}
+impl RoomLog {
+    pub const LOG_QUERY: &'static str = "
+        SELECT date, entry_number,  daily_hash
+        FROM _daily_log 
+        WHERE room_id = ? 
+        AND daily_hash IS NOT NULL
+        ORDER BY date ASC
+    ";
+
+    pub fn get(room_id: &Vec<u8>, conn: &Connection) -> Result<Vec<RoomLog>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(Self::LOG_QUERY)?;
+        let mut rows = stmt.query([room_id])?;
+        let mut res = Vec::new();
+        while let Some(row) = rows.next()? {
+            res.push(RoomLog {
+                date: row.get(0)?,
+                entry_number: row.get(1)?,
+                daily_hash: row.get(2)?,
+            });
+        }
+        Ok(res)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -205,6 +237,7 @@ mod tests {
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::{date, now},
+        event_service::EventService,
     };
 
     const DATA_PATH: &str = "test_data/database/daily_log/";
@@ -226,21 +259,23 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn daily_log() {
         init_database_path();
-
         let data_model = "Person{ name:String, parents:[Person] nullable }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
+        let event_service = EventService::new();
+        let mut events = event_service.subcribe_for_events().await;
+
         let app = GraphDatabaseService::start(
             "delete app",
             &data_model,
             &secret,
             path,
             Configuration::default(),
+            event_service,
         )
         .await
         .unwrap();
-        let mut events = app.subcribe_for_events().await.unwrap();
 
         let user_id = base64_encode(app.verifying_key());
 
@@ -277,12 +312,15 @@ mod tests {
             .unwrap();
 
         //receive daily_log event
-        let e = events.recv().await.unwrap();
-        match e {
-            crate::database::event_service::EventMessage::ComputedDailyLog(log) => {
-                let s = log.unwrap();
-                //the room as no parent room and is not synchronized
-                assert_eq!(0, s.room_dates.len());
+        while let Ok(e) = events.recv().await {
+            match e {
+                crate::event_service::EventMessage::ComputedDailyLog(log) => {
+                    let s = log.unwrap();
+                    assert_eq!(0, s.room_dates.len());
+
+                    break;
+                }
+                _ => {}
             }
         }
 
@@ -307,22 +345,25 @@ mod tests {
             .unwrap();
 
         //receive daily_log event
-        let e = events.recv().await.unwrap();
-        match e {
-            crate::database::event_service::EventMessage::ComputedDailyLog(log) => {
-                let log = log.unwrap();
-                let dates = log.room_dates.get(bin_room_id).unwrap();
-                assert_eq!(1, dates.len());
-                let daily_log = dates.into_iter().next().unwrap();
-                assert_eq!(date(mutate_date), daily_log.date);
-                assert!(!daily_log.need_recompute);
-                assert_eq!(6, daily_log.entry_number);
-                assert!(daily_log.daily_hash.is_some());
+        while let Ok(e) = events.recv().await {
+            match e {
+                crate::event_service::EventMessage::ComputedDailyLog(log) => {
+                    let log = log.unwrap();
+                    let dates = log.room_dates.get(bin_room_id).unwrap();
+                    assert_eq!(1, dates.len());
+                    let daily_log = dates.into_iter().next().unwrap();
+                    assert_eq!(date(mutate_date), daily_log.date);
+                    assert!(!daily_log.need_recompute);
+                    assert_eq!(6, daily_log.entry_number);
+                    assert!(daily_log.daily_hash.is_some());
+                    break;
+                }
+                _ => {}
             }
         }
 
         let daily_edge_log = "
-            SELECT 
+            SELECT
                 room_id,
                 date,
                 entry_number,
@@ -341,5 +382,11 @@ mod tests {
             assert_eq!(6, nd.entry_number); //each person has
             assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room_id);
         }
+
+        let room_log = app.get_room_log(bin_room_id.clone()).await.unwrap();
+        assert_eq!(1, room_log.len());
+        let rlog = &room_log[0];
+        assert_eq!(date(now()), rlog.date);
+        assert_eq!(6, rlog.entry_number);
     }
 }

@@ -3,6 +3,7 @@
 mod cryptography;
 mod database;
 mod date_utils;
+mod event_service;
 mod message;
 mod network;
 mod synchronisation;
@@ -22,6 +23,9 @@ pub enum Error {
 
     #[error(transparent)]
     DatabaseError(#[from] crate::database::Error),
+
+    #[error("{0}")]
+    DatabaseWrite(String),
 
     #[error(transparent)]
     ParsingError(#[from] crate::database::query_language::Error),

@@ -2,9 +2,9 @@ use lru::LruCache;
 use rusqlite::{OptionalExtension, ToSql};
 use std::collections::HashSet;
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::daily_log::RoomLog;
 use super::node::{Node, NodeIdentifier};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
@@ -12,7 +12,6 @@ use super::{
     configuration::{Configuration, SYSTEM_DATA_MODEL},
     daily_log::DailyLogsUpdate,
     deletion::DeletionQuery,
-    event_service::{EventMessage, EventService, EventServiceMessage},
     mutation_query::MutationQuery,
     node_full::FullNode,
     query::{PreparedQueries, Query},
@@ -24,6 +23,8 @@ use super::{
     Error, Result,
 };
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
+use crate::date_utils::now;
+use crate::event_service::EventService;
 
 const LRU_SIZE: usize = 128;
 
@@ -34,7 +35,7 @@ enum Message {
     UpdateModel(String, Sender<Result<String>>),
     RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
-    SubscribeForEvents(Sender<Receiver<EventMessage>>),
+    RoomForUser(Vec<u8>, Sender<HashSet<Vec<u8>>>),
     ComputeDailyLog(),
 }
 ///
@@ -54,10 +55,12 @@ impl GraphDatabaseService {
         key_material: &[u8; 32],
         data_folder: PathBuf,
         config: Configuration,
+        event_service: EventService,
     ) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
-        let mut service = GraphDatabase::open(name, key_material, data_folder, config)?;
+        let mut service =
+            GraphDatabase::open(name, key_material, data_folder, config, event_service)?;
         service.update_data_model(model).await?;
         service.initialise_authorisations().await?;
 
@@ -130,12 +133,13 @@ impl GraphDatabaseService {
                             ))
                             .await;
                     }
-                    Message::SubscribeForEvents(reply) => {
-                        let _ = service
-                            .event_service
-                            .sender
-                            .send(EventServiceMessage::Subscribe(reply))
-                            .await;
+
+                    Message::RoomForUser(verifying_key, reply) => {
+                        let _ = service.auth_service.send(AuthorisationMessage::RoomForUser(
+                            verifying_key,
+                            now(),
+                            reply,
+                        ));
                     }
                 }
             }
@@ -238,22 +242,6 @@ impl GraphDatabaseService {
     }
 
     ///
-    /// Subscribed for events triggered by the database
-    /// events:
-    ///     ComputedDailyLog: when daily log as changed
-    ///
-    pub async fn subcribe_for_events(&self) -> Result<Receiver<EventMessage>> {
-        let (send_response, receive_response) = oneshot::channel::<Receiver<EventMessage>>();
-
-        let _ = self
-            .sender
-            .send(Message::SubscribeForEvents(send_response))
-            .await;
-
-        Ok(receive_response.await?)
-    }
-
-    ///
     /// get a database definition of a room
     /// used for synchronisation
     ///
@@ -348,6 +336,31 @@ impl GraphDatabaseService {
         let _ = self.sender.send(msg).await;
         receive_response.await?
     }
+
+    ///
+    /// get the complete dayly log for a specific room
+    ///
+    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<RoomLog>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_log = RoomLog::get(&room_id, conn).map_err(Error::from);
+                let _ = send_response.send(room_log);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    pub async fn get_room_for_user(&self, verifying_key: Vec<u8>) -> Result<HashSet<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
+        let _ = self
+            .sender
+            .send(Message::RoomForUser(verifying_key, send_response))
+            .await;
+
+        let result = receive_response.await?;
+        Ok(result)
+    }
 }
 
 struct GraphDatabase {
@@ -367,6 +380,7 @@ impl GraphDatabase {
         key_material: &[u8; 32],
         data_folder: PathBuf,
         config: Configuration,
+        event_service: EventService,
     ) -> Result<Self> {
         let database_secret = derive_key(&base64_encode(name.as_bytes()), key_material);
 
@@ -400,7 +414,7 @@ impl GraphDatabase {
         };
 
         let auth_service = AuthorisationService::start(auth, graph_database.writer.clone());
-        let event_service = EventService::new();
+
         let database = Self {
             data_model,
             auth_service,
@@ -757,6 +771,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -802,6 +817,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -859,6 +875,7 @@ mod tests {
                 &secret,
                 path,
                 Configuration::default(),
+                EventService::new(),
             )
             .await
             .unwrap();
@@ -877,6 +894,7 @@ mod tests {
                 &secret,
                 path,
                 Configuration::default(),
+                EventService::new(),
             )
             .await
             .is_err();
@@ -896,6 +914,7 @@ mod tests {
                 &secret,
                 path,
                 Configuration::default(),
+                EventService::new(),
             )
             .await
             .unwrap();

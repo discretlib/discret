@@ -962,6 +962,7 @@ mod tests {
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::now,
+        event_service::EventService,
     };
     const DATA_PATH: &str = "test_data/database/authorisation_synch_test/";
     fn init_database_path() {
@@ -987,6 +988,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1077,6 +1079,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1146,6 +1149,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1286,6 +1290,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1299,6 +1304,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1527,6 +1533,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1540,6 +1547,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1712,6 +1720,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();
@@ -1725,6 +1734,7 @@ mod tests {
             &secret,
             path,
             Configuration::default(),
+            EventService::new(),
         )
         .await
         .unwrap();

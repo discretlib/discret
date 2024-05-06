@@ -6,7 +6,10 @@ use tokio::sync::{
     oneshot::{self, Sender},
 };
 
-use crate::cryptography::{base64_decode, base64_encode};
+use crate::{
+    cryptography::{base64_decode, base64_encode},
+    event_service::EventServiceMessage,
+};
 
 use super::{
     authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
@@ -14,7 +17,6 @@ use super::{
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::Edge,
-    event_service::EventServiceMessage,
     mutation_query::MutationQuery,
     node::Node,
     node_full::FullNode,
@@ -501,7 +503,7 @@ impl BufferedDatabaseWriter {
                                 }
                                 WriteMessage::ComputeDailyLog(_, r) => {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
-                                        Err(Error::DatabaseWrite(e.to_string())),
+                                        Err(crate::Error::DatabaseWrite(e.to_string())),
                                     ));
                                 }
                                 WriteMessage::FullNode(_, _, r) => {
