@@ -344,7 +344,7 @@ impl GraphDatabaseService {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<RoomLog>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
-                let room_log = RoomLog::get(&room_id, conn).map_err(Error::from);
+                let room_log = RoomLog::get_all(&room_id, conn).map_err(Error::from);
                 let _ = send_response.send(room_log);
             }))
             .await?;

@@ -205,6 +205,7 @@ impl MutationQuery {
                                             ..Default::default()
                                         };
                                         query.edge_insertions.push(edge);
+                                        node_updated = true;
                                     }
                                     insert_queries.push(insert_query);
                                 }
@@ -245,6 +246,7 @@ impl MutationQuery {
                                 query
                                     .sub_nodes
                                     .insert(String::from(&field.name), vec![insert_query]);
+                                node_updated = true;
                             }
                             MutationFieldValue::Value(_) => {
                                 //always a null value

@@ -33,8 +33,9 @@ impl DailyMutations {
                     date,
                     entry_number,
                     daily_hash,
+                    history_hash,
                     need_recompute
-                ) values (?,?,0,NULL,1)
+                ) values (?,?, 0, NULL, NULL, 1)
                 ON CONFLICT(room_id, date) 
                 DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
             ",
@@ -53,14 +54,34 @@ pub struct DailyLogsUpdate {
     room_dates: HashMap<Vec<u8>, HashSet<DailyLog>>,
 }
 impl DailyLogsUpdate {
+    ///
+    /// comptute the daily hash and the hash history
+    /// history allow to verify the history by only checking the last log entry.
+    /// it makes mutations a slower when updating an old node but it makes room synchronisation between peers much easier
+    ///
     pub fn compute(&mut self, conn: &Connection) -> Result<(), rusqlite::Error> {
         let mut daily_log_stmt = conn.prepare_cached(
             " 
-            SELECT 
-                room_id,
-                date
-            FROM _daily_log
-            WHERE need_recompute = 1
+            SELECT room_id, date, need_recompute, daily_hash, history_hash
+            FROM _daily_log daily
+            WHERE date >= (
+                IFNULL (
+                    (
+                        SELECT max(date) from _daily_log 
+                        WHERE daily.room_id = room_id
+                        AND date < (
+                            SELECT min(date) from _daily_log 
+                            WHERE daily.room_id = room_id
+                            AND need_recompute = 1
+                        )
+                    ),(		
+                        SELECT min(date) from _daily_log 
+                        WHERE daily.room_id = room_id
+                        AND need_recompute = 1
+                    )
+                )
+            ) 
+            ORDER BY room_id, date
         ",
         )?;
 
@@ -88,25 +109,18 @@ impl DailyLogsUpdate {
                     room_id = ?1 AND
                     mdate >= ?2 AND mdate < ?3 
 
-                -- edges 
-                UNION ALL	
-                SELECT _edge.signature as signature 
-                FROM _edge JOIN _node on _node.id =_edge.src
-                WHERE	
-                    _node.room_id = ?1 AND
-                    _edge.cdate >= ?2 AND _edge.cdate < ?3
-
                 --applies to the whole union
                 ORDER by signature
         ";
         let mut compute_stmt = conn.prepare_cached(compute_sql)?;
 
-        let mut update_stmt = conn.prepare_cached(
+        let mut update_computed_stmt = conn.prepare_cached(
             "
             UPDATE _daily_log 
             SET 
                 entry_number = ?, 
                 daily_hash = ?, 
+                history_hash = ?,
                 need_recompute = 0
             WHERE
                 room_id = ? AND
@@ -114,37 +128,106 @@ impl DailyLogsUpdate {
             ",
         )?;
 
+        let mut update_history_stmt = conn.prepare_cached(
+            "
+            UPDATE _daily_log 
+            SET 
+                history_hash = ?
+            WHERE
+                room_id = ? AND
+                date = ?
+            ",
+        )?;
+
         let mut rows = daily_log_stmt.query([])?;
+
+        let mut previous_room: Vec<u8> = Vec::new();
+        let mut previous_hash: Option<Vec<u8>> = None;
+        let mut previous_history: Option<Vec<u8>> = None;
+
         while let Some(row) = rows.next()? {
             let room: Vec<u8> = row.get(0)?;
             let date: i64 = row.get(1)?;
-
-            let mut comp_rows = compute_stmt.query((&room, date, date_next_day(date)))?;
-
-            let mut entry_number: u32 = 0;
-            let mut hasher = blake3::Hasher::new();
-
-            while let Some(comp) = comp_rows.next()? {
-                let signature: Vec<u8> = comp.get(0)?;
-                hasher.update(&signature);
-                entry_number += 1;
-            }
-
-            let daily_hash = if hasher.count() == 0 {
-                None
+            let need_recompute: bool = row.get(2)?;
+            let daily_hash: Option<Vec<u8>> = row.get(3)?;
+            let history_hash: Option<Vec<u8>> = row.get(4)?;
+            if !need_recompute {
+                if previous_room.eq(&room) {
+                    if let Some(previous) = &previous_history {
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(previous);
+                        if let Some(daily) = &previous_hash {
+                            hasher.update(&daily);
+                        }
+                        let hash = hasher.finalize().as_bytes().to_vec();
+                        // update
+                        update_history_stmt.execute((&hash, &room, date))?;
+                        previous_history = Some(hash);
+                    } else {
+                        previous_history = history_hash;
+                    }
+                    previous_hash = daily_hash;
+                } else {
+                    previous_hash = None;
+                    previous_history = None;
+                }
+                previous_room = room;
             } else {
-                let hash = hasher.finalize();
-                Some(hash.as_bytes().to_vec())
-            };
+                let mut comp_rows = compute_stmt.query((&room, date, date_next_day(date)))?;
 
-            update_stmt.execute((entry_number, &daily_hash, &room, date))?;
-            self.add_log(DailyLog {
-                room_id: room,
-                date,
-                entry_number,
-                daily_hash,
-                need_recompute: false,
-            });
+                let mut entry_number: u32 = 0;
+                let mut hasher = blake3::Hasher::new();
+
+                while let Some(comp) = comp_rows.next()? {
+                    let signature: Vec<u8> = comp.get(0)?;
+                    hasher.update(&signature);
+                    entry_number += 1;
+                }
+
+                let daily_hash = if hasher.count() == 0 {
+                    None
+                } else {
+                    let hash = hasher.finalize();
+                    Some(hash.as_bytes().to_vec())
+                };
+
+                let history_hash = if previous_room.eq(&room) {
+                    if let Some(previous) = &previous_history {
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(&previous);
+                        if let Some(daily) = &previous_hash {
+                            hasher.update(&daily);
+                        }
+                        let hash = hasher.finalize().as_bytes().to_vec();
+                        Some(hash)
+                    } else {
+                        None
+                    }
+                } else {
+                    //this is the first room date
+                    daily_hash.clone()
+                };
+
+                update_computed_stmt.execute((
+                    entry_number,
+                    &daily_hash,
+                    &history_hash,
+                    &room,
+                    date,
+                ))?;
+
+                self.add_log(DailyLog {
+                    room_id: room.clone(),
+                    date,
+                    entry_number,
+                    daily_hash: daily_hash.clone(),
+                    history_hash: history_hash.clone(),
+                    need_recompute: false,
+                });
+                previous_hash = daily_hash;
+                previous_history = history_hash;
+                previous_room = room;
+            }
         }
         Ok(())
     }
@@ -161,6 +244,7 @@ pub struct DailyLog {
     pub date: i64,
     pub entry_number: u32,
     pub daily_hash: Option<Vec<u8>>,
+    pub history_hash: Option<Vec<u8>>,
     pub need_recompute: bool,
 }
 impl DailyLog {
@@ -171,13 +255,14 @@ impl DailyLog {
             date INTEGER NOT NULL,
             entry_number INTEGER NOT NULL DEFAULT 0,
             daily_hash BLOB,
+            history_hash BLOB,
             need_recompute INTEGER, 
             PRIMARY KEY (room_id, date)
         ) WITHOUT ROWID, STRICT",
             [],
         )?;
         conn.execute(
-            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (need_recompute, room_id, date)",
+            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (room_id, need_recompute,  date)",
             [],
         )?;
         Ok(())
@@ -189,7 +274,8 @@ impl DailyLog {
             date: row.get(1)?,
             entry_number: row.get(2)?,
             daily_hash: row.get(3)?,
-            need_recompute: row.get(4)?,
+            history_hash: row.get(4)?,
+            need_recompute: row.get(5)?,
         }))
     };
 }
@@ -205,11 +291,10 @@ impl RoomLog {
         SELECT date, entry_number,  daily_hash
         FROM _daily_log 
         WHERE room_id = ? 
-        AND daily_hash IS NOT NULL
         ORDER BY date ASC
     ";
 
-    pub fn get(room_id: &Vec<u8>, conn: &Connection) -> Result<Vec<RoomLog>, rusqlite::Error> {
+    pub fn get_all(room_id: &Vec<u8>, conn: &Connection) -> Result<Vec<RoomLog>, rusqlite::Error> {
         let mut stmt = conn.prepare_cached(Self::LOG_QUERY)?;
         let mut rows = stmt.query([room_id])?;
         let mut res = Vec::new();

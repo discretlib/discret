@@ -82,12 +82,15 @@ impl Node {
         //node primary key
         //mdate is part to allow for archiving nodes
         conn.execute(
-            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (_entity, mdate, id)",
+            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (id, _entity, mdate)",
             [],
         )?;
 
         //used during daily node log update
-        conn.execute("CREATE INDEX _node_id_mdate_idx ON _node (id, mdate)", [])?;
+        conn.execute(
+            "CREATE INDEX _node_room_id_mdate_idx ON _node (room_id, mdate)",
+            [],
+        )?;
 
         //the full text search virtual table
         conn.execute(

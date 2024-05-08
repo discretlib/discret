@@ -14,7 +14,7 @@ use crate::{
 use super::{
     authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
     configuration,
-    daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
+    daily_log::{DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::Edge,
     mutation_query::MutationQuery,
