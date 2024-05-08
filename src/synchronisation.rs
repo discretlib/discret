@@ -7,38 +7,54 @@
 //synchroniser les shemas un a un qui ont un droit read
 //updater le daily log
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    os::unix::process,
+    time::Duration,
+};
 
-use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::timeout,
+};
 
-use crate::database::{daily_log::RoomLog, graph_database::GraphDatabaseService};
+use crate::{
+    database::{daily_log::RoomLog, graph_database::GraphDatabaseService},
+    date_utils::now,
+    event_service::{EventService, EventServiceMessage},
+};
 
 #[derive(Serialize, Deserialize)]
 pub enum Query {
-    RoomLog(Vec<u8>, u64),
-}
-#[derive(Serialize, Deserialize)]
-pub enum Answer {
-    RoomLog(Vec<RoomLog>, u64),
-    Error(u64, ErrorType),
+    RoomLog(Vec<u8>),
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SerializedAnswer {
+pub struct QueryProtocol {
+    id: u64,
+    query: Query,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AnswerProtocol {
     id: u64,
     success: bool,
     serialized: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum OutboundAnswer {
-    Serialized(SerializedAnswer),
+pub enum Protocol {
+    Answer(AnswerProtocol),
+    Query(QueryProtocol),
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum ErrorType {
     Authorisation,
+    RemoteTechnical,
+    TimeOut,
+    Parsing,
     Technical,
 }
 
@@ -46,43 +62,44 @@ pub enum ErrorType {
 /// handle all inbound queries
 ///
 #[derive(Clone)]
-pub struct PeerQueryService {}
-impl PeerQueryService {
-    pub fn new(peer: PeerQuery, mut receiver: mpsc::Receiver<Query>) -> Self {
+pub struct RemotePeerQueryService {
+    verifying_key: Vec<u8>,
+}
+impl RemotePeerQueryService {
+    pub fn new(peer: RemotePeerQueryHandler, mut receiver: mpsc::Receiver<QueryProtocol>) -> Self {
+        let verifying_key = peer.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
-                match msg {
-                    Query::RoomLog(room_id, msg_id) => {
+                match msg.query {
+                    Query::RoomLog(room_id) => {
                         if peer.allowed_room.contains(&room_id) {
                             let res = peer.local_db.get_room_log(room_id).await;
                             match res {
-                                Ok(log) => peer.send(msg_id, Answer::RoomLog(log, msg_id)).await,
+                                Ok(log) => peer.send(msg.id, true, log).await,
                                 Err(_) => {
-                                    peer.send(msg_id, Answer::Error(msg_id, ErrorType::Technical))
-                                        .await
+                                    peer.send(msg.id, false, ErrorType::RemoteTechnical).await
                                 }
                             };
                         } else {
-                            peer.send(msg_id, Answer::Error(msg_id, ErrorType::Authorisation))
-                                .await;
+                            peer.send(msg.id, false, ErrorType::Authorisation).await;
                         }
                     }
                 }
             }
         });
-        Self {}
+        Self { verifying_key }
     }
 }
 
-pub struct PeerQuery {
+pub struct RemotePeerQueryHandler {
     connection_id: i64,
     verifying_key: Vec<u8>,
     allowed_room: HashSet<Vec<u8>>,
     local_db: GraphDatabaseService,
-    peer_mgmt_service: PeerManagerService,
-    reply: mpsc::Sender<OutboundAnswer>,
+    peer_mgmt_service: PeerConnectionService,
+    reply: mpsc::Sender<Protocol>,
 }
-impl PeerQuery {
+impl RemotePeerQueryHandler {
     async fn load_allowed_room(&mut self) {
         let r = self
             .local_db
@@ -94,26 +111,19 @@ impl PeerQuery {
         }
     }
     //handle sending error by notifying the manager
-    async fn send(&self, id: u64, msg: Answer) {
+    async fn send<T: Serialize>(&self, id: u64, success: bool, msg: T) {
         match bincode::serialize(&msg) {
             Ok(serialized) => {
-                let answer = match msg {
-                    Answer::Error(_, _) => SerializedAnswer {
-                        id,
-                        success: false,
-                        serialized,
-                    },
-                    _ => SerializedAnswer {
-                        id,
-                        success: true,
-                        serialized,
-                    },
+                let answer = AnswerProtocol {
+                    id,
+                    success,
+                    serialized,
                 };
-                if let Err(_) = self.reply.send(OutboundAnswer::Serialized(answer)).await {
+                if let Err(_) = self.reply.send(Protocol::Answer(answer)).await {
                     let _ = self
                         .peer_mgmt_service
                         .sender
-                        .send(PeerManagementMessage::PeerError(self.connection_id))
+                        .send(PeerConnectionMessage::DisconnectPeer(self.connection_id))
                         .await;
                 }
             }
@@ -121,16 +131,147 @@ impl PeerQuery {
                 let _ = self
                     .peer_mgmt_service
                     .sender
-                    .send(PeerManagementMessage::PeerError(self.connection_id))
+                    .send(PeerConnectionMessage::DisconnectPeer(self.connection_id))
                     .await;
             }
         };
     }
 }
 
-enum PeerManagementMessage {
-    NewPeer(Vec<u8>, mpsc::Sender<OutboundAnswer>, mpsc::Receiver<Query>),
-    PeerError(i64),
+static QUERY_SEND_BUFFER: usize = 10;
+
+//queries have 10 seconds to answer before closing connection
+static NETWORK_TIMEOUT_SEC: u64 = 10;
+
+pub type AnswerFn = Box<dyn FnOnce(bool, Vec<u8>) + Send + 'static>;
+
+pub struct LocalPeerQueryService {
+    sender: mpsc::Sender<(Query, AnswerFn)>,
+}
+impl LocalPeerQueryService {
+    pub fn new(
+        remote_sender: mpsc::Sender<Protocol>,
+        mut remote_receiver: mpsc::Receiver<AnswerProtocol>,
+    ) -> Self {
+        let (sender, mut local_receiver) = mpsc::channel::<(Query, AnswerFn)>(QUERY_SEND_BUFFER);
+
+        tokio::spawn(async move {
+            let mut next_message_id: u64 = 0;
+            let mut sent_query: HashMap<u64, AnswerFn> = HashMap::new();
+
+            loop {
+                tokio::select! {
+                    msg = local_receiver.recv() =>{
+                        match msg {
+                            Some(msg) => {
+                                let id = next_message_id;
+                                let query = msg.0;
+                                let query_prot = QueryProtocol { id, query };
+                                let _ = remote_sender.send(Protocol::Query(query_prot)).await;
+                                let answer_func = msg.1;
+                                sent_query.insert(id, answer_func);
+                                next_message_id += 1;
+                            },
+                            None => break,
+                        }
+                    }
+                    msg = remote_receiver.recv() =>{
+                        match msg {
+                            Some(msg) => {
+                                if let Some(func) = sent_query.remove(&msg.id) {
+                                    func(msg.success, msg.serialized);
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+
+                }
+            }
+        });
+
+        Self { sender }
+    }
+
+    async fn send(&self, query: Query, answer: AnswerFn) {
+        let _ = self.sender.send((query, answer)).await;
+    }
+}
+
+pub struct PeerSynchronisation {
+    connection_id: i64,
+    verifying_key: Vec<u8>,
+    remote_rooms: HashSet<Vec<u8>>,
+    local_db: GraphDatabaseService,
+    peer_mgmt_service: PeerConnectionService,
+    sync_lock: SynchLockService,
+    query_service: LocalPeerQueryService,
+    current_sync_room: Option<Vec<u8>>,
+}
+impl PeerSynchronisation {
+    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>, ErrorType> {
+        let query = Query::RoomLog(room_id);
+        self.query(query).await
+    }
+
+    async fn query<T: DeserializeOwned + Send + 'static>(
+        &self,
+        query: Query,
+    ) -> Result<T, ErrorType> {
+        let (send, recieve) = oneshot::channel::<Result<T, ErrorType>>();
+        let answer: AnswerFn = Box::new(move |succes, serialized| {
+            if succes {
+                match bincode::deserialize::<T>(&serialized) {
+                    Ok(result) => {
+                        let _ = send.send(Ok(result));
+                    }
+                    Err(_) => {
+                        let _ = send.send(Err(ErrorType::Parsing));
+                    }
+                }
+            } else {
+                match bincode::deserialize::<ErrorType>(&serialized) {
+                    Ok(result) => {
+                        let _ = send.send(Err(result));
+                    }
+                    Err(_) => {
+                        let _ = send.send(Err(ErrorType::Parsing));
+                    }
+                }
+            };
+        });
+
+        self.query_service.send(query, answer).await;
+
+        match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
+            Ok(r) => match r {
+                Ok(result) => return result,
+                Err(_) => return Err(ErrorType::Technical),
+            },
+            Err(_) => return Err(ErrorType::TimeOut),
+        }
+    }
+
+    fn acquire_lock(&mut self, room_id: Vec<u8>) {
+        todo!()
+    }
+
+    fn release_lock(&mut self) {
+        todo!()
+        // //release lock before closing
+        // if let Some(synch) = self.current_sync_room {
+        //     self.sync_lock
+        // }
+    }
+}
+
+enum PeerConnectionMessage {
+    NewPeer(
+        Vec<u8>,
+        mpsc::Sender<Protocol>,
+        mpsc::Receiver<QueryProtocol>,
+    ),
+    DisconnectPeer(i64),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
@@ -139,12 +280,16 @@ static PEER_CHANNEL_SIZE: usize = 32;
 /// Handle the creation and removal of peers
 ///
 #[derive(Clone)]
-pub struct PeerManagerService {
-    sender: mpsc::Sender<PeerManagementMessage>,
+pub struct PeerConnectionService {
+    sender: mpsc::Sender<PeerConnectionMessage>,
 }
-impl PeerManagerService {
-    pub fn new(local_db: GraphDatabaseService, sync_lock: SynchLockService) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<PeerManagementMessage>(PEER_CHANNEL_SIZE);
+impl PeerConnectionService {
+    pub fn new(
+        local_db: GraphDatabaseService,
+        sync_lock: SynchLockService,
+        event_service: EventService,
+    ) -> Self {
+        let (sender, mut receiver) = mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
         let mgmt = Self { sender };
         let ret = mgmt.clone();
         tokio::spawn(async move {
@@ -153,22 +298,41 @@ impl PeerManagerService {
 
             while let Some(msg) = receiver.recv().await {
                 match msg {
-                    PeerManagementMessage::NewPeer(verifying_key, reply, receiver) => {
-                        let peer = PeerQuery {
+                    PeerConnectionMessage::NewPeer(verifying_key, reply, receiver) => {
+                        let peer = RemotePeerQueryHandler {
                             connection_id: peer_id,
-                            verifying_key,
+                            verifying_key: verifying_key.clone(),
                             local_db: local_db.clone(),
                             allowed_room: HashSet::new(),
                             peer_mgmt_service: mgmt.clone(),
                             reply,
                         };
-                        peer_map.insert(peer_id, peer);
+
+                        let peer_query_service = RemotePeerQueryService::new(peer, receiver);
+
+                        peer_map.insert(peer_id, peer_query_service);
+
+                        //notify connection
+                        event_service
+                            .notify(EventServiceMessage::PeerConnected(
+                                verifying_key,
+                                now(),
+                                peer_id,
+                            ))
+                            .await;
+
                         peer_id += 1;
-                        //notify
                     }
-                    PeerManagementMessage::PeerError(id) => {
+                    PeerConnectionMessage::DisconnectPeer(id) => {
                         if let Some(peer) = peer_map.remove(&id) {
-                            //notify
+                            //notify disconnect
+                            event_service
+                                .notify(EventServiceMessage::PeerDisconnected(
+                                    peer.verifying_key.clone(),
+                                    now(),
+                                    id,
+                                ))
+                                .await;
                         }
                     }
                 }

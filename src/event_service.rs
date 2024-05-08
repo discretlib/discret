@@ -6,12 +6,16 @@ pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<EventMessage>>),
     ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
     RoomModified(Room),
+    PeerConnected(Vec<u8>, i64, i64),
+    PeerDisconnected(Vec<u8>, i64, i64),
 }
 
 #[derive(Clone)]
 pub enum EventMessage {
     ComputedDailyLog(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
+    PeerConnected(Vec<u8>, i64, i64),
+    PeerDisconnected(Vec<u8>, i64, i64),
 }
 
 #[derive(Clone)]
@@ -41,6 +45,14 @@ impl EventService {
                     EventServiceMessage::RoomModified(room) => {
                         let _ = broadcast.send(EventMessage::RoomModified(room));
                     }
+                    EventServiceMessage::PeerConnected(verifying_key, date, id) => {
+                        let _ =
+                            broadcast.send(EventMessage::PeerConnected(verifying_key, date, id));
+                    }
+                    EventServiceMessage::PeerDisconnected(verifying_key, date, id) => {
+                        let _ =
+                            broadcast.send(EventMessage::PeerDisconnected(verifying_key, date, id));
+                    }
                 };
             }
         });
@@ -56,5 +68,9 @@ impl EventService {
             .await;
 
         receiver.await.unwrap()
+    }
+
+    pub async fn notify(&self, msg: EventServiceMessage) {
+        let _ = self.sender.send(msg).await;
     }
 }
