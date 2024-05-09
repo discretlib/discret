@@ -165,7 +165,7 @@ impl MutationQuery {
             };
 
             let mut is_update = false;
-            let mut node_updated = false;
+            let mut field_updated = false;
             for field_entry in &entity.fields {
                 let field: &MutationField = field_entry.1;
                 if field.name.eq(ID_FIELD) {
@@ -197,7 +197,7 @@ impl MutationQuery {
                                             ..Default::default()
                                         };
                                         query.edge_insertions.push(edge);
-                                        node_updated = true;
+                                        field_updated = true;
                                     }
                                     insert_queries.push(insert_query);
                                 }
@@ -211,34 +211,46 @@ impl MutationQuery {
                                     Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
                                 for e in edges {
                                     query.edge_deletions.push(e);
+                                    field_updated = true;
                                 }
                             }
                             _ => unreachable!(),
                         },
                         FieldType::Entity(_) => match &field.field_value {
                             MutationFieldValue::Entity(mutation) => {
-                                let edges =
-                                    Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
-                                for e in edges {
-                                    query.edge_deletions.push(e);
-                                }
                                 let insert_query =
                                     Self::get_mutate_query(mutation, parameters, conn, date)?;
 
                                 let target_id = insert_query.node_to_mutate.id.clone();
-                                let edge = Edge {
-                                    src: node_to_mutate.id.clone(),
-                                    src_entity: entity.short_name.clone(),
-                                    label: field.short_name.to_string(),
-                                    dest: target_id,
-                                    cdate: node_to_mutate.date,
-                                    ..Default::default()
-                                };
-                                query.edge_insertions.push(edge);
+                                if !Edge::exists(
+                                    node_to_mutate.id.clone(),
+                                    field.short_name.to_string(),
+                                    target_id.clone(),
+                                    conn,
+                                )? {
+                                    let edges = Edge::get_edges(
+                                        &node_to_mutate.id,
+                                        &field.short_name,
+                                        conn,
+                                    )?;
+                                    for e in edges {
+                                        query.edge_deletions.push(e);
+                                    }
+                                    let edge = Edge {
+                                        src: node_to_mutate.id.clone(),
+                                        src_entity: entity.short_name.clone(),
+                                        label: field.short_name.to_string(),
+                                        dest: target_id,
+                                        cdate: node_to_mutate.date,
+                                        ..Default::default()
+                                    };
+                                    query.edge_insertions.push(edge);
+                                    field_updated = true;
+                                }
+
                                 query
                                     .sub_nodes
                                     .insert(String::from(&field.name), vec![insert_query]);
-                                node_updated = true;
                             }
                             MutationFieldValue::Value(_) => {
                                 //always a null value
@@ -246,6 +258,7 @@ impl MutationQuery {
                                     Edge::get_edges(&node_to_mutate.id, &field.short_name, conn)?;
                                 for e in edges {
                                     query.edge_deletions.push(e);
+                                    field_updated = true;
                                 }
                             }
                             _ => unreachable!(),
@@ -265,7 +278,7 @@ impl MutationQuery {
                             };
                             obj.insert(String::from(&field.short_name), value);
 
-                            node_updated = true;
+                            field_updated = true;
                         }
                         FieldType::Json => {
                             let value = match &field.field_value {
@@ -280,17 +293,18 @@ impl MutationQuery {
                                 _ => unreachable!(),
                             };
                             obj.insert(String::from(&field.short_name), value);
-                            node_updated = true;
+                            field_updated = true;
                         }
                     }
                 }
             }
-            if !node_updated && is_update {
+            if is_update && !field_updated {
+                //nothing changed, the node will not be updated
                 node_to_mutate.node = None;
             } else if let Some(node) = &mut node_to_mutate.node {
                 let json_data = serde_json::to_string(&json)?;
                 node._json = Some(json_data);
-                node.mdate = node_to_mutate.date;
+                node.mdate = date;
                 let mut current = String::new();
                 extract_json(&json, &mut current)?;
                 node_to_mutate.node_fts_str = Some(current);
@@ -569,6 +583,7 @@ mod tests {
     };
 
     use rusqlite::Connection;
+    use serde::{Deserialize, Serialize};
 
     use crate::database::{
         query::{PreparedQueries, Query},
@@ -855,5 +870,313 @@ mod tests {
         assert_eq!(expected, result);
 
         //println!("{:#?}", result);
+    }
+
+    #[test]
+    fn modication_dates_for_edge_update() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            Person {
+                name : String ,
+                pet: [Pet] ,
+            }
+
+            Pet {
+                name : String,
+                age: Integer,
+                shelter : Shelter,
+                previous: [Shelter]
+            }
+
+            Shelter{
+                name : String,
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "Me"
+                    pet: [  
+                        {
+                            name:"kiki" 
+                            age:12
+                            shelter:{
+                                name: "one"
+                            }
+                            previous:[{
+                                name: "two"
+                            }]
+                        } 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        #[derive(Serialize, Deserialize)]
+        struct Shelter {
+            id: String,
+            mdate: i64,
+            name: String,
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct Pet {
+            id: String,
+            mdate: i64,
+            name: String,
+            shelter: Shelter,
+            previous: Vec<Shelter>,
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct Person {
+            id: String,
+            mdate: i64,
+            name: String,
+            pet: Vec<Pet>,
+        }
+        #[derive(Serialize, Deserialize)]
+        struct Result {
+            person: Vec<Person>,
+        }
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                person : Person  {
+                    id
+                    mdate
+                    name
+                    pet {
+                        id
+                        mdate
+                        name
+                        shelter {
+                            id
+                            mdate
+                            name
+                        }
+                        previous {
+                            id
+                            mdate
+                            name
+                        }
+                    }
+                }                
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let sql_queries = Arc::new(query);
+        let parser = Arc::new(query_parser);
+
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: parser.clone(),
+            sql_queries: sql_queries.clone(),
+        };
+
+        let result_str = sql.read(&conn).unwrap();
+        let result: Result = serde_json::from_str(&result_str).unwrap();
+
+        let person = &result.person[0];
+        let pet = &person.pet[0];
+        let shelter_one = &pet.shelter;
+        let shelter_two = &pet.previous[0];
+
+        let mut param = Parameters::new();
+        param.add("person_id", person.id.clone()).unwrap();
+        param.add("pet_id", pet.id.clone()).unwrap();
+        param.add("shelter_id", shelter_one.id.clone()).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id:$person_id
+                    pet: [  
+                        {
+                            id:$pet_id
+                            shelter: {
+                                id:$shelter_id
+                                name: "a better name"
+                            }
+                        } 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        use std::{thread, time};
+
+        thread::sleep(time::Duration::from_millis(2));
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: parser.clone(),
+            sql_queries: sql_queries.clone(),
+        };
+
+        let result_str = sql.read(&conn).unwrap();
+        let result: Result = serde_json::from_str(&result_str).unwrap();
+
+        let person2 = &result.person[0];
+        let pet2 = &person2.pet[0];
+        let shelter_one2 = &pet2.shelter;
+        let shelter_two2 = &pet2.previous[0];
+
+        assert_eq!(person.id, person2.id);
+        assert_eq!(person.mdate, person2.mdate);
+
+        assert_eq!(pet.id, pet2.id);
+        assert_eq!(pet.mdate, pet2.mdate);
+
+        assert_eq!(shelter_one.id, shelter_one2.id);
+
+        assert_ne!(shelter_one.mdate, shelter_one2.mdate);
+
+        assert_eq!(shelter_two.id, shelter_two2.id);
+        assert_eq!(shelter_two.mdate, shelter_two2.mdate);
+
+        let mut param = Parameters::new();
+        param.add("person_id", person.id.clone()).unwrap();
+        param.add("pet_id", pet.id.clone()).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id:$person_id
+                    pet: [  
+                        {
+                            id:$pet_id
+                            shelter: {
+                                name: "a new shelter"
+                            }
+                        } 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        thread::sleep(time::Duration::from_millis(2));
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: parser.clone(),
+            sql_queries: sql_queries.clone(),
+        };
+
+        let result_str = sql.read(&conn).unwrap();
+
+        let result: Result = serde_json::from_str(&result_str).unwrap();
+
+        let person2 = &result.person[0];
+        let pet2 = &person2.pet[0];
+        let shelter_one2 = &pet2.shelter;
+        let shelter_two2 = &pet2.previous[0];
+
+        assert_eq!(person.id, person2.id);
+        assert_eq!(person.mdate, person2.mdate);
+
+        assert_eq!(pet.id, pet2.id);
+        assert_ne!(pet.mdate, pet2.mdate);
+
+        assert_ne!(shelter_one.id, shelter_one2.id);
+        assert_ne!(shelter_one.mdate, shelter_one2.mdate);
+
+        assert_eq!(shelter_two.id, shelter_two2.id);
+        assert_eq!(shelter_two.mdate, shelter_two2.mdate);
+
+        let mut param = Parameters::new();
+        param.add("person_id", person.id.clone()).unwrap();
+        param.add("pet_id", pet.id.clone()).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    id:$person_id
+                    pet: [  
+                        {
+                            id:$pet_id
+                            previous: [{
+                                name: "a old shelter"
+                            }]
+                        } 
+                    ]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        thread::sleep(time::Duration::from_millis(2));
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: parser.clone(),
+            sql_queries: sql_queries.clone(),
+        };
+
+        let result_str = sql.read(&conn).unwrap();
+        let pet = pet2;
+        let shelter_one = shelter_one2;
+
+        let result: Result = serde_json::from_str(&result_str).unwrap();
+
+        let person2 = &result.person[0];
+        let pet2 = &person2.pet[0];
+        let shelter_one2 = &pet2.shelter;
+
+        assert_eq!(person.id, person2.id);
+        assert_eq!(person.mdate, person2.mdate);
+
+        assert_eq!(pet.id, pet2.id);
+        assert_ne!(pet.mdate, pet2.mdate);
+
+        assert_eq!(shelter_one.id, shelter_one2.id);
+        assert_eq!(shelter_one.mdate, shelter_one2.mdate);
+
+        assert_eq!(2, pet2.previous.len());
     }
 }
