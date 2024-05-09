@@ -325,23 +325,6 @@ impl Node {
         Ok(())
     }
 
-    ///update node modification date
-    pub fn update_node_date(
-        id: &Vec<u8>,
-        date: &i64,
-        conn: &Connection,
-    ) -> std::result::Result<(), rusqlite::Error> {
-        let mut update_stmt = conn.prepare_cached(
-            "
-        UPDATE _node SET 
-            mdate = ?
-        WHERE
-            id = ?",
-        )?;
-        update_stmt.execute((date, id))?;
-        Ok(())
-    }
-
     ///
     /// Verify the existence of a specific Node
     ///

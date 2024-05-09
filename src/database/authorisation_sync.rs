@@ -7,8 +7,8 @@ use super::{
     authorisation_service::{Authorisation, EntityRight, Room, User},
     configuration::{
         AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
-        ENTITY_RIGHT_ENT_SHORT, RIGHT_DELETE_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT,
-        RIGHT_MUTATE_SHORT, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT,
+        ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
+        ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT,
         ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT,
         USER_VERIFYING_KEY_SHORT,
     },
@@ -915,15 +915,7 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
         None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
     };
 
-    let delete_all = match right_map.get(RIGHT_MUTATE_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let mutate_all = match right_map.get(RIGHT_DELETE_SHORT) {
+    let mutate_all = match right_map.get(RIGHT_MUTATE_SHORT) {
         Some(v) => match v.as_bool() {
             Some(v) => v,
             None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
@@ -935,7 +927,6 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
         valid_from: entity_right_node.node.mdate,
         entity,
         mutate_self,
-        delete_all,
         mutate_all,
     };
     Ok(entity_right)
@@ -1006,7 +997,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -1047,7 +1037,7 @@ mod tests {
 
         let right_node = &auth_node.right_nodes[0];
         assert_eq!(
-            "{\"32\":\"Person\",\"33\":true,\"34\":true,\"35\":true}",
+            "{\"32\":\"Person\",\"33\":true,\"34\":true}",
             right_node.node._json.clone().unwrap()
         );
         assert_eq!(1, auth_node.user_edges.len());
@@ -1097,7 +1087,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -1120,8 +1109,8 @@ mod tests {
             .unwrap()
             .unwrap();
         let room = parse_room_node(&node).unwrap();
-        assert!(room.can(app.verifying_key(), "Person", now(), &RightType::DeleteAll));
-        assert!(!room.can(app.verifying_key(), "Persons", now(), &RightType::DeleteAll));
+        assert!(room.can(app.verifying_key(), "Person", now(), &RightType::MutateAll));
+        assert!(!room.can(app.verifying_key(), "Persons", now(), &RightType::MutateAll));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1198,7 +1187,6 @@ mod tests {
                         rights:[{
                             entity:"Person"
                             mutate_self:true
-                            delete_all:true
                             mutate_all:true
                         }]
                         users: [{
@@ -1320,7 +1308,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{

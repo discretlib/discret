@@ -106,7 +106,6 @@ mod tests {
             valid_from: ent_date,
             entity: entity.to_string(),
             mutate_self: true,
-            delete_all: true,
             mutate_all: true,
         };
 
@@ -117,7 +116,6 @@ mod tests {
             .expect_err("Cannot insert a right before an existing one");
 
         person_right.mutate_self = false;
-        person_right.delete_all = false;
         person_right.mutate_all = false;
 
         person_right.valid_from = ent_date + 1000;
@@ -126,12 +124,7 @@ mod tests {
         room.add_auth(auth).unwrap();
 
         //user is invalid at this date
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            ent_date,
-            &RightType::DeleteAll
-        ));
+
         assert!(!room.can(
             &user1.verifying_key,
             entity,
@@ -150,12 +143,6 @@ mod tests {
             &user1.verifying_key,
             entity,
             user_valid_date,
-            &RightType::DeleteAll
-        ));
-        assert!(room.can(
-            &user1.verifying_key,
-            entity,
-            user_valid_date,
             &RightType::MutateSelf
         ));
         assert!(room.can(
@@ -166,12 +153,6 @@ mod tests {
         ));
 
         //the last right disable it all
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            person_right.valid_from,
-            &RightType::DeleteAll
-        ));
         assert!(!room.can(
             &user1.verifying_key,
             entity,
@@ -302,7 +283,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -331,7 +311,6 @@ mod tests {
                             rights{
                                 entity
                                 mutate_self
-                                delete_all
                                 mutate_all
                             }
                             users{
@@ -344,8 +323,7 @@ mod tests {
             )
             .await
             .unwrap();
-
-        let expected = "{\n\"_Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"delete_all\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        let expected = "{\n\"_Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
         assert_eq!(result, expected);
         // println!("{:#?}", result);
     }
@@ -397,7 +375,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -482,7 +459,6 @@ mod tests {
                         rights:[{
                             entity:"Pet"
                             mutate_self:true
-                            delete_all:true
                             mutate_all:true
                         }]
                         users: [{
@@ -585,7 +561,6 @@ mod tests {
                         rights:[{
                             entity:"Person"
                             mutate_self:true
-                            delete_all:true
                             mutate_all:true
                         }]
                         users: [{
@@ -603,7 +578,6 @@ mod tests {
                     _EntityRight {
                         entity:"Person"
                         mutate_self:true
-                        delete_all:true
                         mutate_all:true
                     }
                 }"#,
@@ -671,7 +645,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -719,7 +692,6 @@ mod tests {
                         rights:[{
                             entity:"Person"
                             mutate_self:false
-                            delete_all:false
                             mutate_all:false
                         }]
                     }]
@@ -755,7 +727,6 @@ mod tests {
                                 entity
                                 mutate_self
                                 mutate_all
-                                delete_all
                             }
                         }
                     }
@@ -764,7 +735,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected =  "{\n\"_Room\":[{\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false,\"delete_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true,\"delete_all\":true}]}]}]\n}";
+        let expected =  "{\n\"_Room\":[{\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
     }
 
@@ -1029,7 +1000,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -1064,7 +1034,6 @@ mod tests {
                             rights:[{
                                 entity:"Pet"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{
@@ -1201,7 +1170,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]       
                             users: [{
@@ -1324,7 +1292,6 @@ mod tests {
                         rights:[{
                             entity:"Person"
                             mutate_self:false
-                            delete_all:true
                             mutate_all:true
                         }]
                     }]
@@ -1426,7 +1393,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{

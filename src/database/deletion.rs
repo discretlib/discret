@@ -1,5 +1,5 @@
 use crate::{cryptography::base64_decode, date_utils::now};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use super::{
     daily_log::DailyMutations,
@@ -27,7 +27,7 @@ pub struct EdgeDelete {
 pub struct DeletionQuery {
     pub nodes: Vec<NodeDelete>,
     pub node_log: Vec<NodeDeletionEntry>,
-    pub updated_nodes: HashMap<Vec<u8>, i64>,
+    pub updated_nodes: Vec<Node>,
     pub edges: Vec<EdgeDelete>,
     pub edge_log: Vec<EdgeDeletionEntry>,
 }
@@ -42,7 +42,7 @@ impl DeletionQuery {
         let mut deletion_query = Self {
             nodes: Vec::new(),
             node_log: Vec::new(),
-            updated_nodes: HashMap::new(),
+            updated_nodes: Vec::new(),
             edges: Vec::new(),
             edge_log: Vec::new(),
         };
@@ -65,7 +65,6 @@ impl DeletionQuery {
                         date,
                     })
                 } else {
-                    deletion_query.updated_nodes.insert(node.id.clone(), date);
                     for edge_deletion in &del.references {
                         let dest = parameters
                             .params
@@ -85,6 +84,9 @@ impl DeletionQuery {
                             });
                         }
                     }
+                    let mut node = *node;
+                    node.mdate = date;
+                    deletion_query.updated_nodes.push(node);
                 }
             }
         }
@@ -106,8 +108,8 @@ impl DeletionQuery {
             Edge::delete_src(&nod.node.id, conn)?;
             Edge::delete_dest(&nod.node.id, conn)?;
         }
-        for update in &self.updated_nodes {
-            Node::update_node_date(update.0, update.1, conn)?;
+        for update in &mut self.updated_nodes {
+            update.write(conn, false, &None, &None)?;
         }
         for log in &mut self.node_log {
             log.write(conn)?;

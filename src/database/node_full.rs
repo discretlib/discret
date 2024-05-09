@@ -609,7 +609,6 @@ mod tests {
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
-                                delete_all:true
                                 mutate_all:true
                             }]
                             users: [{

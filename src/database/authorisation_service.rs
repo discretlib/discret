@@ -284,7 +284,7 @@ impl RoomAuthorisations {
                                         &RightType::MutateSelf,
                                     )
                                 } else {
-                                    room.can(&verifying_key, &node.name, now, &RightType::DeleteAll)
+                                    room.can(&verifying_key, &node.name, now, &RightType::MutateAll)
                                 };
                                 if !can {
                                     return Err(Error::AuthorisationRejected(
@@ -308,6 +308,11 @@ impl RoomAuthorisations {
                 }
             }
         }
+
+        for node in &mut deletion_query.updated_nodes {
+            node.sign(&self.signing_key)?;
+        }
+
         for edge in &deletion_query.edges {
             match edge.edge.src_entity.as_str() {
                 configuration::ROOM_ENT
@@ -330,7 +335,7 @@ impl RoomAuthorisations {
                                         &verifying_key,
                                         &edge.src_name,
                                         now,
-                                        &RightType::DeleteAll,
+                                        &RightType::MutateAll,
                                     )
                                 };
                                 if !can {
@@ -802,7 +807,6 @@ impl RoomAuthorisations {
                         entity
                         mutate_self
                         mutate_all
-                        delete_all
                     }
                     users(order_by(mdate desc)){
                         mdate
@@ -1172,7 +1176,6 @@ impl Authorisation {
         match self.get_right_at(entity, date) {
             Some(entity_right) => match right {
                 RightType::MutateSelf => entity_right.mutate_self,
-                RightType::DeleteAll => entity_right.delete_all,
                 RightType::MutateAll => entity_right.mutate_all,
             },
             None => false,
@@ -1197,22 +1200,17 @@ pub struct User {
 /// entity: name of the entity
 ///
 /// mutate_self:
-///  - true: can create and mutate your own entity
+///  - true: can create/mutate/delete your own entity
 ///  - false: read only, cannot create or mutate entity
 ///
-/// delete_all:
-///  - true: can delete any entity of the specified type
-///  - false: can only delete its own entity
-///
 /// mutate_all:
-///  - true: can mutate any entity of the specified type
+///  - true: can mutate/delete any entity of the specified type
 ///  - false: can only mutate its own entity
 #[derive(Default, Clone, Debug)]
 pub struct EntityRight {
     pub valid_from: i64,
     pub entity: String,
     pub mutate_self: bool,
-    pub delete_all: bool,
     pub mutate_all: bool,
 }
 
@@ -1222,7 +1220,6 @@ pub struct EntityRight {
 #[derive(Debug)]
 pub enum RightType {
     MutateSelf,
-    DeleteAll,
     MutateAll,
 }
 impl fmt::Display for RightType {
@@ -1265,12 +1262,10 @@ fn load_auth_from_json(value: &serde_json::Value) -> Result<Authorisation> {
             .to_string();
         let mutate_self = right_map.get("mutate_self").unwrap().as_bool().unwrap();
         let mutate_all = right_map.get("mutate_all").unwrap().as_bool().unwrap();
-        let delete_all = right_map.get("delete_all").unwrap().as_bool().unwrap();
         let right = EntityRight {
             valid_from,
             entity,
             mutate_self,
-            delete_all,
             mutate_all,
         };
         authorisation.add_right(right)?;
@@ -1343,12 +1338,6 @@ fn entity_right_from_json(entity_right: &mut EntityRight, json: &str) -> Result<
         if let Some(mutate_all) = map.get(configuration::RIGHT_MUTATE_SHORT) {
             if let Some(mutate_all) = mutate_all.as_bool() {
                 entity_right.mutate_all = mutate_all;
-            }
-        }
-
-        if let Some(delete_all) = map.get(configuration::RIGHT_DELETE_SHORT) {
-            if let Some(delete_all) = delete_all.as_bool() {
-                entity_right.delete_all = delete_all;
             }
         }
     }
