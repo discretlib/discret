@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::date_utils::{date, date_next_day};
 
-use super::sqlite_database::RowMappingFn;
+use super::{
+    configuration::{
+        AUTHORISATION_ENT_SHORT, ENTITY_RIGHT_ENT_SHORT, ROOM_ENT_SHORT, USER_AUTH_ENT_SHORT,
+    },
+    sqlite_database::RowMappingFn,
+};
 
 ///
 /// Stores the modified dates for each rooms during the batch insert.
@@ -85,7 +90,8 @@ impl DailyLogsUpdate {
         ",
         )?;
 
-        let compute_sql = "
+        let compute_sql = format!(
+            "
                 -- node deletion 
                 SELECT signature 
                 FROM _node_deletion_log 
@@ -107,12 +113,20 @@ impl DailyLogsUpdate {
                 FROM _node 
                 WHERE
                     room_id = ?1 AND
-                    mdate >= ?2 AND mdate < ?3 
-
+                    mdate >= ?2 AND mdate < ?3 AND 
+                    -- filter room definition entity
+                    _entity NOT IN (
+                        {},
+                        {},
+                        {},
+                        {}
+                    )
                 --applies to the whole union
                 ORDER by signature
-        ";
-        let mut compute_stmt = conn.prepare_cached(compute_sql)?;
+        ",
+            ROOM_ENT_SHORT, AUTHORISATION_ENT_SHORT, USER_AUTH_ENT_SHORT, ENTITY_RIGHT_ENT_SHORT
+        );
+        let mut compute_stmt = conn.prepare_cached(&compute_sql)?;
 
         let mut update_computed_stmt = conn.prepare_cached(
             "
