@@ -19,7 +19,7 @@ pub struct DailyMutations {
     room_dates: HashMap<Vec<u8>, HashSet<i64>>,
 }
 impl DailyMutations {
-    pub fn add_room_date(&mut self, room: Vec<u8>, mut_date: i64) {
+    pub fn set_need_update(&mut self, room: Vec<u8>, mut_date: i64) {
         let entry = self.room_dates.entry(room).or_default();
         entry.insert(date(mut_date));
         //   println!("insert node daily");
@@ -37,7 +37,7 @@ impl DailyMutations {
                     need_recompute
                 ) values (?,?, 0, NULL, NULL, 1)
                 ON CONFLICT(room_id, date) 
-                DO UPDATE SET entry_number=0, daily_hash=NULL, need_recompute=1;
+                DO UPDATE SET need_recompute=1;
             ",
         )?;
         for room in &self.room_dates {

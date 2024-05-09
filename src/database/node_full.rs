@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::cryptography::base64_decode;
 
 use super::{
+    daily_log::DailyMutations,
     edge::Edge,
     node::{extract_json, Node, NodeIdentifier},
     query_language::{data_model_parser::Entity, FieldType},
@@ -298,6 +299,12 @@ impl FullNode {
         }
         let result: Vec<FullNode> = node_map.into_iter().map(|entry| entry.1).collect();
         Ok(result)
+    }
+
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
+        if let Some(room_id) = &self.node.room_id {
+            daily_log.set_need_update(room_id.clone(), self.node.mdate);
+        }
     }
 }
 

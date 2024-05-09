@@ -1,5 +1,5 @@
 use crate::{cryptography::base64_decode, date_utils::now};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use super::{
     daily_log::DailyMutations,
@@ -27,6 +27,7 @@ pub struct EdgeDelete {
 pub struct DeletionQuery {
     pub nodes: Vec<NodeDelete>,
     pub node_log: Vec<NodeDeletionEntry>,
+    pub updated_nodes: HashMap<Vec<u8>, i64>,
     pub edges: Vec<EdgeDelete>,
     pub edge_log: Vec<EdgeDeletionEntry>,
 }
@@ -41,6 +42,7 @@ impl DeletionQuery {
         let mut deletion_query = Self {
             nodes: Vec::new(),
             node_log: Vec::new(),
+            updated_nodes: HashMap::new(),
             edges: Vec::new(),
             edge_log: Vec::new(),
         };
@@ -63,6 +65,7 @@ impl DeletionQuery {
                         date,
                     })
                 } else {
+                    deletion_query.updated_nodes.insert(node.id.clone(), date);
                     for edge_deletion in &del.references {
                         let dest = parameters
                             .params
@@ -99,7 +102,12 @@ impl DeletionQuery {
             log.write(conn)?;
         }
         for nod in &self.nodes {
-            Node::delete(&nod.node.id, &nod.short_name, conn)?;
+            Node::delete(&nod.node.id, conn)?;
+            Edge::delete_src(&nod.node.id, conn)?;
+            Edge::delete_dest(&nod.node.id, conn)?;
+        }
+        for update in &self.updated_nodes {
+            Node::update_node_date(update.0, update.1, conn)?;
         }
         for log in &mut self.node_log {
             log.write(conn)?;
@@ -109,12 +117,11 @@ impl DeletionQuery {
 
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for edg in &self.edge_log {
-            daily_log.add_room_date(edg.room_id.clone(), edg.date);
-            daily_log.add_room_date(edg.room_id.clone(), edg.deletion_date);
+            daily_log.set_need_update(edg.room_id.clone(), edg.deletion_date);
         }
         for log in &self.node_log {
-            daily_log.add_room_date(log.room_id.clone(), log.mdate);
-            daily_log.add_room_date(log.room_id.clone(), log.deletion_date);
+            daily_log.set_need_update(log.room_id.clone(), log.mdate);
+            daily_log.set_need_update(log.room_id.clone(), log.deletion_date);
         }
     }
 }

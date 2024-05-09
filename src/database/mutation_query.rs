@@ -438,18 +438,18 @@ impl InsertEntity {
         }
 
         if let Some(room_id) = &self.node_to_mutate.room_id {
-            daily_log.add_room_date(room_id.clone(), self.node_to_mutate.date);
+            daily_log.set_need_update(room_id.clone(), self.node_to_mutate.date);
             if let Some(node) = &self.node_to_mutate.old_node {
-                daily_log.add_room_date(room_id.clone(), node.mdate);
+                daily_log.set_need_update(room_id.clone(), node.mdate);
             }
             for edge in &self.edge_insertions {
-                daily_log.add_room_date(room_id.clone(), edge.cdate);
+                daily_log.set_need_update(room_id.clone(), edge.cdate);
             }
         }
 
         for edg in &self.edge_deletions_log {
-            daily_log.add_room_date(edg.room_id.clone(), edg.date);
-            daily_log.add_room_date(edg.room_id.clone(), edg.deletion_date);
+            daily_log.set_need_update(edg.room_id.clone(), edg.date);
+            daily_log.set_need_update(edg.room_id.clone(), edg.deletion_date);
         }
     }
 

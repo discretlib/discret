@@ -299,6 +299,7 @@ impl RoomAuthorisations {
                                     verifying_key.clone(),
                                     &self.signing_key,
                                 );
+
                                 deletion_query.node_log.push(log_entry);
                             }
                             None => return Err(Error::UnknownRoom(base64_encode(room_id))),
@@ -434,14 +435,9 @@ impl RoomAuthorisations {
                                 return Err(Error::UnknownRoom(base64_encode(room_id)));
                             }
                         }
-
-                        //
-                        // add author edge
-                        //
                     }
                     None => {
                         if let Some(room_id) = &to_insert.room_id {
-                            //    println!("{}  {}", base64_encode(&room_id), to_insert.entity);
                             if let Some(room) = self.rooms.get(room_id) {
                                 let can = room.can(
                                     verifying_key,

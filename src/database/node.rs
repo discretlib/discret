@@ -74,9 +74,8 @@ impl Node {
             [],
         )?;
 
-        //node primary key
         conn.execute(
-            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (id, _entity)",
+            "CREATE UNIQUE INDEX _node_id__entity ON _node (id, _entity)",
             [],
         )?;
 
@@ -320,13 +319,26 @@ impl Node {
     /// Deleting an allready deleted node wil result in an hard deletion
     /// Hard deletions are not synchronized
     ///
-    pub fn delete(
+    pub fn delete(id: &Vec<u8>, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut delete_stmt = conn.prepare_cached("DELETE FROM _node WHERE id=? ")?;
+        delete_stmt.execute([id])?;
+        Ok(())
+    }
+
+    ///update node modification date
+    pub fn update_node_date(
         id: &Vec<u8>,
-        entity: &str,
+        date: &i64,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        let mut delete_stmt = conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
-        delete_stmt.execute((id, entity))?;
+        let mut update_stmt = conn.prepare_cached(
+            "
+        UPDATE _node SET 
+            mdate = ?
+        WHERE
+            id = ?",
+        )?;
+        update_stmt.execute((date, id))?;
         Ok(())
     }
 
@@ -844,7 +856,7 @@ mod tests {
         let new_node = Node::get(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
 
-        Node::delete(&node.id, entity, &conn).unwrap();
+        Node::delete(&node.id, &conn).unwrap();
         let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
         assert!(!node_exists);
 
@@ -867,7 +879,7 @@ mod tests {
         };
         node.sign(&signing_key).unwrap();
         node.write(&conn, false, &None, &None).unwrap();
-        Node::delete(&node.id, &node._entity, &conn).unwrap();
+        Node::delete(&node.id, &conn).unwrap();
 
         let mut node_deletion_log = NodeDeletionEntry::build(
             Vec::new(),

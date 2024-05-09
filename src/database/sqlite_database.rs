@@ -549,19 +549,30 @@ impl BufferedDatabaseWriter {
                     }
                     query.update_daily_logs(&mut daily_log);
                 }
+
+                WriteMessage::FullNode(full_nodes, _, _) => {
+                    for node_full in full_nodes {
+                        if let Err(e) = node_full.write(conn) {
+                            conn.execute("ROLLBACK", [])?;
+                            return Err(e);
+                        }
+                        node_full.update_daily_logs(&mut daily_log);
+                    }
+                }
+
                 WriteMessage::RoomNode(room_node, _) => {
                     if let Err(e) = room_node.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
-                    //room add does not update_daily_log
-                    //because room definitions are always synchronized at the start of a p2p connection
+                    //room add does not update_daily_log because room definitions are allways synchronized at the start of a p2p connection
                 }
                 WriteMessage::Write(stmt, _) => {
                     if let Err(e) = stmt.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
+                    //write is a generic query and is outside the daily_log feature
                 }
                 WriteMessage::ComputeDailyLog(daily_mutations, _) => {
                     if let Err(e) = daily_mutations.compute(conn) {
@@ -569,16 +580,9 @@ impl BufferedDatabaseWriter {
                         return Err(e);
                     }
                 }
-                WriteMessage::FullNode(full_nodes, _, _) => {
-                    for node_full in full_nodes {
-                        if let Err(e) = node_full.write(conn) {
-                            conn.execute("ROLLBACK", [])?;
-                            return Err(e);
-                        }
-                    }
-                }
             }
         }
+        //at the end of the batch, update the daily log with all room dates that needs to be recomputed
         daily_log.write(conn)?;
         conn.execute("COMMIT", [])?;
         Ok(())

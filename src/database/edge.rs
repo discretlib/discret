@@ -253,6 +253,42 @@ impl Edge {
         Ok(())
     }
 
+    ///
+    /// Delete all edges the same source
+    ///
+    ///
+    pub fn delete_src(
+        src: &Vec<u8>,
+        conn: &Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        let mut delete_stmt = conn.prepare_cached(
+            "DELETE FROM _edge
+            WHERE 
+                src = ? 
+            ",
+        )?;
+        delete_stmt.execute([src])?;
+        Ok(())
+    }
+
+    ///
+    /// Delete all edges the same source
+    ///
+    ///
+    pub fn delete_dest(
+        dest: &Vec<u8>,
+        conn: &Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        let mut delete_stmt = conn.prepare_cached(
+            "DELETE FROM _edge
+            WHERE 
+                dest = ? 
+            ",
+        )?;
+        delete_stmt.execute([dest])?;
+        Ok(())
+    }
+
     pub fn delete_edge(
         src: &Vec<u8>,
         label: &str,
