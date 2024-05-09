@@ -20,7 +20,6 @@ pub struct EntityDeletion {
     pub name: String,
     pub short_name: String,
     pub alias: Option<String>,
-    pub enable_archives: bool,
     pub id_param: String,
     pub references: Vec<ReferenceDeletion>,
 }
@@ -35,7 +34,6 @@ impl EntityDeletion {
             name: "".to_string(),
             short_name: "".to_string(),
             alias: None,
-            enable_archives: true,
             id_param: "".to_string(),
             references: Vec::new(),
         }
@@ -122,7 +120,6 @@ impl DeletionParser {
             name_pair.next().unwrap().as_str()
         };
         let model_entity = data_model.get_entity(entity_name)?;
-        entity.enable_archives = model_entity.enable_archives;
         entity.name = entity_name.to_string();
         entity.short_name = model_entity.short_name.clone();
 

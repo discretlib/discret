@@ -30,7 +30,6 @@ pub struct NodeToMutate {
     pub node_fts_str: Option<String>,
     pub old_node: Option<Node>,
     pub old_fts_str: Option<String>,
-    pub enable_archives: bool,
     pub enable_full_text: bool,
 }
 impl NodeToMutate {
@@ -43,12 +42,6 @@ impl NodeToMutate {
                 &self.old_fts_str,
                 &self.node_fts_str,
             )?;
-            //archive the old node
-            if let Some(old_node) = &self.old_node {
-                if self.enable_archives {
-                    old_node.archive(conn)?;
-                }
-            }
         }
         Ok(())
     }
@@ -71,7 +64,6 @@ impl Default for NodeToMutate {
             node_fts_str: None,
             node: None,
             old_node: None,
-            enable_archives: true,
             enable_full_text: true,
         }
     }
@@ -355,7 +347,6 @@ impl MutationQuery {
                 };
 
                 node.entity = entity_name.clone();
-                node.enable_archives = entity.enable_archives;
                 node.enable_full_text = entity.enable_full_text;
                 node
             }
@@ -370,7 +361,6 @@ impl MutationQuery {
                     room_id: node.room_id.clone(),
                     entity: entity_name.clone(),
                     date,
-                    enable_archives: entity.enable_archives,
                     enable_full_text: entity.enable_full_text,
                     node: Some(node),
                     ..Default::default()

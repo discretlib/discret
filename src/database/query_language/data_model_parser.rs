@@ -1,12 +1,9 @@
 use crate::{
     cryptography::base64_decode,
-    database::{
-        configuration::{
-            AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
-            ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD,
-            ROOM_ID_FIELD, SIGNATURE_FIELD,
-        },
-        node::ARCHIVED_CHAR,
+    database::configuration::{
+        AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
+        ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, ROOM_ID_FIELD,
+        SIGNATURE_FIELD,
     },
 };
 
@@ -182,7 +179,6 @@ pub struct DataModel {
     model: String,
     entities: HashMap<String, Entity>,
     entities_short: HashMap<String, String>,
-    entities_archive: HashMap<String, Entity>,
 }
 impl Default for DataModel {
     fn default() -> Self {
@@ -195,7 +191,6 @@ impl DataModel {
             model: String::from(""),
             entities: HashMap::new(),
             entities_short: HashMap::new(),
-            entities_archive: HashMap::new(),
         }
     }
 
@@ -225,16 +220,7 @@ impl DataModel {
     }
 
     pub fn get_entity(&self, name: &str) -> Result<&Entity, Error> {
-        if name.starts_with(ARCHIVED_CHAR) {
-            if let Some(entity) = self.entities_archive.get(name) {
-                Ok(entity)
-            } else {
-                Err(Error::InvalidQuery(format!(
-                    "Deletion Entity '{}' not found in the data model",
-                    name
-                )))
-            }
-        } else if let Some(entity) = self.entities.get(name) {
+        if let Some(entity) = self.entities.get(name) {
             Ok(entity)
         } else {
             Err(Error::InvalidQuery(format!(
@@ -311,16 +297,6 @@ impl DataModel {
             if (system && entity.1.name.starts_with('_'))
                 || (!system && !entity.1.name.starts_with('_'))
             {
-                let mut deletion = entity.1.clone();
-                deletion.short_name = format!("{}{}", ARCHIVED_CHAR, deletion.short_name);
-                deletion.name = format!("{}{}", ARCHIVED_CHAR, deletion.name);
-
-                self.entities_short
-                    .insert(deletion.short_name.clone(), deletion.name.clone());
-
-                self.entities_archive
-                    .insert(deletion.name.clone(), deletion.clone());
-
                 self.entities_short
                     .insert(entity.1.short_name.clone(), entity.1.name.clone());
 
@@ -413,7 +389,6 @@ impl DataModel {
                             Rule::disable_feature => {
                                 let disable = pair.into_inner().next().unwrap();
                                 match disable.as_rule() {
-                                    Rule::no_archiving => entity.enable_archives = false,
                                     Rule::no_full_text_index => entity.enable_full_text = false,
                                     _ => unreachable!(),
                                 }
@@ -766,7 +741,6 @@ pub struct Entity {
     pub indexes_to_remove: HashMap<String, Index>,
     pub deprecated: bool,
     pub enable_full_text: bool,
-    pub enable_archives: bool,
 }
 impl Default for Entity {
     fn default() -> Self {
@@ -783,7 +757,6 @@ impl Entity {
             indexes_to_remove: HashMap::new(),
             deprecated: false,
             enable_full_text: true,
-            enable_archives: true,
         }
     }
 

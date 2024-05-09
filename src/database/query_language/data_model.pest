@@ -13,12 +13,12 @@ deprecable_identifier = { deprecated? ~ identifier }
 datamodel = { SOI ~ entity* ~ EOI }
 entity    = { deprecable_identifier ~ entity_param? ~ "{" ~ entry ~ (comma ~ entry)* ~ comma? ~ "}" }
 
-entity_param       = {
+entity_param    = {
     "(" ~ ")"
   | "(" ~ disable_feature ~ (comma ~ disable_feature)* ~ comma? ~ ")"
 }
-disable_feature    = { no_archiving | no_full_text_index }
-no_archiving       = { "no_archive" }
+disable_feature = { no_full_text_index }
+
 no_full_text_index = { "no_full_text_index" }
 
 nullable      = { ^"nullable" }

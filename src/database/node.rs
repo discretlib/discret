@@ -12,11 +12,6 @@ use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-///
-/// Upon deletion or mutation, the _entity field is updated by appending $ at the start, resulting in a 'soft' deletion or archival
-///
-pub const ARCHIVED_CHAR: char = '$';
-
 impl Default for Node {
     fn default() -> Self {
         let date = now();
@@ -80,9 +75,8 @@ impl Node {
         )?;
 
         //node primary key
-        //mdate is part to allow for archiving nodes
         conn.execute(
-            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (id, _entity, mdate)",
+            "CREATE UNIQUE INDEX _node_id__entity_mdate ON _node (id, _entity)",
             [],
         )?;
 
@@ -329,56 +323,10 @@ impl Node {
     pub fn delete(
         id: &Vec<u8>,
         entity: &str,
-        mdate: i64,
-        enable_archives: bool,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        if entity.starts_with(ARCHIVED_CHAR) || !enable_archives {
-            let mut delete_stmt =
-                conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
-            delete_stmt.execute((id, entity))?;
-        } else {
-            let deleted_entity = format!("{}{}", ARCHIVED_CHAR, entity);
-            let mut update_stmt = conn
-                .prepare_cached("UPDATE _node SET _entity=?, mdate=? WHERE id=? AND _entity=?")?;
-            update_stmt.execute((deleted_entity, mdate, id, entity))?;
-        }
-        Ok(())
-    }
-
-    ///
-    /// archive the node by appending '$' to its entity name
-    /// every mutation query that updates a generates an archived version
-    ///
-    pub fn archive(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        let mut insert_stmt = conn.prepare_cached(
-            "INSERT INTO _node ( 
-                    id,
-                    room_id,
-                    cdate,
-                    mdate,
-                    _entity,
-                    _json,
-                    _binary,
-                    _verifying_key,
-                    _signature
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )",
-        )?;
-        let archived_entity = format!("{}{}", ARCHIVED_CHAR, &self._entity);
-        let _ = insert_stmt.insert((
-            &self.id,
-            &self.room_id,
-            &self.cdate,
-            &self.mdate,
-            &archived_entity,
-            &self._json,
-            &self._binary,
-            &self._verifying_key,
-            &self._signature,
-        ))?;
-
+        let mut delete_stmt = conn.prepare_cached("DELETE FROM _node WHERE id=? AND _entity=?")?;
+        delete_stmt.execute((id, entity))?;
         Ok(())
     }
 
@@ -500,14 +448,10 @@ impl Node {
     ) -> Result<HashSet<NodeIdentifier>> {
         let mut id_set = HashSet::new();
 
-        let query = format!(
-            "SELECT id, mdate, _signature
+        let query = "SELECT id, mdate, _signature
             FROM _node 
             WHERE room_id=? AND
-            mdate >= ? AND mdate < ? AND 
-            substr(_entity,1,1) != '{}'",
-            ARCHIVED_CHAR
-        );
+            mdate >= ? AND mdate < ? ";
         let mut stmt = conn.prepare_cached(&query)?;
 
         let mut rows = stmt.query((room_id, date(day), date_next_day(day)))?;
@@ -549,11 +493,9 @@ impl Node {
             FROM _node 
             WHERE 
                 mdate >= {} AND 
-                id in ({}) 
-                AND substr(_entity,1,1) != '{}'",
+                id in ({}) ",
             date(day),
             q,
-            ARCHIVED_CHAR
         );
 
         let mut stmt = conn.prepare(&query)?;
@@ -885,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn node_with_archive() {
+    fn delete() {
         let conn = Connection::open_in_memory().unwrap();
         Node::create_tables(&conn).unwrap();
 
@@ -902,48 +844,8 @@ mod tests {
         let new_node = Node::get(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
 
-        Node::delete(&node.id, entity, now(), true, &conn).unwrap();
+        Node::delete(&node.id, entity, &conn).unwrap();
         let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
-        assert!(!node_exists);
-
-        let del_entity = format!("{}{}", ARCHIVED_CHAR, entity);
-
-        let node_exists = Node::exist(&node.id, &del_entity, &conn).unwrap();
-        assert!(node_exists);
-
-        //deleting an entity results in a hard delete
-        Node::delete(&node.id, &del_entity, now(), true, &conn).unwrap();
-
-        let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
-        let num_nodes: i64 = exists_stmt.query_row([], |row| Ok(row.get(0)?)).unwrap();
-        assert_eq!(0, num_nodes);
-    }
-
-    #[test]
-    fn node_without_archive() {
-        let conn = Connection::open_in_memory().unwrap();
-        Node::create_tables(&conn).unwrap();
-
-        let signing_key = Ed25519SigningKey::new();
-        let entity = "Pet";
-
-        let mut node = Node {
-            _entity: String::from(entity),
-            ..Default::default()
-        };
-        node.sign(&signing_key).unwrap();
-        node.write(&conn, false, &None, &None).unwrap();
-
-        let new_node = Node::get(&node.id, entity, &conn).unwrap();
-        assert!(new_node.is_some());
-
-        Node::delete(&node.id, entity, now(), false, &conn).unwrap();
-        let node_exists = Node::exist(&node.id, entity, &conn).unwrap();
-        assert!(!node_exists);
-
-        let del_entity = format!("{}{}", ARCHIVED_CHAR, entity);
-
-        let node_exists = Node::exist(&node.id, &del_entity, &conn).unwrap();
         assert!(!node_exists);
 
         let mut exists_stmt = conn.prepare("SELECT count(1) FROM _node").unwrap();
@@ -965,7 +867,7 @@ mod tests {
         };
         node.sign(&signing_key).unwrap();
         node.write(&conn, false, &None, &None).unwrap();
-        Node::delete(&node.id, &node._entity, node.mdate, false, &conn).unwrap();
+        Node::delete(&node.id, &node._entity, &conn).unwrap();
 
         let mut node_deletion_log = NodeDeletionEntry::build(
             Vec::new(),

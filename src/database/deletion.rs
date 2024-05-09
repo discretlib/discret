@@ -15,7 +15,6 @@ pub struct NodeDelete {
     pub name: String,
     pub short_name: String,
     pub date: i64,
-    pub enable_archives: bool,
 }
 #[derive(Debug)]
 pub struct EdgeDelete {
@@ -62,7 +61,6 @@ impl DeletionQuery {
                         name: del.name.clone(),
                         short_name: del.short_name.clone(),
                         date,
-                        enable_archives: del.enable_archives,
                     })
                 } else {
                     for edge_deletion in &del.references {
@@ -101,13 +99,7 @@ impl DeletionQuery {
             log.write(conn)?;
         }
         for nod in &self.nodes {
-            Node::delete(
-                &nod.node.id,
-                &nod.short_name,
-                nod.date,
-                nod.enable_archives,
-                conn,
-            )?;
+            Node::delete(&nod.node.id, &nod.short_name, conn)?;
         }
         for log in &mut self.node_log {
             log.write(conn)?;

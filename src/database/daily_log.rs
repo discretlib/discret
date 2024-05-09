@@ -439,7 +439,7 @@ mod tests {
                     let daily_log = dates.into_iter().next().unwrap();
                     assert_eq!(date(mutate_date), daily_log.date);
                     assert!(!daily_log.need_recompute);
-                    assert_eq!(6, daily_log.entry_number);
+                    assert_eq!(4, daily_log.entry_number);
                     assert!(daily_log.daily_hash.is_some());
                     break;
                 }
@@ -453,6 +453,7 @@ mod tests {
                 date,
                 entry_number,
                 daily_hash,
+                history_hash,
                 need_recompute
             from _daily_log ";
 
@@ -461,10 +462,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(1, edge_log.len());
+        println!("{:?}", edge_log);
         for nd in edge_log {
             assert_eq!(date(now()), nd.date);
             assert!(!nd.need_recompute);
-            assert_eq!(6, nd.entry_number); //each person has
+            assert_eq!(4, nd.entry_number); //each person has
             assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room_id);
         }
 
@@ -472,6 +474,6 @@ mod tests {
         assert_eq!(1, room_log.len());
         let rlog = &room_log[0];
         assert_eq!(date(now()), rlog.date);
-        assert_eq!(6, rlog.entry_number);
+        assert_eq!(4, rlog.entry_number);
     }
 }

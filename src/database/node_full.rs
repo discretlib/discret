@@ -4,7 +4,7 @@ use crate::cryptography::base64_decode;
 
 use super::{
     edge::Edge,
-    node::{extract_json, Node, NodeIdentifier, ARCHIVED_CHAR},
+    node::{extract_json, Node, NodeIdentifier},
     query_language::{data_model_parser::Entity, FieldType},
     sqlite_database::Writeable,
     Error, Result,
@@ -56,9 +56,8 @@ impl FullNode {
         FROM _node
         LEFT JOIN _edge ON _node.id = _edge.src 
         WHERE 
-            substr(_node._entity,1,1) != '{}' AND
             _node.id in ({}) 
-        ",ARCHIVED_CHAR, q);
+        ", q);
 
         let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query(params_from_iter(ids.iter()))?;
@@ -263,10 +262,9 @@ impl FullNode {
             id , mdate, _json, rowid 
         FROM _node
         WHERE 
-            substr(_node._entity,1,1) != '{}' AND
             id in ({}) 
         ",
-            ARCHIVED_CHAR, q
+            q
         );
         let mut stmt = conn.prepare(&query)?;
         let ids: Vec<&Vec<u8>> = node_map.iter().map(|node| node.0).collect();

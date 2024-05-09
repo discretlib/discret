@@ -949,28 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn deleted() {
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update(
-                "Person {
-                    name : String,
-                }
-                Pet {
-                    name: String
-                }
-                ",
-            )
-            .unwrap();
-
-        let deletion = datamodel.get_entity("$Person").unwrap();
-        assert_eq!("$32", deletion.short_name);
-
-        let deletion = datamodel.get_entity("$Pet").unwrap();
-        assert_eq!("$33", deletion.short_name);
-    }
-
-    #[test]
     fn short_mapping() {
         let mut datamodel = DataModel::new();
         datamodel
@@ -990,12 +968,6 @@ mod tests {
 
         let name = datamodel.name_for("33").unwrap();
         assert_eq!("Pet", name);
-
-        let name = datamodel.name_for("$32").unwrap();
-        assert_eq!("$Person", name);
-
-        let name = datamodel.name_for("$33").unwrap();
-        assert_eq!("$Pet", name);
     }
 
     #[test]
@@ -1003,7 +975,7 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person(no_archive, no_full_text_index) {
+                "Person( no_full_text_index) {
                     name : String,
                 }
                 ",
@@ -1011,7 +983,6 @@ mod tests {
             .unwrap();
 
         let person = datamodel.get_entity("Person").unwrap();
-        assert!(!person.enable_archives);
         assert!(!person.enable_full_text);
     }
 }

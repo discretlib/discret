@@ -548,13 +548,6 @@ pub fn prepare_room_with_history(
         }
     }
 
-    //check for update on the room itself
-    if !old_room_node.node.eq(&room_node.node) {
-        return Err(Error::InvalidNode(
-            "RoomNode mutation is not authorised".to_string(),
-        ));
-    }
-
     //check authorisation
     for old_edge in &old_room_node.auth_edges {
         let auth_edge = &room_node.auth_edges.iter().find(|edge| edge.eq(&old_edge));
