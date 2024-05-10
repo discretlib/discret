@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use crate::{
     cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     date_utils::now,
+    event_service::{EventService, EventServiceMessage},
 };
 
 use super::{
@@ -65,10 +66,13 @@ impl Writeable for RoomNodeWriteQuery {
 #[derive(Clone)]
 pub struct AuthorisationService {
     sender: mpsc::Sender<AuthorisationMessage>,
-    room_mutation_sender: mpsc::Sender<AuthorisationMessage>,
 }
 impl AuthorisationService {
-    pub fn start(mut auth: RoomAuthorisations, database_writer: BufferedDatabaseWriter) -> Self {
+    pub fn start(
+        mut auth: RoomAuthorisations,
+        database_writer: BufferedDatabaseWriter,
+        event_service: EventService,
+    ) -> Self {
         let (sender, mut receiver) = mpsc::channel::<AuthorisationMessage>(100);
 
         //special channel to receive RoomMutationQuery from the database writer
@@ -83,7 +87,7 @@ impl AuthorisationService {
                     msg = receiver.recv() =>{
                         match msg {
                             Some(msg) => {
-                                Self::process_message(msg, &mut auth, &database_writer, &self_sender).await;
+                                Self::process_message(msg, &mut auth, &database_writer,&event_service, &self_sender).await;
                             },
                             None => break,
                         }
@@ -91,7 +95,7 @@ impl AuthorisationService {
                     msg = room_mutation_receiver.recv() =>{
                         match msg {
                             Some(msg) => {
-                                Self::process_message(msg, &mut auth,&database_writer, &self_sender).await;
+                                Self::process_message(msg, &mut auth,&database_writer,&event_service, &self_sender).await;
                             },
                             None => break,
                         }
@@ -100,16 +104,14 @@ impl AuthorisationService {
             }
         });
 
-        Self {
-            sender,
-            room_mutation_sender,
-        }
+        Self { sender }
     }
 
     pub async fn process_message(
         msg: AuthorisationMessage,
         auth: &mut RoomAuthorisations,
         database_writer: &BufferedDatabaseWriter,
+        event_service: &EventService,
         self_sender: &mpsc::Sender<AuthorisationMessage>,
     ) {
         match msg {
@@ -159,7 +161,10 @@ impl AuthorisationService {
                     match auth.validate_mutation(&mut query.mutation_query) {
                         Ok(rooms) => {
                             for room in rooms {
-                                auth.add_room(room);
+                                auth.add_room(room.clone());
+                                event_service
+                                    .notify(EventServiceMessage::RoomModified(room))
+                                    .await;
                             }
                             let _ = query.reply.send(Ok(query.mutation_query));
                         }
@@ -201,7 +206,10 @@ impl AuthorisationService {
                 Ok(_) => {
                     match parse_room_node(&query.room) {
                         Ok(room) => {
-                            auth.add_room(room);
+                            auth.add_room(room.clone());
+                            event_service
+                                .notify(EventServiceMessage::RoomModified(room))
+                                .await;
                             let _ = query.reply.send(Ok(()));
                         }
                         Err(e) => {

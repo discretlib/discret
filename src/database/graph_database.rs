@@ -413,7 +413,8 @@ impl GraphDatabase {
             rooms: HashMap::new(),
         };
 
-        let auth_service = AuthorisationService::start(auth, graph_database.writer.clone());
+        let auth_service =
+            AuthorisationService::start(auth, graph_database.writer.clone(), event_service.clone());
 
         let database = Self {
             data_model,
