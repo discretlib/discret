@@ -52,7 +52,7 @@ impl FullNode {
 
         let query = format!("
         SELECT 
-            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, 
+            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, rowid,
             _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature
         FROM _node
         LEFT JOIN _edge ON _node.id = _edge.src 
@@ -77,7 +77,7 @@ impl FullNode {
                     _binary: row.get(6)?,
                     _verifying_key: row.get(7)?,
                     _signature: row.get(8)?,
-                    _local_id: None,
+                    _local_id: row.get(9)?,
                 };
 
                 FullNode {
@@ -87,16 +87,16 @@ impl FullNode {
                 }
             });
 
-            let src_opt: Option<Vec<u8>> = row.get(9)?;
+            let src_opt: Option<Vec<u8>> = row.get(10)?;
             if let Some(src) = src_opt {
                 let edge = Edge {
                     src,
-                    src_entity: row.get(10)?,
-                    label: row.get(11)?,
-                    dest: row.get(12)?,
-                    cdate: row.get(13)?,
-                    verifying_key: row.get(14)?,
-                    signature: row.get(15)?,
+                    src_entity: row.get(11)?,
+                    label: row.get(12)?,
+                    dest: row.get(13)?,
+                    cdate: row.get(14)?,
+                    verifying_key: row.get(15)?,
+                    signature: row.get(16)?,
                 };
                 entry.edges.push(edge);
             }
@@ -247,57 +247,70 @@ impl FullNode {
     }
 
     pub fn prepare_for_insert(nodes: Vec<FullNode>, conn: &Connection) -> Result<Vec<FullNode>> {
+        let mut node_ids: HashSet<NodeIdentifier> = HashSet::new();
         let mut node_map = HashMap::new();
-        let it = &mut nodes.into_iter().peekable();
-        let mut q = String::new();
-        while let Some(node) = it.next() {
-            q.push('?');
-            if it.peek().is_some() {
-                q.push(',');
-            }
+
+        for node in nodes {
+            node_ids.insert(NodeIdentifier {
+                id: node.node.id.clone(),
+                mdate: node.node.mdate,
+                signature: node.node._signature.clone(),
+            });
             node_map.insert(node.node.id.clone(), node);
         }
-        let query = format!(
-            "
-        SELECT 
-            id , mdate, _json, rowid 
-        FROM _node
-        WHERE 
-            id in ({}) 
-        ",
-            q
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let ids: Vec<&Vec<u8>> = node_map.iter().map(|node| node.0).collect();
-        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
 
-        while let Some(row) = rows.next()? {
-            let id: Vec<u8> = row.get(0)?;
-            if let Some(new_node) = node_map.get_mut(&id) {
-                let mdate: i64 = row.get(1)?;
-                if mdate < new_node.node.mdate {
-                    let old_json_opt: Option<String> = row.get(2)?;
+        let existing_nodes = Self::get_nodes(node_ids, conn)?;
+
+        let mut result: Vec<FullNode> = Vec::new();
+        //process existing nodes
+        for existing in existing_nodes {
+            let id: Vec<u8> = existing.node.id.clone();
+            if let Some(mut new_node) = node_map.remove(&id) {
+                let old_date: i64 = existing.node.mdate;
+                if new_node.node.mdate > old_date {
+                    let old_json_opt = &existing.node._json;
                     if let Some(json_str) = old_json_opt {
                         let json: serde_json::Value = serde_json::from_str(&json_str)?;
                         let mut old_tfs = String::new();
                         extract_json(&json, &mut old_tfs)?;
                         new_node.old_fts_str = Some(old_tfs);
                     }
-                    let rowid: i64 = row.get(3)?;
+
                     if let Some(json_str) = &new_node.node._json {
                         let json: serde_json::Value = serde_json::from_str(&json_str)?;
                         let mut old_tfs = String::new();
                         extract_json(&json, &mut old_tfs)?;
                         new_node.node_fts_str = Some(old_tfs);
                     }
+                    let rowid: i64 = existing.node._local_id.unwrap();
                     new_node.node._local_id = Some(rowid);
-                } else {
-                    //a more recent version exists
-                    node_map.remove(&id);
+
+                    //filter existing edges
+                    let mut new_edges: Vec<Edge> = Vec::new();
+                    for new_edge in new_node.edges {
+                        let old_edge_opt = existing.edges.iter().find(|old_edge| {
+                            new_edge.src.eq(&old_edge.src)
+                                && new_edge.label.eq(&old_edge.label)
+                                && new_edge.dest.eq(&old_edge.dest)
+                        });
+
+                        if let Some(old_edge) = old_edge_opt {
+                            if new_edge.cdate > old_edge.cdate {
+                                new_edges.push(new_edge);
+                            }
+                        } else {
+                            new_edges.push(new_edge);
+                        }
+                    }
+                    new_node.edges = new_edges;
+                    result.push(new_node);
                 }
             };
         }
-        let result: Vec<FullNode> = node_map.into_iter().map(|entry| entry.1).collect();
+        //add new node
+        for entry in node_map {
+            result.push(entry.1);
+        }
         Ok(result)
     }
 
