@@ -14,8 +14,9 @@ use crate::{
 use super::{
     authorisation_sync::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     configuration::{
-        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
+        self, RoomDefinitionLog, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD,
+        MODIFICATION_DATE_FIELD, ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT,
+        ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
     },
     daily_log::DailyMutations,
     deletion::DeletionQuery,
@@ -39,17 +40,26 @@ pub enum AuthorisationMessage {
 }
 
 pub struct RoomMutationWriteQuery {
+    room_list: HashSet<Vec<u8>>,
     mutation_query: MutationQuery,
     reply: Sender<super::Result<MutationQuery>>,
 }
 impl Writeable for RoomMutationWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.mutation_query.write(conn)
+        self.mutation_query.write(conn)?;
+        for room_id in &self.room_list {
+            RoomDefinitionLog::add(room_id, self.mutation_query.date, conn)?;
+        }
+        Ok(())
     }
 }
 impl RoomMutationWriteQuery {
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
-        self.mutation_query.update_daily_logs(daily_log);
+        for insert in &self.mutation_query.mutate_entities {
+            if !self.room_list.contains(&insert.node_to_mutate.id) {
+                insert.update_daily_logs(daily_log);
+            }
+        }
     }
 }
 
@@ -59,7 +69,12 @@ pub struct RoomNodeWriteQuery {
 }
 impl Writeable for RoomNodeWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
-        self.room.write(conn)
+        self.room.write(conn)?;
+        if let Some(id) = &self.room.node.room_id {
+            RoomDefinitionLog::add(id, self.room.last_modified, conn)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -133,27 +148,34 @@ impl AuthorisationService {
             }
 
             AuthorisationMessage::Mutation(mut mutation_query, reply) => {
-                let need_room_insert = match auth.validate_mutation(&mut mutation_query) {
-                    Ok(rooms) => !rooms.is_empty(),
+                match auth.validate_mutation(&mut mutation_query) {
+                    Ok(rooms) => match rooms.is_empty() {
+                        true => {
+                            let query = WriteMessage::Mutation(mutation_query, reply);
+                            let _ = database_writer.send(query).await;
+                        }
+                        false => {
+                            let mut room_list: HashSet<Vec<u8>> = HashSet::new();
+                            for room in rooms {
+                                room_list.insert(room.id);
+                            }
+                            let query = WriteMessage::RoomMutation(
+                                RoomMutationWriteQuery {
+                                    room_list,
+                                    mutation_query,
+                                    reply,
+                                },
+                                self_sender.clone(),
+                            );
+
+                            let _ = database_writer.send(query).await;
+                        }
+                    },
                     Err(e) => {
                         let _ = reply.send(Err(e));
                         return;
                     }
                 };
-                if need_room_insert {
-                    let query = WriteMessage::RoomMutation(
-                        RoomMutationWriteQuery {
-                            mutation_query,
-                            reply,
-                        },
-                        self_sender.clone(),
-                    );
-
-                    let _ = database_writer.send(query).await;
-                } else {
-                    let query = WriteMessage::Mutation(mutation_query, reply);
-                    let _ = database_writer.send(query).await;
-                }
             }
 
             AuthorisationMessage::RoomMutationWrite(result, mut query) => match result {

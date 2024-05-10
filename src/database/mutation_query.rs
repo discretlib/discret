@@ -72,6 +72,7 @@ impl Default for NodeToMutate {
 #[derive(Debug)]
 pub struct MutationQuery {
     pub mutate_entities: Vec<InsertEntity>,
+    pub date: i64,
 }
 impl Writeable for MutationQuery {
     fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
@@ -103,6 +104,7 @@ impl MutationQuery {
             mutate_queries.push(query);
         }
         let query = MutationQuery {
+            date,
             mutate_entities: mutate_queries,
         };
 

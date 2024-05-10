@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::configuration::RoomDefinitionLog;
 use super::daily_log::RoomLog;
 use super::node::{Node, NodeIdentifier};
 use super::{
@@ -35,7 +36,7 @@ enum Message {
     UpdateModel(String, Sender<Result<String>>),
     RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
-    RoomForUser(Vec<u8>, Sender<HashSet<Vec<u8>>>),
+    RoomForUser(Vec<u8>, Sender<Result<Vec<RoomDefinitionLog>>>),
     ComputeDailyLog(),
 }
 ///
@@ -135,11 +136,7 @@ impl GraphDatabaseService {
                     }
 
                     Message::RoomForUser(verifying_key, reply) => {
-                        let _ = service.auth_service.send(AuthorisationMessage::RoomForUser(
-                            verifying_key,
-                            now(),
-                            reply,
-                        ));
+                        service.get_room_for_user(verifying_key, reply).await;
                     }
                 }
             }
@@ -351,15 +348,18 @@ impl GraphDatabaseService {
         receive_response.await?
     }
 
-    pub async fn get_room_for_user(&self, verifying_key: Vec<u8>) -> Result<HashSet<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
+    pub async fn get_room_for_user(
+        &self,
+        verifying_key: Vec<u8>,
+    ) -> Result<Vec<RoomDefinitionLog>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<RoomDefinitionLog>>>();
         let _ = self
             .sender
             .send(Message::RoomForUser(verifying_key, send_response))
             .await;
 
-        let result = receive_response.await?;
-        Ok(result)
+        receive_response.await?
     }
 }
 
@@ -719,6 +719,36 @@ impl GraphDatabase {
                 }
             }))
             .await;
+    }
+
+    pub async fn get_room_for_user(
+        &self,
+        verifying_key: Vec<u8>,
+        reply: Sender<Result<Vec<RoomDefinitionLog>>>,
+    ) {
+        let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
+        let _ = self.auth_service.send(AuthorisationMessage::RoomForUser(
+            verifying_key,
+            now(),
+            send_response,
+        ));
+
+        let res = receive_response.await;
+        match res {
+            Ok(room_ids) => {
+                let _ = self
+                    .graph_database
+                    .reader
+                    .send_async(Box::new(move |conn| {
+                        let log = RoomDefinitionLog::get_log(&room_ids, conn).map_err(Error::from);
+                        let _ = reply.send(log);
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
+            }
+        }
     }
 }
 

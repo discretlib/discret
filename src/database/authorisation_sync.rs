@@ -1,3 +1,5 @@
+use std::cmp::max;
+
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +29,7 @@ use super::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomNode {
     pub node: Node,
-
+    pub last_modified: i64,
     pub admin_edges: Vec<Edge>,
     pub admin_nodes: Vec<UserNode>,
 
@@ -174,6 +176,9 @@ impl RoomNode {
             return Ok(None);
         }
         let node = *node.unwrap();
+
+        let mut last_modified = node.mdate;
+
         let mut admin_edges = Edge::get_edges(id, ROOM_ADMIN_FIELD_SHORT, conn)?;
         //user insertion order is mandatory
         admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
@@ -182,6 +187,7 @@ impl RoomNode {
         for edge in &admin_edges {
             let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
+                last_modified = max(last_modified, user.node.mdate);
                 admin_nodes.push(user);
             }
         }
@@ -194,6 +200,7 @@ impl RoomNode {
         for edge in &user_admin_edges {
             let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
+                last_modified = max(last_modified, user.node.mdate);
                 user_admin_nodes.push(user);
             }
         }
@@ -203,12 +210,14 @@ impl RoomNode {
         for edge in &auth_edges {
             let auth_opt = AuthorisationNode::read(conn, &edge.dest)?;
             if let Some(auth) = auth_opt {
+                last_modified = max(last_modified, auth.last_modified);
                 auth_nodes.push(auth);
             }
         }
 
         Ok(Some(Self {
             node,
+            last_modified,
             admin_edges,
             admin_nodes,
             user_admin_edges,
@@ -225,6 +234,7 @@ impl RoomNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorisationNode {
     pub node: Node,
+    pub last_modified: i64,
     pub right_edges: Vec<Edge>,
     pub right_nodes: Vec<EntityRightNode>,
     pub user_edges: Vec<Edge>,
@@ -323,7 +333,7 @@ impl AuthorisationNode {
             return Ok(None);
         }
         let node = *node.unwrap();
-
+        let mut last_modified = node.mdate;
         let mut right_edges = Edge::get_edges(id, AUTH_RIGHTS_FIELD_SHORT, conn)?;
         //rights insertion must respect must be done in the right order
         right_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
@@ -332,6 +342,7 @@ impl AuthorisationNode {
         for edge in &right_edges {
             let right_opt = EntityRightNode::read(conn, &edge.dest)?;
             if let Some(cred) = right_opt {
+                last_modified = max(last_modified, cred.node.mdate);
                 right_nodes.push(cred);
             }
         }
@@ -344,12 +355,14 @@ impl AuthorisationNode {
         for edge in &user_edges {
             let user_opt = UserNode::read(conn, &edge.dest)?;
             if let Some(user) = user_opt {
+                last_modified = max(last_modified, user.node.mdate);
                 user_nodes.push(user);
             }
         }
 
         Ok(Some(Self {
             node,
+            last_modified,
             right_edges,
             right_nodes,
             user_edges,

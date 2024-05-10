@@ -106,7 +106,11 @@ impl RemotePeerQueryHandler {
             .get_room_for_user(self.verifying_key.clone())
             .await;
         match r {
-            Ok(set) => self.allowed_room = set,
+            Ok(rooms) => {
+                for room in rooms {
+                    self.allowed_room.insert(room.room_id);
+                }
+            }
             Err(_) => self.allowed_room = HashSet::new(),
         }
     }

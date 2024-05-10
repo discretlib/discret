@@ -542,13 +542,6 @@ impl BufferedDatabaseWriter {
                     }
                     query.update_daily_logs(&mut daily_log);
                 }
-                WriteMessage::RoomMutation(query, _) => {
-                    if let Err(e) = query.write(conn) {
-                        conn.execute("ROLLBACK", [])?;
-                        return Err(e);
-                    }
-                    query.update_daily_logs(&mut daily_log);
-                }
 
                 WriteMessage::FullNode(full_nodes, _, _) => {
                     for node_full in full_nodes {
@@ -558,6 +551,14 @@ impl BufferedDatabaseWriter {
                         }
                         node_full.update_daily_logs(&mut daily_log);
                     }
+                }
+
+                WriteMessage::RoomMutation(query, _) => {
+                    if let Err(e) = query.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                    query.update_daily_logs(&mut daily_log);
                 }
 
                 WriteMessage::RoomNode(room_node, _) => {
