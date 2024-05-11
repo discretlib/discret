@@ -2,6 +2,7 @@
 // partial index every entity id
 
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 

@@ -302,6 +302,7 @@ mod tests {
     fn parse_valid_parameters() {
         let _ = Parameters::parse(
             r#"
+            //comment
         {
             "a_float" : 1.2 ,
             "a_string":"hello .world" ,

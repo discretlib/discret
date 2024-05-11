@@ -686,10 +686,13 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
+            //comment
             mutation mutmut {
-                Person {
+                //comment
+                Person { //comment
+                    //comment
                     id : $id
-                    name : $name
+                    name : $name //comment
                     surname : $surname
                     parents : [{id: $father_id}, {id: $mother_id}]
                     age: $age

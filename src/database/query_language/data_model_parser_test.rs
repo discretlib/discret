@@ -116,6 +116,21 @@ mod tests {
     }
 
     #[test]
+    fn comments() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+                //acomment
+                Person {
+                    //comment
+                    child : String,
+                }",
+            )
+            .expect("Comments ");
+    }
+
+    #[test]
     fn invalid_entity() {
         let mut datamodel = DataModel::new();
         datamodel

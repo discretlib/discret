@@ -14,6 +14,7 @@
     }
 */
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 

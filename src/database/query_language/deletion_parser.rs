@@ -199,10 +199,12 @@ mod tests {
 
         let deletion = DeletionParser::parse(
             "
+            //comment
             deletion delete_person {
-  
+                //comment
                 del1: Person {
-                    $id
+                    //comment
+                    $id //comment
                     parent[$id2, $id3]
                     pet[$id4]
                 }

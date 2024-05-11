@@ -31,8 +31,10 @@ mod tests {
 
         let _query = QueryParser::parse(
             r#"
+            //comment
             query aquery {
-                Person(
+                //comment
+                Person( //comment
                     name = "someone",
                     is_human = true, 
                     age >= 1,
