@@ -171,7 +171,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -278,7 +278,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(

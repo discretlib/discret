@@ -179,7 +179,8 @@ impl GraphDatabaseService {
 
     ///
     /// GraphQL mutation query
-    ///
+    /// returns and internal representation of the result
+    /// should be only used by tests
     ///
     pub async fn mutate_raw(
         &self,
@@ -192,10 +193,27 @@ impl GraphDatabaseService {
         let _ = self.sender.send(msg).await;
 
         let result = recieve.await?;
+
         let _ = self.sender.send(Message::ComputeDailyLog()).await;
 
         result
     }
+
+    ///
+    /// GraphQL mutation query
+    /// returns a json string
+    ///
+    pub async fn mutate(&self, mutation: &str, param_opt: Option<Parameters>) -> Result<String> {
+        let raw = self.mutate_raw(mutation, param_opt).await;
+        match raw {
+            Ok(query) => match query.to_json() {
+                Ok(value) => serde_json::to_string(&value).map_err(Error::from),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
     ///
     /// GraphQL query
     ///
@@ -588,7 +606,7 @@ impl GraphDatabase {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let mutation_query = MutationQuery::build(&parameters, mutation.clone(), conn);
+                let mutation_query = MutationQuery::execute(&parameters, mutation.clone(), conn);
 
                 match mutation_query {
                     Ok(muta) => {

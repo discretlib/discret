@@ -60,7 +60,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -169,7 +169,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
 
         let signing_key = Ed25519SigningKey::new();
 
@@ -300,7 +300,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -377,35 +377,35 @@ mod tests {
         param.add("name", "John".to_string()).unwrap();
         param.add("age", 42).unwrap();
 
-        let mut mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Silvie".to_string()).unwrap();
         param.add("age", 46).unwrap();
 
-        let mut mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Kevin".to_string()).unwrap();
         param.add("age", 22).unwrap();
 
-        let mut mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Sarah".to_string()).unwrap();
         param.add("age", 12).unwrap();
 
-        let mut mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Leonore".to_string()).unwrap();
         param.add("age", 22).unwrap();
 
-        let mut mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -597,7 +597,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -698,7 +698,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -772,7 +772,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -897,7 +897,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -960,7 +960,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1021,7 +1021,7 @@ mod tests {
 
         let param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1123,7 +1123,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1284,7 +1284,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1403,7 +1403,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(

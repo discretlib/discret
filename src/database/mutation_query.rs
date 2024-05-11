@@ -72,6 +72,7 @@ impl Default for NodeToMutate {
 #[derive(Debug)]
 pub struct MutationQuery {
     pub mutate_entities: Vec<InsertEntity>,
+    pub mutation_parser: Arc<MutationParser>,
     pub date: i64,
 }
 impl Writeable for MutationQuery {
@@ -89,23 +90,24 @@ impl MutationQuery {
         }
     }
 
-    pub fn build(
+    pub fn execute(
         parameters: &Parameters,
-        mutation: Arc<MutationParser>,
+        mutation_parser: Arc<MutationParser>,
         conn: &rusqlite::Connection,
     ) -> Result<MutationQuery> {
-        mutation.variables.validate_params(parameters)?;
+        mutation_parser.variables.validate_params(parameters)?;
         let mut mutate_queries = vec![];
 
         //make sure that everything is mutated at the same exact date
         let date = now();
-        for entity in &mutation.mutations {
+        for entity in &mutation_parser.mutations {
             let query = Self::get_mutate_query(entity, parameters, conn, date)?;
             mutate_queries.push(query);
         }
         let query = MutationQuery {
             date,
             mutate_entities: mutate_queries,
+            mutation_parser,
         };
 
         Ok(query)
@@ -387,8 +389,8 @@ impl MutationQuery {
         Ok(node_to_mutate)
     }
 
-    pub fn to_json(&self, mutation: &MutationParser) -> Result<serde_json::Value> {
-        let mutas = &mutation.mutations;
+    pub fn to_json(&self) -> Result<serde_json::Value> {
+        let mutas = &self.mutation_parser.mutations;
         let inserts = &self.mutate_entities;
 
         if mutas.len() != inserts.len() {
@@ -648,9 +650,9 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
 
-        let _js = mutation_query.to_json(&*mutation).unwrap();
+        let _js = mutation_query.to_json().unwrap();
         assert_eq!(1, mutation_query.mutate_entities.len());
     }
 
@@ -689,10 +691,10 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
 
-        let js = mutation_query.to_json(&*mutation).unwrap();
-        println!("{}", serde_json::to_string_pretty(&js).unwrap());
+        let _js = mutation_query.to_json().unwrap();
+        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
         assert_eq!(2, mutation_query.mutate_entities.len());
         // let insert_ent = mutation_query.insert_enties[0];
 
@@ -750,10 +752,10 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::build(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
 
-        let _js = mutation_query.to_json(&*mutation).unwrap();
-        //println!("{}", serde_json::to_string_pretty(&js).unwrap());
+        let _js = mutation_query.to_json().unwrap();
+        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
 
         let insert_ent = &mutation_query.mutate_entities[0];
         assert_eq!(5, insert_ent.edge_insertions.len());
@@ -798,7 +800,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let insert_entity = &mutation_query.mutate_entities[0];
@@ -834,7 +836,7 @@ mod tests {
         .unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         //  println!("{:#?}", mutation_query);
         mutation_query.write(&conn).unwrap();
 
@@ -923,7 +925,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         #[derive(Serialize, Deserialize)]
@@ -1032,7 +1034,7 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
@@ -1089,7 +1091,7 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
@@ -1146,7 +1148,7 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::build(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
