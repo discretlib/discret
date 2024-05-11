@@ -5,7 +5,8 @@ use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc}
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
 use super::daily_log::{RoomDefinitionLog, RoomLog};
-use super::node::{Node, NodeIdentifier};
+use super::edge::EdgeDeletionEntry;
+use super::node::{Node, NodeDeletionEntry, NodeIdentifier};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     authorisation_sync::RoomNode,
@@ -357,6 +358,46 @@ impl GraphDatabaseService {
             .send_async(Box::new(move |conn| {
                 let room_log = RoomLog::get_all(&room_id, conn).map_err(Error::from);
                 let _ = send_response.send(room_log);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get node deletions for a room at a specific day
+    ///
+    pub async fn get_room_node_deletion_log(
+        &self,
+        room_id: Vec<u8>,
+        del_date: i64,
+    ) -> Result<Vec<NodeDeletionEntry>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let deteletions =
+                    NodeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let _ = send_response.send(deteletions);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get edge deletions for a room at a specific day
+    ///
+    pub async fn get_room_edge_deletion_log(
+        &self,
+        room_id: Vec<u8>,
+        del_date: i64,
+    ) -> Result<Vec<EdgeDeletionEntry>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let deteletions =
+                    EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let _ = send_response.send(deteletions);
             }))
             .await?;
         receive_response.await?

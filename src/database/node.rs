@@ -101,6 +101,7 @@ impl Node {
             "CREATE TABLE _node_deletion_log (
             room_id BLOB,
             id BLOB,
+            mdate INTEGER,
             entity TEXT,
             deletion_date INTEGER,
             verifying_key BLOB NOT NULL,
@@ -539,15 +540,15 @@ impl Hash for NodeIdentifier {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct NodeDeletionEntry {
     pub room_id: Vec<u8>,
     pub id: Vec<u8>,
     pub entity: String,
+    pub mdate: i64,
     pub deletion_date: i64,
     pub verifying_key: Vec<u8>,
     pub signature: Vec<u8>,
-    pub mdate: i64,
 }
 impl NodeDeletionEntry {
     pub fn build(
@@ -562,10 +563,10 @@ impl NodeDeletionEntry {
             room_id: room,
             id: node.id.clone(),
             entity: node._entity.clone(),
+            mdate: node.mdate,
             deletion_date,
             verifying_key,
             signature,
-            mdate: node.mdate,
         }
     }
 
@@ -579,6 +580,7 @@ impl NodeDeletionEntry {
         let mut hasher = blake3::Hasher::new();
         hasher.update(room);
         hasher.update(&node.id);
+        hasher.update(&node.mdate.to_le_bytes());
         hasher.update(node._entity.as_bytes());
         hasher.update(&deletion_date.to_le_bytes());
         hasher.update(verifying_key);
@@ -590,6 +592,7 @@ impl NodeDeletionEntry {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.room_id);
         hasher.update(&self.id);
+        hasher.update(&self.mdate.to_le_bytes());
         hasher.update(self.entity.as_bytes());
         hasher.update(&self.deletion_date.to_le_bytes());
         hasher.update(&self.verifying_key);
@@ -599,17 +602,44 @@ impl NodeDeletionEntry {
         Ok(())
     }
 
-    pub const MAPPING: RowMappingFn<Self> = |row| {
-        Ok(Box::new(NodeDeletionEntry {
-            room_id: row.get(0)?,
-            id: row.get(1)?,
-            entity: row.get(2)?,
-            deletion_date: row.get(3)?,
-            verifying_key: row.get(4)?,
-            signature: row.get(5)?,
-            mdate: 0,
-        }))
-    };
+    pub fn get_entries(
+        room_id: &Vec<u8>,
+        del_date: i64,
+        conn: &Connection,
+    ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(
+            "
+            SELECT 
+                room_id ,
+                id,
+                entity,
+                mdate,
+                deletion_date,
+                verifying_key,
+                signature
+            FROM _node_deletion_log
+            WHERE 
+                room_id = ? AND
+                deletion_date >= ?2 AND deletion_date < ?3 
+        ",
+        )?;
+
+        let mut rows = stmt.query((room_id, date(del_date), date_next_day(del_date)))?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            result.push(Self {
+                room_id: row.get(0)?,
+                id: row.get(1)?,
+                entity: row.get(2)?,
+                mdate: row.get(3)?,
+                deletion_date: row.get(4)?,
+                verifying_key: row.get(5)?,
+                signature: row.get(6)?,
+            })
+        }
+
+        Ok(result)
+    }
 }
 impl Writeable for NodeDeletionEntry {
     fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
@@ -618,16 +648,18 @@ impl Writeable for NodeDeletionEntry {
                 room_id,
                 id,
                 entity,
+                mdate,
                 deletion_date,
                 verifying_key,
                 signature
-            ) VALUES (?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?)
         ",
         )?;
         insert_stmt.execute((
             &self.room_id,
             &self.id,
             &self.entity,
+            &self.mdate,
             &self.deletion_date,
             &self.verifying_key,
             &self.signature,
@@ -855,8 +887,9 @@ mod tests {
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
-
+        let room_id = random32().to_vec();
         let mut node = Node {
+            room_id: Some(room_id.clone()),
             _entity: String::from(entity),
             ..Default::default()
         };
@@ -865,32 +898,24 @@ mod tests {
         Node::delete(&node.id, &conn).unwrap();
 
         let mut node_deletion_log = NodeDeletionEntry::build(
-            Vec::new(),
+            room_id.clone(),
             &node,
             now(),
             signing_key.export_verifying_key(),
             &signing_key,
         );
         node_deletion_log.write(&conn).unwrap();
-        let mut exists_stmt = conn
-            .prepare(
-                "SELECT  
-                        room_id,
-                        id,
-                        entity,
-                        deletion_date,
-                        verifying_key,
-                        signature 
-                    FROM _node_deletion_log",
-            )
-            .unwrap();
-        let node_deletion_log = exists_stmt
-            .query_row([], NodeDeletionEntry::MAPPING)
-            .unwrap();
-        node_deletion_log.verify().unwrap();
 
-        assert_eq!(&node.id, &node_deletion_log.id);
-        assert_eq!(&node._entity, &node_deletion_log.entity);
+        let deletion_logs =
+            NodeDeletionEntry::get_entries(&room_id, date(node_deletion_log.deletion_date), &conn)
+                .unwrap();
+
+        let entry = &deletion_logs[0];
+
+        assert_eq!(&node.room_id.unwrap(), &entry.room_id);
+        assert_eq!(&node.id, &entry.id);
+        assert_eq!(&node._entity, &entry.entity);
+        assert_eq!(&node.mdate, &entry.mdate);
     }
 
     #[test]

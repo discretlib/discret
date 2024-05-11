@@ -4,15 +4,14 @@ mod tests {
     use std::{collections::HashMap, fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random32, Ed25519SigningKey},
+        cryptography::{base64_decode, base64_encode, random32, Ed25519SigningKey},
         database::{
             authorisation_service::*,
             configuration::Configuration,
-            edge::EdgeDeletionEntry,
             graph_database::GraphDatabaseService,
-            node::NodeDeletionEntry,
             query_language::parameter::{Parameters, ParametersAdd},
         },
+        date_utils::now,
         event_service::EventService,
     };
 
@@ -1408,6 +1407,7 @@ mod tests {
             .unwrap();
 
         let room_insert = &room.mutate_entities[0];
+
         let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let mut param = Parameters::default();
@@ -1454,26 +1454,14 @@ mod tests {
         .await
         .unwrap();
 
-        let node_log_query = "SELECT  
-            room_id,
-            id,
-            entity,
-            deletion_date,
-            verifying_key,
-            signature 
-        FROM _node_deletion_log";
-
-        let res = app
-            .select(
-                node_log_query.to_string(),
-                Vec::new(),
-                NodeDeletionEntry::MAPPING,
-            )
+        let del_log = app
+            .get_room_node_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
             .await
             .unwrap();
-
-        assert_eq!(1, res.len());
-        assert_eq!(id2, base64_encode(&res[0].id));
+        assert_eq!(1, del_log.len());
+        let deletion_entry = &del_log[0];
+        deletion_entry.verify().unwrap();
+        assert_eq!(id2, base64_encode(&deletion_entry.id));
 
         let mut param = Parameters::default();
         param.add("id", id1.clone()).unwrap();
@@ -1489,30 +1477,16 @@ mod tests {
         )
         .await
         .unwrap();
-
-        let edge_log_query = "SELECT 
-                room_id,
-                src,
-                src_entity, 
-                dest,
-                label,
-                deletion_date,
-                verifying_key,
-                signature
-            FROM  _edge_deletion_log";
-
-        let res = app
-            .select(
-                edge_log_query.to_string(),
-                Vec::new(),
-                EdgeDeletionEntry::MAPPING,
-            )
+        let log_entries = app
+            .get_room_edge_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
             .await
             .unwrap();
 
-        assert_eq!(1, res.len());
-        assert_eq!(id1.clone(), base64_encode(&res[0].src));
-        assert_eq!(father_id.clone(), base64_encode(&res[0].dest));
+        assert_eq!(1, log_entries.len());
+        let deletion_entry = &log_entries[0];
+        deletion_entry.verify().unwrap();
+        assert_eq!(id1.clone(), base64_encode(&deletion_entry.src));
+        assert_eq!(father_id.clone(), base64_encode(&deletion_entry.dest));
 
         let mut param = Parameters::default();
         param.add("id", id1.clone()).unwrap();
@@ -1528,16 +1502,11 @@ mod tests {
         )
         .await
         .unwrap();
-
-        let res = app
-            .select(
-                edge_log_query.to_string(),
-                Vec::new(),
-                EdgeDeletionEntry::MAPPING,
-            )
+        let log_entries = app
+            .get_room_edge_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
             .await
             .unwrap();
 
-        assert_eq!(2, res.len());
+        assert_eq!(2, log_entries.len());
     }
 }
