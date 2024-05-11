@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::Connection;
+use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::date_utils::{date, date_next_day};
@@ -279,6 +279,16 @@ impl DailyLog {
             "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (room_id, need_recompute,  date)",
             [],
         )?;
+
+        conn.execute(
+            "
+                CREATE TABLE _room_changelog (
+                    room_id BLOB NOT NULL,
+                    mdate INTEGER NOT NULL,
+                    PRIMARY KEY(room_id)
+                ) WITHOUT ROWID, STRICT",
+            [],
+        )?;
         Ok(())
     }
 
@@ -323,6 +333,82 @@ impl RoomLog {
     }
 }
 
+///
+/// Used to transmit in one packet
+///  - The room modification date to check whether the room defintion needs to be synchronized
+///  - The last _daily_log entry to check whether the room data needs to be synchronized
+///
+#[derive(Serialize, Deserialize)]
+pub struct RoomDefinitionLog {
+    pub room_id: Vec<u8>,
+    pub room_def_date: i64,
+    pub last_data_date: i64,
+    pub entry_number: i64,
+    pub daily_hash: Option<Vec<u8>>,
+    pub history_hash: Option<Vec<u8>>,
+}
+impl RoomDefinitionLog {
+    pub fn add(room_id: &Vec<u8>, mdate: i64, conn: &Connection) -> Result<(), rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)",
+        )?;
+        stmt.execute((room_id, mdate))?;
+        Ok(())
+    }
+    pub fn get_logs(
+        room_ids: &HashSet<Vec<u8>>,
+        conn: &Connection,
+    ) -> Result<Vec<RoomDefinitionLog>, rusqlite::Error> {
+        let it = &mut room_ids.iter().peekable();
+        let mut q = String::new();
+        let mut ids = Vec::new();
+        while let Some(nid) = it.next() {
+            q.push('?');
+            if it.peek().is_some() {
+                q.push(',');
+            }
+            ids.push(nid);
+        }
+        let query = format!(
+            "
+            SELECT 
+                rcl.room_id as room_id,  
+                rcl.mdate as room_defintion_date, 
+                dl.date as last_data,
+                dl.entry_number,
+                dl.daily_hash,
+                dl.history_hash
+            FROM _room_changelog rcl
+            LEFT JOIN (
+                SELECT 
+                    _dl.room_id,
+                    _dl.date,
+                    _dl.entry_number,
+                    _dl.daily_hash,
+                    _dl.history_hash
+                FROM _daily_log _dl
+                WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
+            ) as dl ON rcl.room_id=dl.room_id
+            WHERE room_id IN ({})
+            ",
+            q
+        );
+        let mut stmt = conn.prepare(&query)?;
+        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            result.push(RoomDefinitionLog {
+                room_id: row.get(0)?,
+                room_def_date: row.get(1)?,
+                last_data_date: row.get(2)?,
+                entry_number: row.get(3)?,
+                daily_hash: row.get(4)?,
+                history_hash: row.get(5)?,
+            })
+        }
+        Ok(result)
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -382,7 +468,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
 
         let room = app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -431,7 +517,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
 
         let _ = app
-            .mutate(
+            .mutate_raw(
                 r#"
         mutation mutmut {
             P2: Person {room_id:$room_id name:"Alice" parents:[{name:"someone"}] }

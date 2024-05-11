@@ -608,7 +608,7 @@ mod tests {
         param.add("second_user_id", second_user_id.clone()).unwrap();
 
         let room = first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -645,7 +645,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id_b64.clone()).unwrap();
         let mutat = first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 P1: Person{
                     room_id: $room_id

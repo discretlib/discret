@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use rusqlite::{params_from_iter, Connection};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,7 +70,7 @@ impl Default for Configuration {
     }
 }
 
-pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "
         CREATE TABLE _configuration (
@@ -82,7 +80,6 @@ pub fn create_system_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
         ) WITHOUT ROWID, STRICT",
         [],
     )?;
-    RoomDefinitionLog::create_table(conn)?;
     Ok(())
 }
 
@@ -160,61 +157,3 @@ pub const SYSTEM_DATA_MODEL: &str = "
         mutate_self: Boolean,
         mutate_all: Boolean,
     }";
-
-#[derive(Serialize, Deserialize)]
-pub struct RoomDefinitionLog {
-    pub room_id: Vec<u8>,
-    pub mdate: i64,
-}
-impl RoomDefinitionLog {
-    pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
-        conn.execute(
-            "
-                CREATE TABLE _room_changelog (
-                    room_id BLOB NOT NULL,
-                    mdate INTEGER NOT NULL,
-                    PRIMARY KEY(room_id)
-                ) WITHOUT ROWID, STRICT",
-            [],
-        )?;
-        Ok(())
-    }
-
-    pub fn add(room_id: &Vec<u8>, mdate: i64, conn: &Connection) -> Result<(), rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)",
-        )?;
-        stmt.execute((room_id, mdate))?;
-        Ok(())
-    }
-    pub fn get_log(
-        room_ids: &HashSet<Vec<u8>>,
-        conn: &Connection,
-    ) -> Result<Vec<RoomDefinitionLog>, rusqlite::Error> {
-        let it = &mut room_ids.iter().peekable();
-        let mut q = String::new();
-        let mut ids = Vec::new();
-        while let Some(nid) = it.next() {
-            q.push('?');
-            if it.peek().is_some() {
-                q.push(',');
-            }
-            ids.push(nid);
-        }
-        let query = format!(
-            "
-            SELECT room_id, mdate FROM _room_changelog WHERE room_id IN ({})",
-            q
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
-        let mut result = Vec::new();
-        while let Some(row) = rows.next()? {
-            result.push(RoomDefinitionLog {
-                room_id: row.get(0)?,
-                mdate: row.get(1)?,
-            })
-        }
-        Ok(result)
-    }
-}

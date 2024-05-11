@@ -14,7 +14,7 @@ use crate::{
 use super::{
     authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
     configuration,
-    daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
+    daily_log::{DailyLog, DailyLogsUpdate, DailyMutations, RoomDefinitionLog},
     deletion::DeletionQuery,
     edge::Edge,
     mutation_query::MutationQuery,
@@ -152,7 +152,7 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
         Node::create_tables(conn)?;
         Edge::create_tables(conn)?;
         DailyLog::create_tables(&conn)?;
-        configuration::create_system_tables(conn)?;
+        configuration::create_table(conn)?;
         conn.execute("COMMIT", [])?;
     }
     Ok(())

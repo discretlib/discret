@@ -996,7 +996,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
 
         let room = app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -1086,7 +1086,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
 
         let room = app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -1155,7 +1155,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
 
         let room = app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -1191,7 +1191,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
         param.add("room_id", room_id.clone()).unwrap();
-        app.mutate(
+        app.mutate_raw(
             r#"mutation mut {
                 _Room{
                     id:$room_id
@@ -1216,7 +1216,7 @@ mod tests {
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
-        app.mutate(
+        app.mutate_raw(
             r#"mutation mut {
             Person{
                 room_id: $room_id
@@ -1235,7 +1235,7 @@ mod tests {
         //we are still able to insert data
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
-        app.mutate(
+        app.mutate_raw(
             r#"mutation mut {
             Person{
                 room_id: $room_id
@@ -1307,7 +1307,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -1354,7 +1354,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
             Person{
                 room_id: $room_id
@@ -1370,7 +1370,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 Person{
                     room_id: $room_id
@@ -1390,7 +1390,7 @@ mod tests {
         param.add("user_id", second_user_id.clone()).unwrap();
 
         first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 _Room{
                     id:$room_id
@@ -1414,7 +1414,7 @@ mod tests {
         param.add("user_id", second_user_id.clone()).unwrap();
 
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         id:$room_id
@@ -1445,7 +1445,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 Person{
                     room_id: $room_id
@@ -1465,7 +1465,7 @@ mod tests {
         param.add("user_id", second_user_id.clone()).unwrap();
 
         first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                         _Room{
                             id:$room_id
@@ -1500,7 +1500,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
             Person{
                 room_id: $room_id
@@ -1549,7 +1549,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{
@@ -1582,7 +1582,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         param.add("second_user", second_user_id.clone()).unwrap();
         first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         id: $room_id
@@ -1604,7 +1604,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         param.add("second_user", second_user_id.clone()).unwrap();
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                         _Room{
                             id: $room_id
@@ -1638,7 +1638,7 @@ mod tests {
         param.add("third_user", third_user.clone()).unwrap();
 
         first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 _Room{
                     id: $room_id
@@ -1662,7 +1662,7 @@ mod tests {
         param.add("third_user", third_user.clone()).unwrap();
 
         second_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                 _Room{
                     id: $room_id
@@ -1735,7 +1735,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
-            .mutate(
+            .mutate_raw(
                 r#"mutation mut {
                     _Room{
                         admin: [{

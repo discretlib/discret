@@ -4,8 +4,7 @@ use std::collections::HashSet;
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::configuration::RoomDefinitionLog;
-use super::daily_log::RoomLog;
+use super::daily_log::{RoomDefinitionLog, RoomLog};
 use super::node::{Node, NodeIdentifier};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
@@ -181,7 +180,7 @@ impl GraphDatabaseService {
     /// GraphQL mutation query
     ///
     ///
-    pub async fn mutate(
+    pub async fn mutate_raw(
         &self,
         mutation: &str,
         param_opt: Option<Parameters>,
@@ -239,8 +238,23 @@ impl GraphDatabaseService {
     }
 
     ///
-    /// get a database definition of a room
-    /// used for synchronisation
+    /// get all room id and modification date for a user
+    ///
+    pub async fn get_rooms_for_user(
+        &self,
+        verifying_key: Vec<u8>,
+    ) -> Result<Vec<RoomDefinitionLog>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<RoomDefinitionLog>>>();
+        let _ = self
+            .sender
+            .send(Message::RoomForUser(verifying_key, send_response))
+            .await;
+
+        receive_response.await?
+    }
+    ///
+    /// get a full database definition of a room
     ///
     pub async fn get_room_node(&self, room_id: Vec<u8>) -> Result<Option<RoomNode>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Option<RoomNode>>>();
@@ -345,20 +359,6 @@ impl GraphDatabaseService {
                 let _ = send_response.send(room_log);
             }))
             .await?;
-        receive_response.await?
-    }
-
-    pub async fn get_room_for_user(
-        &self,
-        verifying_key: Vec<u8>,
-    ) -> Result<Vec<RoomDefinitionLog>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<RoomDefinitionLog>>>();
-        let _ = self
-            .sender
-            .send(Message::RoomForUser(verifying_key, send_response))
-            .await;
-
         receive_response.await?
     }
 }
@@ -547,7 +547,7 @@ impl GraphDatabase {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let mutation_query = MutationQuery::build(&parameters, mutation, conn);
+                let mutation_query = MutationQuery::build(&parameters, mutation.clone(), conn);
 
                 match mutation_query {
                     Ok(muta) => {
@@ -740,7 +740,7 @@ impl GraphDatabase {
                     .graph_database
                     .reader
                     .send_async(Box::new(move |conn| {
-                        let log = RoomDefinitionLog::get_log(&room_ids, conn).map_err(Error::from);
+                        let log = RoomDefinitionLog::get_logs(&room_ids, conn).map_err(Error::from);
                         let _ = reply.send(log);
                     }))
                     .await;
@@ -807,7 +807,7 @@ mod tests {
         .await
         .unwrap();
 
-        app.mutate(
+        app.mutate_raw(
             r#"
         mutation mutmut {
             P2: Person { name:"Alice"  }
@@ -854,7 +854,7 @@ mod tests {
         .unwrap();
 
         let res = app
-            .mutate(
+            .mutate_raw(
                 r#"
         mutation mutmut {
             P2: Person { name:"Alice"  }

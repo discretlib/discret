@@ -14,11 +14,10 @@ use crate::{
 use super::{
     authorisation_sync::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     configuration::{
-        self, RoomDefinitionLog, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD,
-        MODIFICATION_DATE_FIELD, ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT,
-        ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
+        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
     },
-    daily_log::DailyMutations,
+    daily_log::{DailyMutations, RoomDefinitionLog},
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},

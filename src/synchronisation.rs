@@ -9,7 +9,6 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    os::unix::process,
     time::Duration,
 };
 
@@ -103,7 +102,7 @@ impl RemotePeerQueryHandler {
     async fn load_allowed_room(&mut self) {
         let r = self
             .local_db
-            .get_room_for_user(self.verifying_key.clone())
+            .get_rooms_for_user(self.verifying_key.clone())
             .await;
         match r {
             Ok(rooms) => {
