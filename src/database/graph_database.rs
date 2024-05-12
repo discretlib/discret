@@ -9,12 +9,10 @@ use super::edge::EdgeDeletionEntry;
 use super::node::{Node, NodeDeletionEntry, NodeIdentifier};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
-    authorisation_sync::RoomNode,
     configuration::{Configuration, SYSTEM_DATA_MODEL},
     daily_log::DailyLogsUpdate,
     deletion::DeletionQuery,
     mutation_query::MutationQuery,
-    node_full::FullNode,
     query::{PreparedQueries, Query},
     query_language::{
         data_model_parser::DataModel, deletion_parser::DeletionParser,
@@ -26,6 +24,8 @@ use super::{
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
 use crate::date_utils::now;
 use crate::event_service::EventService;
+use crate::synchronisation::authorisation_node::RoomNode;
+use crate::synchronisation::node_full::FullNode;
 
 const LRU_SIZE: usize = 128;
 

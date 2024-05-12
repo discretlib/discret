@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::cryptography::base64_decode;
 
-use super::{
+use crate::database::{
     daily_log::DailyMutations,
     edge::Edge,
     node::{extract_json, Node, NodeIdentifier},
@@ -342,7 +342,6 @@ mod tests {
     use crate::{
         cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
-            authorisation_sync::RoomNode,
             configuration::Configuration,
             graph_database::GraphDatabaseService,
             node::NodeIdentifier,
@@ -350,6 +349,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
+        synchronisation::authorisation_node::RoomNode,
     };
 
     use super::*;

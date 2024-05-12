@@ -6,10 +6,15 @@ use crate::{
     cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
+    synchronisation::{
+        authorisation_node::{
+            parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode,
+        },
+        node_full::FullNode,
+    },
 };
 
 use super::{
-    authorisation_sync::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     configuration::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
         ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
@@ -19,7 +24,6 @@ use super::{
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
-    node_full::FullNode,
     room::*,
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,

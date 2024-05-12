@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cryptography::base64_decode;
 
-use super::{
+use crate::database::{
     configuration::{
         AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
         ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
@@ -947,12 +947,10 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
 
     use crate::{
         cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
-            authorisation_sync::*,
             configuration::{Configuration, ROOM_AUTHORISATION_FIELD},
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
@@ -960,7 +958,9 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
+        synchronisation::authorisation_node::*,
     };
+    use std::{fs, path::PathBuf};
     const DATA_PATH: &str = "test_data/database/authorisation_synch_test/";
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();

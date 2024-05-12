@@ -1,6 +1,5 @@
 pub mod authorisation_service;
 pub mod authorisation_service_test;
-pub mod authorisation_sync;
 pub mod configuration;
 pub mod daily_log;
 pub mod deletion;
@@ -8,7 +7,6 @@ pub mod edge;
 pub mod graph_database;
 pub mod mutation_query;
 pub mod node;
-pub mod node_full;
 pub mod query;
 pub mod query_language;
 pub mod query_test;

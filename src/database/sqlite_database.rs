@@ -9,6 +9,7 @@ use tokio::sync::{
 use crate::{
     cryptography::{base64_decode, base64_encode},
     event_service::EventServiceMessage,
+    synchronisation::node_full::FullNode,
 };
 
 use super::{
@@ -19,7 +20,6 @@ use super::{
     edge::Edge,
     mutation_query::MutationQuery,
     node::Node,
-    node_full::FullNode,
     Error, Result,
 };
 
