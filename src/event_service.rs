@@ -1,6 +1,6 @@
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::database::{authorisation_service::Room, daily_log::DailyLogsUpdate};
+use crate::database::{daily_log::DailyLogsUpdate, room::Room};
 
 pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<EventMessage>>),

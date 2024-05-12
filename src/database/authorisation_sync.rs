@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::cryptography::base64_decode;
 
 use super::{
-    authorisation_service::{Authorisation, EntityRight, Room, User},
     configuration::{
         AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
         ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
@@ -16,6 +15,7 @@ use super::{
     },
     edge::Edge,
     node::Node,
+    room::{Authorisation, EntityRight, Room, User},
     Error, Result,
 };
 
@@ -952,11 +952,11 @@ mod tests {
     use crate::{
         cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
-            authorisation_service::RightType,
             authorisation_sync::*,
             configuration::{Configuration, ROOM_AUTHORISATION_FIELD},
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
+            room::RightType,
         },
         date_utils::now,
         event_service::EventService,

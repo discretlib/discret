@@ -10,6 +10,7 @@ mod tests {
             configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
+            room::{Authorisation, EntityRight, RightType, Room, User},
         },
         date_utils::now,
         event_service::EventService,

@@ -12,6 +12,7 @@ pub mod node_full;
 pub mod query;
 pub mod query_language;
 pub mod query_test;
+pub mod room;
 pub mod sqlite_database;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
