@@ -1,10 +1,10 @@
 use lru::LruCache;
 use rusqlite::{OptionalExtension, ToSql};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::daily_log::{RoomDefinitionLog, RoomLog};
+use super::daily_log::{DailyLog, RoomDefinitionLog, RoomLog};
 use super::edge::EdgeDeletionEntry;
 use super::node::{Node, NodeDeletionEntry, NodeIdentifier};
 use super::{
@@ -36,7 +36,7 @@ enum Message {
     UpdateModel(String, Sender<Result<String>>),
     RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
-    RoomForUser(Vec<u8>, Sender<Result<Vec<RoomDefinitionLog>>>),
+    RoomForUser(Vec<u8>, Sender<Result<VecDeque<Vec<u8>>>>),
     ComputeDailyLog(),
 }
 ///
@@ -136,7 +136,7 @@ impl GraphDatabaseService {
                     }
 
                     Message::RoomForUser(verifying_key, reply) => {
-                        service.get_room_for_user(verifying_key, reply).await;
+                        service.get_rooms_for_user(verifying_key, reply).await;
                     }
                 }
             }
@@ -257,22 +257,6 @@ impl GraphDatabaseService {
     }
 
     ///
-    /// get all room id and modification date for a user
-    ///
-    pub async fn get_rooms_for_user(
-        &self,
-        verifying_key: Vec<u8>,
-    ) -> Result<Vec<RoomDefinitionLog>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<RoomDefinitionLog>>>();
-        let _ = self
-            .sender
-            .send(Message::RoomForUser(verifying_key, send_response))
-            .await;
-
-        receive_response.await?
-    }
-    ///
     /// get a full database definition of a room
     ///
     pub async fn get_room_node(&self, room_id: Vec<u8>) -> Result<Option<RoomNode>> {
@@ -295,6 +279,88 @@ impl GraphDatabaseService {
         let (send_response, receive_response) = oneshot::channel::<Result<()>>();
         let msg = Message::RoomAdd(room, send_response);
         let _ = self.sender.send(msg).await;
+        receive_response.await?
+    }
+
+    ///
+    /// get all room id ordered by last modification date
+    ///
+    pub async fn get_rooms_for_user(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<VecDeque<Vec<u8>>>>();
+        let _ = self
+            .sender
+            .send(Message::RoomForUser(verifying_key, send_response))
+            .await;
+
+        receive_response.await?
+    }
+
+    ///
+    /// get the most recent log and the last definition modification date
+    ///
+    pub async fn get_room_definition(&self, room_id: Vec<u8>) -> Result<Option<RoomDefinitionLog>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Option<RoomDefinitionLog>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_log = RoomDefinitionLog::get(&room_id, conn).map_err(Error::from);
+                let _ = send_response.send(room_log);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get the complete dayly log for a specific room
+    ///
+    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<RoomLog>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_log = RoomLog::get_all(&room_id, conn).map_err(Error::from);
+                let _ = send_response.send(room_log);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get node deletions for a room at a specific day
+    ///
+    pub async fn get_room_node_deletion_log(
+        &self,
+        room_id: Vec<u8>,
+        del_date: i64,
+    ) -> Result<Vec<NodeDeletionEntry>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let deteletions =
+                    NodeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let _ = send_response.send(deteletions);
+            }))
+            .await?;
+        receive_response.await?
+    }
+
+    ///
+    /// get edge deletions for a room at a specific day
+    ///
+    pub async fn get_room_edge_deletion_log(
+        &self,
+        room_id: Vec<u8>,
+        del_date: i64,
+    ) -> Result<Vec<EdgeDeletionEntry>> {
+        let (send_response, receive_response) =
+            oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let deteletions =
+                    EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let _ = send_response.send(deteletions);
+            }))
+            .await?;
         receive_response.await?
     }
 
@@ -364,60 +430,6 @@ impl GraphDatabaseService {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
         let msg = Message::FullNodeAdd(nodes, send_response);
         let _ = self.sender.send(msg).await;
-        receive_response.await?
-    }
-
-    ///
-    /// get the complete dayly log for a specific room
-    ///
-    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<RoomLog>>>();
-        self.database_reader
-            .send_async(Box::new(move |conn| {
-                let room_log = RoomLog::get_all(&room_id, conn).map_err(Error::from);
-                let _ = send_response.send(room_log);
-            }))
-            .await?;
-        receive_response.await?
-    }
-
-    ///
-    /// get node deletions for a room at a specific day
-    ///
-    pub async fn get_room_node_deletion_log(
-        &self,
-        room_id: Vec<u8>,
-        del_date: i64,
-    ) -> Result<Vec<NodeDeletionEntry>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
-        self.database_reader
-            .send_async(Box::new(move |conn| {
-                let deteletions =
-                    NodeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
-                let _ = send_response.send(deteletions);
-            }))
-            .await?;
-        receive_response.await?
-    }
-
-    ///
-    /// get edge deletions for a room at a specific day
-    ///
-    pub async fn get_room_edge_deletion_log(
-        &self,
-        room_id: Vec<u8>,
-        del_date: i64,
-    ) -> Result<Vec<EdgeDeletionEntry>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
-        self.database_reader
-            .send_async(Box::new(move |conn| {
-                let deteletions =
-                    EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
-                let _ = send_response.send(deteletions);
-            }))
-            .await?;
         receive_response.await?
     }
 }
@@ -780,10 +792,10 @@ impl GraphDatabase {
             .await;
     }
 
-    pub async fn get_room_for_user(
+    pub async fn get_rooms_for_user(
         &self,
         verifying_key: Vec<u8>,
-        reply: Sender<Result<Vec<RoomDefinitionLog>>>,
+        reply: Sender<Result<VecDeque<Vec<u8>>>>,
     ) {
         let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
         let _ = self.auth_service.send(AuthorisationMessage::RoomForUser(
@@ -799,7 +811,7 @@ impl GraphDatabase {
                     .graph_database
                     .reader
                     .send_async(Box::new(move |conn| {
-                        let log = RoomDefinitionLog::get_logs(&room_ids, conn).map_err(Error::from);
+                        let log = DailyLog::sort_rooms(&room_ids, conn).map_err(Error::from);
                         let _ = reply.send(log);
                     }))
                     .await;

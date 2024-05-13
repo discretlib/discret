@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    peer::{RemotePeerQueryHandler, RemotePeerQueryService},
+    remote_peer::{QueryService, RemotePeerHandle},
     room_lock::RoomLockService,
     Protocol, QueryProtocol,
 };
@@ -20,7 +20,7 @@ pub enum PeerConnectionMessage {
         mpsc::Sender<Protocol>,
         mpsc::Receiver<QueryProtocol>,
     ),
-    DisconnectPeer(i64),
+    DisconnectPeer(usize),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
@@ -43,12 +43,12 @@ impl PeerConnectionService {
         let ret = mgmt.clone();
         tokio::spawn(async move {
             let mut peer_map = HashMap::new();
-            let mut peer_id: i64 = 1;
+            let mut peer_id: usize = 1;
 
             while let Some(msg) = receiver.recv().await {
                 match msg {
                     PeerConnectionMessage::NewPeer(verifying_key, reply, receiver) => {
-                        let peer = RemotePeerQueryHandler {
+                        let peer = RemotePeerHandle {
                             connection_id: peer_id,
                             verifying_key: verifying_key.clone(),
                             local_db: local_db.clone(),
@@ -57,7 +57,7 @@ impl PeerConnectionService {
                             reply,
                         };
 
-                        let peer_query_service = RemotePeerQueryService::new(peer, receiver);
+                        let peer_query_service = QueryService::new(peer, receiver);
 
                         peer_map.insert(peer_id, peer_query_service);
 
@@ -88,5 +88,12 @@ impl PeerConnectionService {
             }
         });
         ret
+    }
+
+    pub async fn disconnect(&self, id: usize) {
+        let _ = self
+            .sender
+            .send(PeerConnectionMessage::DisconnectPeer(id))
+            .await;
     }
 }

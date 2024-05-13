@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
@@ -302,6 +302,79 @@ impl DailyLog {
             need_recompute: row.get(5)?,
         }))
     };
+
+    ///
+    /// get room list sorted by modification date
+    /// allows synchronisation to start with the most recently updated rooms
+    ///
+    pub fn sort_rooms(
+        room_ids: &HashSet<Vec<u8>>,
+        conn: &Connection,
+    ) -> Result<VecDeque<Vec<u8>>, rusqlite::Error> {
+        let it = &mut room_ids.iter().peekable();
+
+        struct QueryParams<'a> {
+            in_clause: String,
+            ids: Vec<&'a Vec<u8>>,
+        }
+        //limit the IN clause to a reasonable size, avoiding the 32766 parameter limit in sqlite
+        let row_per_query = 500;
+        let mut query_list = Vec::new();
+        let mut row_num = 0;
+        let mut current_query = QueryParams {
+            in_clause: String::new(),
+            ids: Vec::new(),
+        };
+
+        while let Some(nid) = it.next() {
+            current_query.in_clause.push('?');
+            current_query.ids.push(nid);
+
+            row_num += 1;
+            if row_num < row_per_query {
+                if it.peek().is_some() {
+                    current_query.in_clause.push(',');
+                }
+            } else {
+                query_list.push(current_query);
+                row_num = 0;
+                current_query = QueryParams {
+                    in_clause: String::new(),
+                    ids: Vec::new(),
+                };
+            }
+        }
+        if !current_query.ids.is_empty() {
+            query_list.push(current_query);
+        }
+
+        let mut result = VecDeque::new();
+        for i in 0..query_list.len() {
+            let current_query = &query_list[0];
+            let ids = &current_query.ids;
+            let in_clause = &current_query.in_clause;
+            let offset = i * row_per_query;
+
+            let query = format!(
+                "SELECT 
+                    dl.room_id
+                FROM _daily_log dl
+                WHERE 
+                    date = (SELECT MAX(date) FROM _daily_log WHERE dl.room_id=_daily_log.room_id) 
+                    AND
+                    dl.room_id in ({})
+                ORDER BY dl.date ASC
+                LIMIT {}, {} ",
+                in_clause, offset, row_per_query
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut rows = stmt.query(params_from_iter(ids.iter()))?;
+            while let Some(row) = rows.next()? {
+                result.push_back(row.get(0)?)
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -312,7 +385,7 @@ pub struct RoomLog {
 }
 impl RoomLog {
     pub const LOG_QUERY: &'static str = "
-        SELECT date, entry_number,  daily_hash
+        SELECT date, entry_number, daily_hash
         FROM _daily_log 
         WHERE room_id = ? 
         ORDER BY date ASC
@@ -355,22 +428,12 @@ impl RoomDefinitionLog {
         stmt.execute((room_id, mdate))?;
         Ok(())
     }
-    pub fn get_logs(
-        room_ids: &HashSet<Vec<u8>>,
+
+    pub fn get(
+        room_id: &Vec<u8>,
         conn: &Connection,
-    ) -> Result<Vec<RoomDefinitionLog>, rusqlite::Error> {
-        let it = &mut room_ids.iter().peekable();
-        let mut q = String::new();
-        let mut ids = Vec::new();
-        while let Some(nid) = it.next() {
-            q.push('?');
-            if it.peek().is_some() {
-                q.push(',');
-            }
-            ids.push(nid);
-        }
-        let query = format!(
-            "
+    ) -> Result<Option<RoomDefinitionLog>, rusqlite::Error> {
+        let query = "
             SELECT 
                 rcl.room_id as room_id,  
                 rcl.mdate as room_defintion_date, 
@@ -389,15 +452,12 @@ impl RoomDefinitionLog {
                 FROM _daily_log _dl
                 WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
             ) as dl ON rcl.room_id=dl.room_id
-            WHERE room_id IN ({})
-            ",
-            q
-        );
+            WHERE room_id = ?
+            ";
         let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
-        let mut result = Vec::new();
-        while let Some(row) = rows.next()? {
-            result.push(RoomDefinitionLog {
+        let mut rows = stmt.query([&room_id])?;
+        let res = if let Some(row) = rows.next()? {
+            Some(RoomDefinitionLog {
                 room_id: row.get(0)?,
                 room_def_date: row.get(1)?,
                 last_data_date: row.get(2)?,
@@ -405,8 +465,10 @@ impl RoomDefinitionLog {
                 daily_hash: row.get(4)?,
                 history_hash: row.get(5)?,
             })
-        }
-        Ok(result)
+        } else {
+            None
+        };
+        Ok(res)
     }
 }
 #[cfg(test)]

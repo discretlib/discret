@@ -6,16 +6,16 @@ pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<EventMessage>>),
     ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, i64),
-    PeerDisconnected(Vec<u8>, i64, i64),
+    PeerConnected(Vec<u8>, i64, usize),
+    PeerDisconnected(Vec<u8>, i64, usize),
 }
 
 #[derive(Clone)]
 pub enum EventMessage {
     ComputedDailyLog(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, i64),
-    PeerDisconnected(Vec<u8>, i64, i64),
+    PeerConnected(Vec<u8>, i64, usize),
+    PeerDisconnected(Vec<u8>, i64, usize),
 }
 
 #[derive(Clone)]
