@@ -8,61 +8,30 @@
 //updater le daily log
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     time::Duration,
 };
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::{
     sync::{mpsc, oneshot},
     time::timeout,
 };
 
-use crate::{
-    database::{daily_log::RoomLog, graph_database::GraphDatabaseService},
-    date_utils::now,
-    event_service::{EventService, EventServiceMessage},
+use crate::database::{daily_log::RoomLog, graph_database::GraphDatabaseService};
+
+use super::{
+    peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
+    room_lock::RoomLockService,
+    AnswerProtocol, ErrorType, Protocol, Query, QueryProtocol,
 };
-
-#[derive(Serialize, Deserialize)]
-pub enum Query {
-    RoomLog(Vec<u8>),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct QueryProtocol {
-    id: u64,
-    query: Query,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct AnswerProtocol {
-    id: u64,
-    success: bool,
-    serialized: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum Protocol {
-    Answer(AnswerProtocol),
-    Query(QueryProtocol),
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum ErrorType {
-    Authorisation,
-    RemoteTechnical,
-    TimeOut,
-    Parsing,
-    Technical,
-}
 
 ///
 /// handle all inbound queries
 ///
 #[derive(Clone)]
 pub struct RemotePeerQueryService {
-    verifying_key: Vec<u8>,
+    pub verifying_key: Vec<u8>,
 }
 impl RemotePeerQueryService {
     pub fn new(peer: RemotePeerQueryHandler, mut receiver: mpsc::Receiver<QueryProtocol>) -> Self {
@@ -91,12 +60,12 @@ impl RemotePeerQueryService {
 }
 
 pub struct RemotePeerQueryHandler {
-    connection_id: i64,
-    verifying_key: Vec<u8>,
-    allowed_room: HashSet<Vec<u8>>,
-    local_db: GraphDatabaseService,
-    peer_mgmt_service: PeerConnectionService,
-    reply: mpsc::Sender<Protocol>,
+    pub connection_id: i64,
+    pub verifying_key: Vec<u8>,
+    pub allowed_room: HashSet<Vec<u8>>,
+    pub local_db: GraphDatabaseService,
+    pub peer_mgmt_service: PeerConnectionService,
+    pub reply: mpsc::Sender<Protocol>,
 }
 impl RemotePeerQueryHandler {
     async fn load_allowed_room(&mut self) {
@@ -202,14 +171,14 @@ impl LocalPeerQueryService {
 }
 
 pub struct PeerSynchronisation {
-    connection_id: i64,
-    verifying_key: Vec<u8>,
-    remote_rooms: HashSet<Vec<u8>>,
-    local_db: GraphDatabaseService,
-    peer_mgmt_service: PeerConnectionService,
-    sync_lock: SynchLockService,
-    query_service: LocalPeerQueryService,
-    current_sync_room: Option<Vec<u8>>,
+    pub connection_id: i64,
+    pub verifying_key: Vec<u8>,
+    pub remote_rooms: HashSet<Vec<u8>>,
+    pub local_db: GraphDatabaseService,
+    pub peer_mgmt_service: PeerConnectionService,
+    pub sync_lock: RoomLockService,
+    pub query_service: LocalPeerQueryService,
+    pub current_sync_room: Option<Vec<u8>>,
 }
 impl PeerSynchronisation {
     pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>, ErrorType> {
@@ -265,150 +234,6 @@ impl PeerSynchronisation {
         // if let Some(synch) = self.current_sync_room {
         //     self.sync_lock
         // }
-    }
-}
-
-enum PeerConnectionMessage {
-    NewPeer(
-        Vec<u8>,
-        mpsc::Sender<Protocol>,
-        mpsc::Receiver<QueryProtocol>,
-    ),
-    DisconnectPeer(i64),
-}
-
-static PEER_CHANNEL_SIZE: usize = 32;
-
-///
-/// Handle the creation and removal of peers
-///
-#[derive(Clone)]
-pub struct PeerConnectionService {
-    sender: mpsc::Sender<PeerConnectionMessage>,
-}
-impl PeerConnectionService {
-    pub fn new(
-        local_db: GraphDatabaseService,
-        sync_lock: SynchLockService,
-        event_service: EventService,
-    ) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
-        let mgmt = Self { sender };
-        let ret = mgmt.clone();
-        tokio::spawn(async move {
-            let mut peer_map = HashMap::new();
-            let mut peer_id: i64 = 1;
-
-            while let Some(msg) = receiver.recv().await {
-                match msg {
-                    PeerConnectionMessage::NewPeer(verifying_key, reply, receiver) => {
-                        let peer = RemotePeerQueryHandler {
-                            connection_id: peer_id,
-                            verifying_key: verifying_key.clone(),
-                            local_db: local_db.clone(),
-                            allowed_room: HashSet::new(),
-                            peer_mgmt_service: mgmt.clone(),
-                            reply,
-                        };
-
-                        let peer_query_service = RemotePeerQueryService::new(peer, receiver);
-
-                        peer_map.insert(peer_id, peer_query_service);
-
-                        //notify connection
-                        event_service
-                            .notify(EventServiceMessage::PeerConnected(
-                                verifying_key,
-                                now(),
-                                peer_id,
-                            ))
-                            .await;
-
-                        peer_id += 1;
-                    }
-                    PeerConnectionMessage::DisconnectPeer(id) => {
-                        if let Some(peer) = peer_map.remove(&id) {
-                            //notify disconnect
-                            event_service
-                                .notify(EventServiceMessage::PeerDisconnected(
-                                    peer.verifying_key.clone(),
-                                    now(),
-                                    id,
-                                ))
-                                .await;
-                        }
-                    }
-                }
-            }
-        });
-        ret
-    }
-}
-
-pub enum SyncLockMessage {
-    Lock(Vec<u8>, oneshot::Sender<()>),
-    Unlock(Vec<u8>),
-}
-
-static LOCK_CHANNEL_SIZE: usize = 32;
-#[derive(Clone)]
-
-///
-/// peer trying to synchronize room must first acquire a lock on the room to avoid having several peers trying to synchronize the same room at the same time
-/// also limits the maximum number of rooms that can be synchronized at the same time.
-///
-pub struct SynchLockService {
-    sender: mpsc::Sender<SyncLockMessage>,
-}
-impl SynchLockService {
-    pub fn new(max_lock: usize) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<SyncLockMessage>(LOCK_CHANNEL_SIZE);
-        tokio::spawn(async move {
-            let mut lock: HashSet<Vec<u8>> = HashSet::new();
-            let mut awaiting_lock: HashMap<Vec<u8>, VecDeque<oneshot::Sender<()>>> = HashMap::new();
-
-            let mut avalaible = max_lock;
-            let mut waiting_list: VecDeque<(Vec<u8>, oneshot::Sender<()>)> = VecDeque::new();
-
-            while let Some(msg) = receiver.recv().await {
-                match msg {
-                    SyncLockMessage::Lock(id, reply) => {
-                        if lock.contains(&id) {
-                            let entry = awaiting_lock.entry(id).or_insert(VecDeque::new());
-                            entry.push_back(reply)
-                        } else if avalaible > 0 {
-                            let r = reply.send(());
-                            if let Ok(_) = r {
-                                lock.insert(id);
-                                avalaible -= 1;
-                            }
-                        } else {
-                            waiting_list.push_back((id, reply));
-                        }
-                    }
-                    SyncLockMessage::Unlock(id) => {
-                        lock.remove(&id);
-                        avalaible += 1;
-                        if let Some(waiting) = awaiting_lock.get_mut(&id) {
-                            if let Some(reply) = waiting.pop_front() {
-                                let r = reply.send(());
-                                if let Ok(_) = r {
-                                    lock.insert(id);
-                                    avalaible -= 1;
-                                }
-                            }
-                        } else if let Some(entry) = waiting_list.pop_front() {
-                            let r = entry.1.send(());
-                            if let Ok(_) = r {
-                                lock.insert(id);
-                                avalaible -= 1;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        Self { sender }
     }
 }
 
