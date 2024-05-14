@@ -30,6 +30,7 @@ use super::{
 };
 
 pub enum AuthorisationMessage {
+    Sign(Vec<u8>, Sender<(Vec<u8>, Vec<u8>)>),
     Load(String, Sender<super::Result<()>>),
     Deletion(DeletionQuery, Sender<super::Result<DeletionQuery>>),
     Mutation(MutationQuery, Sender<super::Result<MutationQuery>>),
@@ -261,6 +262,11 @@ impl AuthorisationService {
                 let query = WriteMessage::FullNode(write_nodes, invalid_node, reply);
 
                 let _ = database_writer.send(query).await;
+            }
+            AuthorisationMessage::Sign(data, reply) => {
+                let verifying = auth.signing_key.export_verifying_key();
+                let signature = auth.signing_key.sign(&data);
+                let _ = reply.send((verifying, signature));
             }
         }
     }

@@ -34,6 +34,7 @@ enum Message {
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
+    Sign(Vec<u8>, Sender<(Vec<u8>, Vec<u8>)>),
     RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
     RoomForUser(Vec<u8>, Sender<Result<VecDeque<Vec<u8>>>>),
@@ -71,6 +72,12 @@ impl GraphDatabaseService {
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
+                    Message::Sign(data, reply) => {
+                        let _ = service
+                            .auth_service
+                            .send(AuthorisationMessage::Sign(data, reply))
+                            .await;
+                    }
                     Message::Query(query, parameters, reply) => {
                         let q = service.get_cached_query(&query);
                         match q {
@@ -254,6 +261,16 @@ impl GraphDatabaseService {
         let msg = Message::UpdateModel(query.to_string(), send);
         let _ = self.sender.send(msg).await;
         recieve.await?
+    }
+
+    ///
+    /// sign a byte array
+    /// returns  
+    ///
+    pub async fn sign(&self, data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+        let (send_response, receive_response) = oneshot::channel::<(Vec<u8>, Vec<u8>)>();
+        let _ = self.sender.send(Message::Sign(data, send_response)).await;
+        receive_response.await.unwrap()
     }
 
     ///

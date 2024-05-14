@@ -6,16 +6,16 @@ pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<EventMessage>>),
     ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, usize),
-    PeerDisconnected(Vec<u8>, i64, usize),
+    PeerConnected(Vec<u8>, i64, Vec<u8>),
+    PeerDisconnected(Vec<u8>, i64, Vec<u8>),
 }
 
 #[derive(Clone)]
 pub enum EventMessage {
     ComputedDailyLog(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, usize),
-    PeerDisconnected(Vec<u8>, i64, usize),
+    PeerConnected(Vec<u8>, i64, Vec<u8>),
+    PeerDisconnected(Vec<u8>, i64, Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -31,6 +31,9 @@ impl EventService {
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
+                    EventServiceMessage::Subscribe(reply) => {
+                        let _ = reply.send(broadcast.subscribe());
+                    }
                     EventServiceMessage::ComputedDailyLog(res) => {
                         let _ = match res {
                             Ok(e) => broadcast.send(EventMessage::ComputedDailyLog(Ok(e))),
@@ -39,19 +42,22 @@ impl EventService {
                             }
                         };
                     }
-                    EventServiceMessage::Subscribe(reply) => {
-                        let _ = reply.send(broadcast.subscribe());
-                    }
                     EventServiceMessage::RoomModified(room) => {
                         let _ = broadcast.send(EventMessage::RoomModified(room));
                     }
-                    EventServiceMessage::PeerConnected(verifying_key, date, id) => {
-                        let _ =
-                            broadcast.send(EventMessage::PeerConnected(verifying_key, date, id));
+                    EventServiceMessage::PeerConnected(verifying_key, date, hardware_key) => {
+                        let _ = broadcast.send(EventMessage::PeerConnected(
+                            verifying_key,
+                            date,
+                            hardware_key,
+                        ));
                     }
-                    EventServiceMessage::PeerDisconnected(verifying_key, date, id) => {
-                        let _ =
-                            broadcast.send(EventMessage::PeerDisconnected(verifying_key, date, id));
+                    EventServiceMessage::PeerDisconnected(verifying_key, date, hardware_key) => {
+                        let _ = broadcast.send(EventMessage::PeerDisconnected(
+                            verifying_key,
+                            date,
+                            hardware_key,
+                        ));
                     }
                 };
             }

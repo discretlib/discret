@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::sync::mpsc;
 
 pub enum SyncLockMessage {
-    RequestLock(usize, VecDeque<Vec<u8>>, mpsc::UnboundedSender<Vec<u8>>),
+    RequestLock(Vec<u8>, VecDeque<Vec<u8>>, mpsc::UnboundedSender<Vec<u8>>),
     Unlock(Vec<u8>),
 }
 
@@ -25,8 +25,8 @@ impl RoomLockService {
     pub fn new(max_lock: usize) -> Self {
         let (sender, mut receiver) = mpsc::channel::<SyncLockMessage>(LOCK_CHANNEL_SIZE);
         tokio::spawn(async move {
-            let mut peer_lock_request: HashMap<usize, PeerLockRequest> = HashMap::new();
-            let mut peer_queue: VecDeque<usize> = VecDeque::new();
+            let mut peer_lock_request: HashMap<Vec<u8>, PeerLockRequest> = HashMap::new();
+            let mut peer_queue: VecDeque<Vec<u8>> = VecDeque::new();
             let mut locked: HashSet<Vec<u8>> = HashSet::new();
             let mut avalaible = max_lock;
 
@@ -41,7 +41,8 @@ impl RoomLockService {
                                 }
                             }
                         } else {
-                            peer_lock_request.insert(peer, PeerLockRequest { reply, rooms });
+                            peer_lock_request
+                                .insert(peer.clone(), PeerLockRequest { reply, rooms });
                             peer_queue.push_front(peer);
                         }
                         for _ in 0..avalaible.clone() {
@@ -74,8 +75,8 @@ impl RoomLockService {
     }
 
     async fn acquire_lock(
-        peer_lock_request: &mut HashMap<usize, PeerLockRequest>,
-        peer_queue: &mut VecDeque<usize>,
+        peer_lock_request: &mut HashMap<Vec<u8>, PeerLockRequest>,
+        peer_queue: &mut VecDeque<Vec<u8>>,
         locked: &mut HashSet<Vec<u8>>,
         avalaible: &mut usize,
     ) {
@@ -99,7 +100,7 @@ impl RoomLockService {
                         }
                     }
                     if !lock_request.rooms.is_empty() {
-                        peer_lock_request.insert(peer, lock_request);
+                        peer_lock_request.insert(peer.clone(), lock_request);
                         peer_queue.push_front(peer);
                     }
                     if lock_aquired {
@@ -112,7 +113,7 @@ impl RoomLockService {
 
     pub async fn request_locks(
         &self,
-        peer_id: usize,
+        peer_id: Vec<u8>,
         rooms: VecDeque<Vec<u8>>,
         reply: mpsc::UnboundedSender<Vec<u8>>,
     ) {
@@ -130,26 +131,26 @@ impl RoomLockService {
 mod tests {
 
     use super::*;
-    use crate::cryptography::random32;
+    use crate::cryptography::{base64_encode, random32};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn one_room_one_peer() {
         let lock_service = RoomLockService::new(1);
 
-        let peer_id = 1;
+        let peer_id = random32().to_vec();
 
         let rooms: VecDeque<Vec<u8>> = vec![random32().to_vec()].into();
         let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
 
         lock_service
-            .request_locks(peer_id, rooms.clone(), sender.clone())
+            .request_locks(peer_id.clone(), rooms.clone(), sender.clone())
             .await;
         let room = receiver.recv().await.unwrap();
 
         lock_service.unlock(room).await;
 
         lock_service
-            .request_locks(peer_id, rooms, sender.clone())
+            .request_locks(peer_id.clone(), rooms, sender.clone())
             .await;
 
         let room = receiver.recv().await.unwrap();
@@ -168,15 +169,16 @@ mod tests {
         }
 
         let mut tasks = Vec::with_capacity(num_entries);
-        for peer_id in 0..num_entries {
+        for _ in 0..num_entries {
             let service = lock_service.clone();
             let local_rooms = rooms.clone();
+            let peer = random32().to_vec();
             tasks.push(tokio::spawn(async move {
                 //  println!("Peer {} started", peer_id);
                 let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
                 service
                     .clone()
-                    .request_locks(peer_id, local_rooms, sender.clone())
+                    .request_locks(peer.clone(), local_rooms, sender.clone())
                     .await;
                 for _ in 0..num_entries {
                     let room = receiver.recv().await.unwrap();
@@ -184,7 +186,7 @@ mod tests {
                     // println!("Peer {} acquired {}", peer_id, base64_encode(&room));
                     service.unlock(room).await;
                 }
-                format!("---------peer {} finished", peer_id)
+                format!("---------peer {} finished", base64_encode(&peer))
             }));
         }
         for task in tasks {

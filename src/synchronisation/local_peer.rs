@@ -1,12 +1,3 @@
-//recuperer les differents policy_groups
-//synchroniser le security group
-//si nouveau groupe
-//nosynch alert
-//pour chaque policy dans les groupes
-//recupérer les droits sur les schemas
-//synchroniser les shemas un a un qui ont un droit read
-//updater le daily log
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -16,17 +7,20 @@ use std::{
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::{
+        broadcast,
         mpsc::{self, Receiver, Sender},
         oneshot, Mutex,
     },
     time::timeout,
 };
 
-use crate::database::{daily_log::RoomLog, graph_database::GraphDatabaseService, room};
+use crate::{
+    cryptography::random32, database::graph_database::GraphDatabaseService, log_service::LogService,
+};
 
 use super::{
-    peer_service::PeerConnectionService, room_lock::RoomLockService, AnswerProtocol, ErrorType,
-    LocalEvent, Protocol, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
+    peer_service::PeerConnectionService, room_lock::RoomLockService, Answer, Error, LocalEvent,
+    ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
 static QUERY_SEND_BUFFER: usize = 10;
@@ -37,9 +31,10 @@ pub struct QueryService {
     sender: mpsc::Sender<(Query, AnswerFn)>,
 }
 impl QueryService {
-    pub fn new(
-        remote_sender: mpsc::Sender<Protocol>,
-        mut remote_receiver: mpsc::Receiver<AnswerProtocol>,
+    pub fn start(
+        remote_sender: mpsc::Sender<QueryProtocol>,
+        mut remote_receiver: mpsc::Receiver<Answer>,
+        log_service: LogService,
     ) -> Self {
         let (sender, mut local_receiver) = mpsc::channel::<(Query, AnswerFn)>(QUERY_SEND_BUFFER);
 
@@ -55,7 +50,11 @@ impl QueryService {
                                 let id = next_message_id;
                                 let query = msg.0;
                                 let query_prot = QueryProtocol { id, query };
-                                let _ = remote_sender.send(Protocol::Query(query_prot)).await;
+
+                                if let Err(e)  = remote_sender.send(query_prot).await {
+                                    log_service.error(crate::Error::SendError(e.to_string()));
+                                    break;
+                                }
                                 let answer_func = msg.1;
                                 sent_query.insert(id, answer_func);
                                 next_message_id += 1;
@@ -86,61 +85,78 @@ impl QueryService {
     }
 }
 
-pub struct LocalPeer {
-    pub connection_id: usize,
-    pub remote_verifying_key: Vec<u8>,
-    pub remote_rooms: HashSet<Vec<u8>>,
-    pub database_service: GraphDatabaseService,
-    pub peer_mgmt_service: PeerConnectionService,
-    pub lock_service: RoomLockService,
-    pub query_service: QueryService,
-    pub event_sender: Sender<RemoteEvent>,
-}
-impl LocalPeer {
-    pub async fn start(
+pub struct LocalPeerService {}
+impl LocalPeerService {
+    pub fn start(
         mut peer: LocalPeer,
         mut remote_event: Receiver<RemoteEvent>,
-        mut local_event: Receiver<LocalEvent>,
+        mut local_event: broadcast::Receiver<LocalEvent>,
+        remote_key: Arc<Mutex<Vec<u8>>>,
+        log_service: LogService,
+        peer_service: PeerConnectionService,
     ) {
         let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
 
         tokio::spawn(async move {
-            let rooms_rs: Result<VecDeque<Vec<u8>>, ErrorType> = peer.query(Query::RoomList).await;
-            if rooms_rs.is_err() {
-                peer.cleanup(Vec::new()).await;
+            let challenge = random32().to_vec();
+
+            let ret: Result<(), crate::Error> = async {
+                let proof: ProveAnswer =
+                    peer.query(Query::ProveIdentity(challenge.clone())).await?;
+                proof.verify(&challenge)?;
+
+                {
+                    let mut key = remote_key.lock().await;
+                    *key = proof.verifying_key;
+                }
+
+                peer.send_event(RemoteEvent::Ready)
+                    .await
+                    .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
+                Ok(())
+            }
+            .await;
+
+            if let Err(e) = ret {
+                log_service.error(e);
+                let key = remote_key.lock().await;
+                peer_service.disconnect(key.clone(), peer.hardware_id).await;
                 return;
             }
-            let rooms = rooms_rs.unwrap();
-            for room in &rooms {
-                peer.remote_rooms.insert(room.clone());
-            }
-
-            peer.lock_service
-                .request_locks(peer.connection_id, rooms, lock_reply.clone())
-                .await;
 
             let acquired_lock: Arc<Mutex<HashSet<Vec<u8>>>> =
                 Arc::new(Mutex::new(HashSet::<Vec<u8>>::new()));
-
             loop {
                 tokio::select! {
                     msg = remote_event.recv() =>{
                         match msg{
-                            Some(msg) => {Self::process_remote_event(msg, &mut peer, lock_reply.clone()).await;}
+                            Some(msg) => {
+                                if let Err(e) = Self::process_remote_event(msg, &mut peer, lock_reply.clone()).await{
+                                    log_service.error(e);
+                                    break;
+                                }
+                            }
                             None => break,
                         }
                     }
 
                     msg = local_event.recv() =>{
-                        match msg{
-                            Some(msg) => {Self::process_local_event(msg, &mut peer).await;}
-                            None => break,
+                        if let Ok(msg) = msg{
+                            if let Err(e) = Self::process_local_event(msg, &remote_key, &mut peer).await{
+                                log_service.error(e);
+                                break;
+                            }
                         }
                     }
 
                     msg = lock_receiver.recv() =>{
                         match msg{
-                            Some(room) => {Self::process_acquired_lock(room, acquired_lock.clone(), &peer).await}
+                            Some(room) => {
+                                if let Err(e) =Self::process_acquired_lock(room, &acquired_lock, &peer).await{
+                                    log_service.error(e);
+                                    break;
+                                }
+                            }
                             None => break,
                         }
                     }
@@ -152,21 +168,33 @@ impl LocalPeer {
                 rooms.push(room.clone());
             }
             peer.cleanup(rooms).await;
+            let key = remote_key.lock().await;
+            peer_service.disconnect(key.clone(), peer.hardware_id).await;
         });
     }
 
     pub async fn process_remote_event(
         event: RemoteEvent,
-        peer: &mut Self,
+        peer: &mut LocalPeer,
         lock_reply: mpsc::UnboundedSender<Vec<u8>>,
-    ) {
+    ) -> Result<(), crate::Error> {
         match event {
+            RemoteEvent::Ready => {
+                let rooms: VecDeque<Vec<u8>> = peer.query(Query::RoomList).await?;
+                for room in &rooms {
+                    peer.remote_rooms.insert(room.clone());
+                }
+                peer.lock_service
+                    .request_locks(peer.hardware_id.clone(), rooms, lock_reply.clone())
+                    .await;
+            }
+
             RemoteEvent::RoomDefinitionChanged(room) => {
                 peer.remote_rooms.insert(room.clone());
                 let mut q = VecDeque::new();
                 q.push_back(room);
                 peer.lock_service
-                    .request_locks(peer.connection_id, q, lock_reply)
+                    .request_locks(peer.hardware_id.clone(), q, lock_reply)
                     .await;
             }
             RemoteEvent::RoomDataChanged(room) => {
@@ -174,30 +202,59 @@ impl LocalPeer {
                     let mut q = VecDeque::new();
                     q.push_back(room);
                     peer.lock_service
-                        .request_locks(peer.connection_id, q, lock_reply)
+                        .request_locks(peer.hardware_id.clone(), q, lock_reply)
                         .await;
                 }
             }
         }
+        Ok(())
     }
 
-    pub async fn process_local_event(msg: LocalEvent, peer: &Self) {
+    pub async fn process_local_event(
+        msg: LocalEvent,
+        remote_key: &Arc<Mutex<Vec<u8>>>,
+        peer: &LocalPeer,
+    ) -> Result<(), crate::Error> {
         match msg {
             LocalEvent::RoomDefinitionChanged(room) => {
-                if room.has_user(&peer.remote_verifying_key) {
-                    let todo = peer
-                        .send_event(RemoteEvent::RoomDefinitionChanged(room.id))
-                        .await;
+                let key = remote_key.lock().await;
+                if room.has_user(&key) {
+                    peer.send_event(RemoteEvent::RoomDefinitionChanged(room.id))
+                        .await
+                        .map_err(|_| crate::Error::TimeOut("RoomDefinitionChanged".to_string()))?;
                 }
             }
             LocalEvent::RoomDataChanged(room) => {
                 if peer.remote_rooms.contains(&room) {
-                    let todo = peer.send_event(RemoteEvent::RoomDataChanged(room)).await;
+                    peer.send_event(RemoteEvent::RoomDataChanged(room))
+                        .await
+                        .map_err(|_| crate::Error::TimeOut("RoomDefinitionChanged".to_string()))?;
                 }
             }
         }
+        Ok(())
     }
 
+    pub async fn process_acquired_lock(
+        lock: Vec<u8>,
+        acquired_lock: &Arc<Mutex<HashSet<Vec<u8>>>>,
+        _peer: &LocalPeer,
+    ) -> Result<(), crate::Error> {
+        acquired_lock.lock().await.insert(lock.clone());
+        acquired_lock.lock().await.remove(&lock);
+        unimplemented!();
+    }
+}
+
+pub struct LocalPeer {
+    pub hardware_id: Vec<u8>,
+    pub remote_rooms: HashSet<Vec<u8>>,
+    pub database_service: GraphDatabaseService,
+    pub lock_service: RoomLockService,
+    pub query_service: QueryService,
+    pub event_sender: Sender<RemoteEvent>,
+}
+impl LocalPeer {
     pub async fn send_event(
         &self,
         event: RemoteEvent,
@@ -207,21 +264,8 @@ impl LocalPeer {
             .await
     }
 
-    pub async fn process_acquired_lock(
-        lock: Vec<u8>,
-        acquired_lock: Arc<Mutex<HashSet<Vec<u8>>>>,
-        peer: &Self,
-    ) {
-        acquired_lock.lock().await.insert(lock.clone());
-        unimplemented!();
-        acquired_lock.lock().await.remove(&lock);
-    }
-
-    async fn query<T: DeserializeOwned + Send + 'static>(
-        &self,
-        query: Query,
-    ) -> Result<T, ErrorType> {
-        let (send, recieve) = oneshot::channel::<Result<T, ErrorType>>();
+    async fn query<T: DeserializeOwned + Send + 'static>(&self, query: Query) -> Result<T, Error> {
+        let (send, recieve) = oneshot::channel::<Result<T, Error>>();
         let answer: AnswerFn = Box::new(move |succes, serialized| {
             if succes {
                 match bincode::deserialize::<T>(&serialized) {
@@ -229,16 +273,16 @@ impl LocalPeer {
                         let _ = send.send(Ok(result));
                     }
                     Err(_) => {
-                        let _ = send.send(Err(ErrorType::Parsing));
+                        let _ = send.send(Err(Error::Parsing));
                     }
                 }
             } else {
-                match bincode::deserialize::<ErrorType>(&serialized) {
+                match bincode::deserialize::<Error>(&serialized) {
                     Ok(result) => {
                         let _ = send.send(Err(result));
                     }
                     Err(_) => {
-                        let _ = send.send(Err(ErrorType::Parsing));
+                        let _ = send.send(Err(Error::Parsing));
                     }
                 }
             };
@@ -249,9 +293,9 @@ impl LocalPeer {
         match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
             Ok(r) => match r {
                 Ok(result) => return result,
-                Err(_) => return Err(ErrorType::Technical),
+                Err(_) => return Err(Error::Technical),
             },
-            Err(_) => return Err(ErrorType::TimeOut),
+            Err(_) => return Err(Error::TimeOut),
         }
     }
 
@@ -259,10 +303,9 @@ impl LocalPeer {
     /// cleanup locks that could have been acquired
     /// and ask the peer service to remove this peer
     ///
-    pub async fn cleanup(self, rooms: Vec<Vec<u8>>) {
+    pub async fn cleanup(&self, rooms: Vec<Vec<u8>>) {
         for room in rooms {
             self.lock_service.unlock(room).await;
         }
-        self.peer_mgmt_service.disconnect(self.connection_id).await;
     }
 }

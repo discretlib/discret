@@ -4,6 +4,7 @@ mod cryptography;
 mod database;
 mod date_utils;
 mod event_service;
+mod log_service;
 mod message;
 mod network;
 mod synchronisation;
@@ -48,8 +49,17 @@ pub enum Error {
     #[error(transparent)]
     RecvError(#[from] tokio::sync::oneshot::error::RecvError),
 
+    #[error("tokio send error")]
+    SendError(String),
+
     #[error("{0}")]
     ChannelError(String),
+
+    #[error(transparent)]
+    SynchError(#[from] crate::synchronisation::Error),
+
+    #[error("Timeout occured while sending {0}")]
+    TimeOut(String),
 }
 
 // lazy_static::lazy_static! {
