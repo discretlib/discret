@@ -22,7 +22,7 @@ pub struct RoomLockService {
     sender: mpsc::Sender<SyncLockMessage>,
 }
 impl RoomLockService {
-    pub fn new(max_lock: usize) -> Self {
+    pub fn start(max_lock: usize) -> Self {
         let (sender, mut receiver) = mpsc::channel::<SyncLockMessage>(LOCK_CHANNEL_SIZE);
         tokio::spawn(async move {
             let mut peer_lock_request: HashMap<Vec<u8>, PeerLockRequest> = HashMap::new();
@@ -135,7 +135,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn one_room_one_peer() {
-        let lock_service = RoomLockService::new(1);
+        let lock_service = RoomLockService::start(1);
 
         let peer_id = random32().to_vec();
 
@@ -161,7 +161,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn some_rooms_some_peers() {
         let num_entries = 32;
-        let lock_service = RoomLockService::new(num_entries);
+        let lock_service = RoomLockService::start(num_entries);
         let mut rooms = VecDeque::new();
 
         for _ in 0..num_entries {

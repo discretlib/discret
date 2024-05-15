@@ -3,7 +3,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::database::{daily_log::DailyLogsUpdate, room::Room};
 
 pub enum EventServiceMessage {
-    Subscribe(oneshot::Sender<broadcast::Receiver<EventMessage>>),
+    Subscribe(oneshot::Sender<broadcast::Receiver<Event>>),
     ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Vec<u8>),
@@ -11,7 +11,7 @@ pub enum EventServiceMessage {
 }
 
 #[derive(Clone)]
-pub enum EventMessage {
+pub enum Event {
     ComputedDailyLog(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Vec<u8>),
@@ -36,24 +36,19 @@ impl EventService {
                     }
                     EventServiceMessage::ComputedDailyLog(res) => {
                         let _ = match res {
-                            Ok(e) => broadcast.send(EventMessage::ComputedDailyLog(Ok(e))),
-                            Err(e) => {
-                                broadcast.send(EventMessage::ComputedDailyLog(Err(e.to_string())))
-                            }
+                            Ok(e) => broadcast.send(Event::ComputedDailyLog(Ok(e))),
+                            Err(e) => broadcast.send(Event::ComputedDailyLog(Err(e.to_string()))),
                         };
                     }
                     EventServiceMessage::RoomModified(room) => {
-                        let _ = broadcast.send(EventMessage::RoomModified(room));
+                        let _ = broadcast.send(Event::RoomModified(room));
                     }
                     EventServiceMessage::PeerConnected(verifying_key, date, hardware_key) => {
-                        let _ = broadcast.send(EventMessage::PeerConnected(
-                            verifying_key,
-                            date,
-                            hardware_key,
-                        ));
+                        let _ =
+                            broadcast.send(Event::PeerConnected(verifying_key, date, hardware_key));
                     }
                     EventServiceMessage::PeerDisconnected(verifying_key, date, hardware_key) => {
-                        let _ = broadcast.send(EventMessage::PeerDisconnected(
+                        let _ = broadcast.send(Event::PeerDisconnected(
                             verifying_key,
                             date,
                             hardware_key,
@@ -66,8 +61,8 @@ impl EventService {
         Self { sender }
     }
 
-    pub async fn subcribe_for_events(&self) -> broadcast::Receiver<EventMessage> {
-        let (sender, receiver) = oneshot::channel::<broadcast::Receiver<EventMessage>>();
+    pub async fn subcribe(&self) -> broadcast::Receiver<Event> {
+        let (sender, receiver) = oneshot::channel::<broadcast::Receiver<Event>>();
         let _ = self
             .sender
             .send(EventServiceMessage::Subscribe(sender))

@@ -6,13 +6,13 @@ use crate::Error;
 pub enum LogMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<Log>>),
     Info(i64, String),
-    Error(i64, Error),
+    Error(i64, String, Error),
 }
 
 #[derive(Clone)]
 pub enum Log {
     Info(i64, String),
-    Error(i64, String),
+    Error(i64, String, String),
 }
 
 #[derive(Clone)]
@@ -20,7 +20,7 @@ pub struct LogService {
     pub sender: mpsc::UnboundedSender<LogMessage>,
 }
 impl LogService {
-    pub fn new() -> Self {
+    pub fn start() -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel();
 
         let (broadcast, _) = broadcast::channel(16);
@@ -34,8 +34,8 @@ impl LogService {
                     LogMessage::Info(date, s) => {
                         let _ = broadcast.send(Log::Info(date, s));
                     }
-                    LogMessage::Error(date, e) => {
-                        let _ = broadcast.send(Log::Error(date, e.to_string()));
+                    LogMessage::Error(date, src, e) => {
+                        let _ = broadcast.send(Log::Error(date, src, e.to_string()));
                     }
                 };
             }
@@ -43,7 +43,7 @@ impl LogService {
         Self { sender }
     }
 
-    pub async fn subcribe_for_events(&self) -> broadcast::Receiver<Log> {
+    pub async fn subcribe(&self) -> broadcast::Receiver<Log> {
         let (sender, receiver) = oneshot::channel::<broadcast::Receiver<Log>>();
         let _ = self.sender.send(LogMessage::Subscribe(sender));
         receiver.await.unwrap()
@@ -53,7 +53,7 @@ impl LogService {
         let _ = self.sender.send(LogMessage::Info(now(), str));
     }
 
-    pub fn error(&self, err: Error) {
-        let _ = self.sender.send(LogMessage::Error(now(), err));
+    pub fn error(&self, src: String, err: Error) {
+        let _ = self.sender.send(LogMessage::Error(now(), src, err));
     }
 }

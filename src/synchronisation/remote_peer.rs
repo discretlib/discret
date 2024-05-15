@@ -42,7 +42,7 @@ impl RemoteQueryService {
                             )
                             .await
                         {
-                            log_service.error(e);
+                            log_service.error("ProveIdentity".to_string(), e);
                             break;
                         }
                     }
@@ -55,13 +55,13 @@ impl RemoteQueryService {
                                 match res {
                                     Ok(room_list) => peer.send(msg.id, true, room_list).await,
                                     Err(e) => {
-                                        log_service.error(e.into());
+                                        log_service.error("RoomList".to_string(), e.into());
                                         peer.send(msg.id, false, Error::RemoteTechnical).await
                                     }
                                 }
                             };
                             if let Err(e) = r {
-                                log_service.error(e);
+                                log_service.error("RoomList Channel".to_string(), e);
                                 break;
                             }
                         };
@@ -73,7 +73,7 @@ impl RemoteQueryService {
                                 match res {
                                     Ok(definition) => peer.send(msg.id, true, definition).await,
                                     Err(e) => {
-                                        log_service.error(e.into());
+                                        log_service.error("RoomDefinition".to_string(), e.into());
                                         peer.send(msg.id, false, Error::RemoteTechnical).await
                                     }
                                 }
@@ -82,7 +82,7 @@ impl RemoteQueryService {
                             }
                         };
                         if let Err(e) = r {
-                            log_service.error(e);
+                            log_service.error("RoomDefinition Channel".to_string(), e);
                             break;
                         }
                     }
@@ -93,7 +93,7 @@ impl RemoteQueryService {
                                 match res {
                                     Ok(log) => peer.send(msg.id, true, log).await,
                                     Err(e) => {
-                                        log_service.error(e.into());
+                                        log_service.error("RoomLog Channel".to_string(), e.into());
                                         peer.send(msg.id, false, Error::RemoteTechnical).await
                                     }
                                 }
@@ -102,7 +102,7 @@ impl RemoteQueryService {
                             }
                         };
                         if let Err(e) = r {
-                            log_service.error(e);
+                            log_service.error("RoomLog Channel".to_string(), e);
                             break;
                         }
                     }

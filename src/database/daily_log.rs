@@ -511,7 +511,7 @@ mod tests {
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let event_service = EventService::new();
-        let mut events = event_service.subcribe_for_events().await;
+        let mut events = event_service.subcribe().await;
 
         let app = GraphDatabaseService::start(
             "delete app",
@@ -560,7 +560,7 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::EventMessage::ComputedDailyLog(log) => {
+                crate::event_service::Event::ComputedDailyLog(log) => {
                     let s = log.unwrap();
                     assert_eq!(0, s.room_dates.len());
 
@@ -593,7 +593,7 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::EventMessage::ComputedDailyLog(log) => {
+                crate::event_service::Event::ComputedDailyLog(log) => {
                     let log = log.unwrap();
                     let dates = log.room_dates.get(bin_room_id).unwrap();
                     assert_eq!(1, dates.len());

@@ -815,13 +815,17 @@ impl GraphDatabase {
         reply: Sender<Result<VecDeque<Vec<u8>>>>,
     ) {
         let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
-        let _ = self.auth_service.send(AuthorisationMessage::RoomForUser(
-            verifying_key,
-            now(),
-            send_response,
-        ));
+        let _ = self
+            .auth_service
+            .send(AuthorisationMessage::RoomForUser(
+                verifying_key,
+                now(),
+                send_response,
+            ))
+            .await;
 
         let res = receive_response.await;
+
         match res {
             Ok(room_ids) => {
                 let _ = self

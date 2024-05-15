@@ -52,14 +52,16 @@ impl QueryService {
                                 let query_prot = QueryProtocol { id, query };
 
                                 if let Err(e)  = remote_sender.send(query_prot).await {
-                                    log_service.error(crate::Error::SendError(e.to_string()));
+                                    log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
                                     break;
                                 }
                                 let answer_func = msg.1;
                                 sent_query.insert(id, answer_func);
                                 next_message_id += 1;
                             },
-                            None => break,
+                            None => {
+                                break
+                            },
                         }
                     }
                     msg = remote_receiver.recv() =>{
@@ -69,7 +71,9 @@ impl QueryService {
                                     func(msg.success, msg.serialized);
                                 }
                             }
-                            None => break,
+                            None => {
+                                break
+                            },
                         }
                     }
 
@@ -104,21 +108,24 @@ impl LocalPeerService {
                 let proof: ProveAnswer =
                     peer.query(Query::ProveIdentity(challenge.clone())).await?;
                 proof.verify(&challenge)?;
-
                 {
                     let mut key = remote_key.lock().await;
-                    *key = proof.verifying_key;
+                    *key = proof.verifying_key.clone();
                 }
 
                 peer.send_event(RemoteEvent::Ready)
                     .await
                     .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
+
+                peer_service
+                    .connected(proof.verifying_key, peer.hardware_id.clone())
+                    .await;
                 Ok(())
             }
             .await;
 
             if let Err(e) = ret {
-                log_service.error(e);
+                log_service.error("LocalPeerServiceInit".to_string(), e);
                 let key = remote_key.lock().await;
                 peer_service.disconnect(key.clone(), peer.hardware_id).await;
                 return;
@@ -132,7 +139,7 @@ impl LocalPeerService {
                         match msg{
                             Some(msg) => {
                                 if let Err(e) = Self::process_remote_event(msg, &mut peer, lock_reply.clone()).await{
-                                    log_service.error(e);
+                                    log_service.error("LocalPeerService remote event".to_string(),e);
                                     break;
                                 }
                             }
@@ -143,7 +150,7 @@ impl LocalPeerService {
                     msg = local_event.recv() =>{
                         if let Ok(msg) = msg{
                             if let Err(e) = Self::process_local_event(msg, &remote_key, &mut peer).await{
-                                log_service.error(e);
+                                log_service.error("LocalPeerService Local event".to_string(),e);
                                 break;
                             }
                         }
@@ -153,7 +160,7 @@ impl LocalPeerService {
                         match msg{
                             Some(room) => {
                                 if let Err(e) =Self::process_acquired_lock(room, &acquired_lock, &peer).await{
-                                    log_service.error(e);
+                                    log_service.error("LocalPeerService Lock".to_string(),e);
                                     break;
                                 }
                             }
@@ -289,7 +296,6 @@ impl LocalPeer {
         });
 
         self.query_service.send(query, answer).await;
-
         match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
             Ok(r) => match r {
                 Ok(result) => return result,
