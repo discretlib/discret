@@ -103,6 +103,7 @@ impl PeerConnectionService {
                             verifying_key,
                             log_service.clone(),
                             peer_service.clone(),
+                            event_service.clone(),
                         );
                     }
                     PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
@@ -164,23 +165,25 @@ impl PeerConnectionService {
 }
 
 #[cfg(test)]
-use crate::{cryptography::random32, event_service::Event, log_service::Log};
+pub use crate::{cryptography::random32, event_service::Event, log_service::Log};
 
 #[cfg(test)]
-type LogFn = Box<dyn Fn(Log) -> Result<(), String> + Send + 'static>;
+pub type LogFn = Box<dyn Fn(Log) -> Result<(), String> + Send + 'static>;
 
 #[cfg(test)]
-type EventFn = Box<dyn Fn(Event) -> bool + Send + 'static>;
+pub type EventFn = Box<dyn Fn(Event) -> bool + Send + 'static>;
 
 #[cfg(test)]
-async fn listen_for_event(
+pub async fn listen_for_event(
     event_service: EventService,
     log_service: LogService,
+    remote_log_service: LogService,
     event_fn: EventFn,
     log_fn: LogFn,
 ) -> Result<(), String> {
     let mut events = event_service.subcribe().await;
     let mut log = log_service.subcribe().await;
+    let mut remote_log = remote_log_service.subcribe().await;
 
     let res: tokio::task::JoinHandle<Result<(), String>> = tokio::spawn(async move {
         let mut success = false;
@@ -215,6 +218,20 @@ async fn listen_for_event(
                         },
                     }
                 }
+                msg = remote_log.recv() =>{
+                    match msg{
+                        Ok(log) => {
+                            if let Err(e) =  log_fn(log) {
+                                error = e;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error = e.to_string();
+                            break;
+                        },
+                    }
+                }
             }
         }
         if success {
@@ -227,7 +244,7 @@ async fn listen_for_event(
 }
 
 #[cfg(test)]
-async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnectionService) {
+pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnectionService) {
     let (peer1_answer_s, peer1_answer_r) = mpsc::channel::<Answer>(100);
     let (peer1_query_s, peer1_query_r) = mpsc::channel::<QueryProtocol>(100);
     let (peer1_event_s, peer1_event_r) = mpsc::channel::<RemoteEvent>(100);
@@ -339,6 +356,7 @@ mod tests {
             listen_for_event(
                 second_peer.event.clone(),
                 second_peer.log.clone(),
+                first_peer.log.clone(),
                 event_fn,
                 log_fn,
             ),

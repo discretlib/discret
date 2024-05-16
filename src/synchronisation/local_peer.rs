@@ -15,7 +15,10 @@ use tokio::{
 };
 
 use crate::{
-    cryptography::random32, database::graph_database::GraphDatabaseService, log_service::LogService,
+    cryptography::{base64_encode, random32},
+    database::graph_database::GraphDatabaseService,
+    event_service::{EventService, EventServiceMessage},
+    log_service::LogService,
 };
 
 use super::{
@@ -98,6 +101,7 @@ impl LocalPeerService {
         remote_key: Arc<Mutex<Vec<u8>>>,
         log_service: LogService,
         peer_service: PeerConnectionService,
+        event_service: EventService,
     ) {
         let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -159,7 +163,7 @@ impl LocalPeerService {
                     msg = lock_receiver.recv() =>{
                         match msg{
                             Some(room) => {
-                                if let Err(e) =Self::process_acquired_lock(room, &acquired_lock, &peer).await{
+                                if let Err(e) =Self::process_acquired_lock(room, &acquired_lock, &peer, &event_service).await{
                                     log_service.error("LocalPeerService Lock".to_string(),e);
                                     break;
                                 }
@@ -188,6 +192,7 @@ impl LocalPeerService {
         match event {
             RemoteEvent::Ready => {
                 let rooms: VecDeque<Vec<u8>> = peer.query(Query::RoomList).await?;
+                println!("Room List len {}", rooms.len());
                 for room in &rooms {
                     peer.remote_rooms.insert(room.clone());
                 }
@@ -243,13 +248,19 @@ impl LocalPeerService {
     }
 
     pub async fn process_acquired_lock(
-        lock: Vec<u8>,
+        room: Vec<u8>,
         acquired_lock: &Arc<Mutex<HashSet<Vec<u8>>>>,
-        _peer: &LocalPeer,
+        peer: &LocalPeer,
+        event_service: &EventService,
     ) -> Result<(), crate::Error> {
-        acquired_lock.lock().await.insert(lock.clone());
-        acquired_lock.lock().await.remove(&lock);
-        unimplemented!();
+        acquired_lock.lock().await.insert(room.clone());
+        println!("Room lock Acquired {}", base64_encode(&room));
+        peer.lock_service.unlock(room.clone()).await;
+        acquired_lock.lock().await.remove(&room);
+        event_service
+            .notify(EventServiceMessage::RoomSynchronized(room))
+            .await;
+        Ok(())
     }
 }
 

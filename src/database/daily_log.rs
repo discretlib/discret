@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::date_utils::{date, date_next_day};
 
-use super::{
-    configuration::{
-        AUTHORISATION_ENT_SHORT, ENTITY_RIGHT_ENT_SHORT, ROOM_ENT_SHORT, USER_AUTH_ENT_SHORT,
-    },
-    sqlite_database::RowMappingFn,
+use super::configuration::{
+    AUTHORISATION_ENT_SHORT, ENTITY_RIGHT_ENT_SHORT, ROOM_ENT_SHORT, USER_AUTH_ENT_SHORT,
 };
 
 ///
@@ -252,7 +249,7 @@ impl DailyLogsUpdate {
     }
 }
 
-#[derive(Default, Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Default, Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct DailyLog {
     pub room_id: Vec<u8>,
     pub date: i64,
@@ -262,6 +259,31 @@ pub struct DailyLog {
     pub need_recompute: bool,
 }
 impl DailyLog {
+    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        //println!("Writing daily");
+        let mut node_daily_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _daily_log (
+                    room_id,
+                    date,
+                    entry_number,
+                    daily_hash,
+                    history_hash,
+                    need_recompute
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ",
+        )?;
+        node_daily_stmt.execute((
+            &self.room_id,
+            &self.date,
+            &self.entry_number,
+            &self.daily_hash,
+            &self.history_hash,
+            &self.need_recompute,
+        ))?;
+
+        Ok(())
+    }
+
     pub fn create_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE _daily_log (
@@ -292,16 +314,52 @@ impl DailyLog {
         Ok(())
     }
 
-    pub const MAPPING: RowMappingFn<Self> = |row| {
-        Ok(Box::new(Self {
-            room_id: row.get(0)?,
-            date: row.get(1)?,
-            entry_number: row.get(2)?,
-            daily_hash: row.get(3)?,
-            history_hash: row.get(4)?,
-            need_recompute: row.get(5)?,
-        }))
-    };
+    ///
+    /// Get the daily log for a room
+    ///
+    pub fn get_room_log(
+        room_id: &Vec<u8>,
+        conn: &Connection,
+    ) -> Result<Vec<Self>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT 
+                room_id ,
+                date ,
+                entry_number ,
+                daily_hash ,
+                history_hash ,
+                need_recompute 
+            FROM _daily_log
+            WHERE room_id = ?
+            ORDER BY date ASC
+            ",
+        )?;
+        let mut rows = stmt.query([room_id])?;
+        let mut res = Vec::new();
+        while let Some(row) = rows.next()? {
+            res.push(Self {
+                room_id: row.get(0)?,
+                date: row.get(1)?,
+                entry_number: row.get(2)?,
+                daily_hash: row.get(3)?,
+                history_hash: row.get(4)?,
+                need_recompute: row.get(5)?,
+            });
+        }
+        Ok(res)
+    }
+
+    pub fn log_room_definition(
+        room_id: &Vec<u8>,
+        mdate: i64,
+        conn: &Connection,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)",
+        )?;
+        stmt.execute((room_id, mdate))?;
+        Ok(())
+    }
 
     ///
     /// get room list sorted by modification date
@@ -312,7 +370,7 @@ impl DailyLog {
         conn: &Connection,
     ) -> Result<VecDeque<Vec<u8>>, rusqlite::Error> {
         let it = &mut room_ids.iter().peekable();
-
+        let mut id_date_list: Vec<(Vec<u8>, i64)> = Vec::with_capacity(room_ids.len());
         struct QueryParams<'a> {
             in_clause: String,
             ids: Vec<&'a Vec<u8>>,
@@ -348,61 +406,42 @@ impl DailyLog {
             query_list.push(current_query);
         }
 
-        let mut result = VecDeque::new();
         for i in 0..query_list.len() {
-            let current_query = &query_list[0];
+            let current_query = &query_list[i];
             let ids = &current_query.ids;
             let in_clause = &current_query.in_clause;
-            let offset = i * row_per_query;
 
             let query = format!(
-                "SELECT 
-                    dl.room_id
-                FROM _daily_log dl
-                WHERE 
-                    date = (SELECT MAX(date) FROM _daily_log WHERE dl.room_id=_daily_log.room_id) 
-                    AND
-                    dl.room_id in ({})
-                ORDER BY dl.date ASC
-                LIMIT {}, {} ",
-                in_clause, offset, row_per_query
+                "
+                SELECT 
+                    rcl.room_id, 
+                    dl.date
+                FROM _room_changelog rcl
+                LEFT JOIN (
+                    SELECT 
+                        _dl.room_id,
+                        _dl.date
+                    FROM _daily_log _dl
+                    WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
+                ) as dl ON rcl.room_id=dl.room_id
+                WHERE rcl.room_id in ({})
+                ",
+                in_clause
             );
             let mut stmt = conn.prepare(&query)?;
             let mut rows = stmt.query(params_from_iter(ids.iter()))?;
             while let Some(row) = rows.next()? {
-                result.push_back(row.get(0)?)
+                let date: Option<i64> = row.get(1)?;
+                let date = match date {
+                    Some(date) => date,
+                    None => i64::MAX, //null values will be push at the end of the list
+                };
+                id_date_list.push((row.get(0)?, date));
             }
         }
-        Ok(result)
-    }
-}
+        id_date_list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-#[derive(Serialize, Deserialize)]
-pub struct RoomLog {
-    pub date: i64,
-    pub entry_number: u32,
-    pub daily_hash: Vec<u8>,
-}
-impl RoomLog {
-    pub const LOG_QUERY: &'static str = "
-        SELECT date, entry_number, daily_hash
-        FROM _daily_log 
-        WHERE room_id = ? 
-        ORDER BY date ASC
-    ";
-
-    pub fn get_all(room_id: &Vec<u8>, conn: &Connection) -> Result<Vec<RoomLog>, rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(Self::LOG_QUERY)?;
-        let mut rows = stmt.query([room_id])?;
-        let mut res = Vec::new();
-        while let Some(row) = rows.next()? {
-            res.push(RoomLog {
-                date: row.get(0)?,
-                entry_number: row.get(1)?,
-                daily_hash: row.get(2)?,
-            });
-        }
-        Ok(res)
+        Ok(id_date_list.into_iter().map(|a| a.0).collect())
     }
 }
 
@@ -415,20 +454,12 @@ impl RoomLog {
 pub struct RoomDefinitionLog {
     pub room_id: Vec<u8>,
     pub room_def_date: i64,
-    pub last_data_date: i64,
-    pub entry_number: i64,
+    pub last_data_date: Option<i64>,
+    pub entry_number: Option<u32>,
     pub daily_hash: Option<Vec<u8>>,
     pub history_hash: Option<Vec<u8>>,
 }
 impl RoomDefinitionLog {
-    pub fn add(room_id: &Vec<u8>, mdate: i64, conn: &Connection) -> Result<(), rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)",
-        )?;
-        stmt.execute((room_id, mdate))?;
-        Ok(())
-    }
-
     pub fn get(
         room_id: &Vec<u8>,
         conn: &Connection,
@@ -452,7 +483,7 @@ impl RoomDefinitionLog {
                 FROM _daily_log _dl
                 WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
             ) as dl ON rcl.room_id=dl.room_id
-            WHERE room_id = ?
+            WHERE rcl.room_id = ?
             ";
         let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query([&room_id])?;
@@ -475,17 +506,21 @@ impl RoomDefinitionLog {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use rand::{rngs::OsRng, Rng};
+    use rusqlite::Connection;
+
     use crate::{
-        cryptography::{base64_decode, base64_encode, random32},
+        cryptography::{base64_encode, random32},
         database::{
             configuration::Configuration,
-            daily_log::DailyLog,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
         },
         date_utils::{date, now},
         event_service::EventService,
     };
+
+    use super::*;
 
     const DATA_PATH: &str = "test_data/database/daily_log/";
     fn init_database_path() {
@@ -608,33 +643,98 @@ mod tests {
             }
         }
 
-        let daily_edge_log = "
-            SELECT
-                room_id,
-                date,
-                entry_number,
-                daily_hash,
-                history_hash,
-                need_recompute
-            from _daily_log ";
-
-        let edge_log = app
-            .select(daily_edge_log.to_string(), Vec::new(), DailyLog::MAPPING)
-            .await
-            .unwrap();
-        assert_eq!(1, edge_log.len());
-        println!("{:?}", edge_log);
-        for nd in edge_log {
-            assert_eq!(date(now()), nd.date);
-            assert!(!nd.need_recompute);
-            assert_eq!(4, nd.entry_number); //each person has
-            assert_eq!(base64_decode(room_id.as_bytes()).unwrap(), nd.room_id);
-        }
-
         let room_log = app.get_room_log(bin_room_id.clone()).await.unwrap();
         assert_eq!(1, room_log.len());
         let rlog = &room_log[0];
         assert_eq!(date(now()), rlog.date);
         assert_eq!(4, rlog.entry_number);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn room_log() {
+        let conn = Connection::open_in_memory().unwrap();
+        DailyLog::create_tables(&conn).unwrap();
+        let room_id = random32().to_vec();
+        DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
+
+        let def = RoomDefinitionLog::get(&room_id, &conn).unwrap().unwrap();
+        assert_eq!(def.room_id, room_id);
+        assert_eq!(def.room_def_date, 100);
+        assert_eq!(def.last_data_date, None);
+        assert_eq!(def.entry_number, None);
+        assert_eq!(def.daily_hash, None);
+        assert_eq!(def.history_hash, None);
+
+        let daily_log_1 = DailyLog {
+            room_id: room_id.clone(),
+            date: 500,
+            entry_number: 1,
+            daily_hash: Some(random32().to_vec()),
+            history_hash: Some(random32().to_vec()),
+            need_recompute: false,
+        };
+        daily_log_1.write(&conn).unwrap();
+
+        let daily_log_0 = DailyLog {
+            room_id: room_id.clone(),
+            date: 200,
+            entry_number: 1,
+            daily_hash: Some(random32().to_vec()),
+            history_hash: Some(random32().to_vec()),
+            need_recompute: false,
+        };
+        daily_log_0.write(&conn).unwrap();
+
+        let def = RoomDefinitionLog::get(&room_id, &conn).unwrap().unwrap();
+        assert_eq!(def.room_id, room_id);
+        assert_eq!(def.room_def_date, 100);
+        assert_eq!(def.last_data_date.unwrap(), daily_log_1.date);
+        assert_eq!(def.entry_number.unwrap(), daily_log_1.entry_number);
+        assert_eq!(def.daily_hash, daily_log_1.daily_hash);
+        assert_eq!(def.history_hash, daily_log_1.history_hash);
+
+        //RoomDefinitionLog
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn room_log_sort() {
+        let conn = Connection::open_in_memory().unwrap();
+        DailyLog::create_tables(&conn).unwrap();
+        let mut rooms = HashMap::new();
+        let mut num_room = 721;
+        let mut room_ids = HashSet::new();
+        for _ in 0..num_room {
+            let room_id = random32().to_vec();
+            let date: i64 = OsRng.gen();
+            DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
+            let daily_log = DailyLog {
+                room_id: room_id.clone(),
+                date,
+                entry_number: 1,
+                daily_hash: Some(random32().to_vec()),
+                history_hash: Some(random32().to_vec()),
+                need_recompute: false,
+            };
+            daily_log.write(&conn).unwrap();
+            rooms.insert(room_id.clone(), date);
+            room_ids.insert(room_id);
+        }
+
+        let empty_room_id = random32().to_vec();
+        DailyLog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
+        rooms.insert(empty_room_id.clone(), i64::MAX);
+        room_ids.insert(empty_room_id.clone());
+        num_room += 1;
+
+        let mut room_ids = DailyLog::sort_rooms(&room_ids, &conn).unwrap();
+        assert_eq!(num_room, room_ids.len());
+        let mut last = i64::MIN;
+        for room_id in &room_ids {
+            let date = *rooms.get(room_id).unwrap();
+            assert!(date >= last);
+            last = date;
+        }
+        let last_id = room_ids.pop_back().unwrap();
+        assert_eq!(empty_room_id, last_id);
     }
 }

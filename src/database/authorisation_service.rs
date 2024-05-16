@@ -19,7 +19,7 @@ use super::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
         ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
     },
-    daily_log::{DailyMutations, RoomDefinitionLog},
+    daily_log::{DailyLog, DailyMutations},
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
@@ -50,7 +50,7 @@ impl Writeable for RoomMutationWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.mutation_query.write(conn)?;
         for room_id in &self.room_list {
-            RoomDefinitionLog::add(room_id, self.mutation_query.date, conn)?;
+            DailyLog::log_room_definition(room_id, self.mutation_query.date, conn)?;
         }
         Ok(())
     }
@@ -73,7 +73,7 @@ impl Writeable for RoomNodeWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.room.write(conn)?;
         if let Some(id) = &self.room.node.room_id {
-            RoomDefinitionLog::add(id, self.room.last_modified, conn)?;
+            DailyLog::log_room_definition(id, self.room.last_modified, conn)?;
         }
 
         Ok(())

@@ -4,7 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::daily_log::{DailyLog, RoomDefinitionLog, RoomLog};
+use super::daily_log::{DailyLog, RoomDefinitionLog};
 use super::edge::EdgeDeletionEntry;
 use super::node::{Node, NodeDeletionEntry, NodeIdentifier};
 use super::{
@@ -330,11 +330,11 @@ impl GraphDatabaseService {
     ///
     /// get the complete dayly log for a specific room
     ///
-    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<RoomLog>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<RoomLog>>>();
+    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<DailyLog>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<DailyLog>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
-                let room_log = RoomLog::get_all(&room_id, conn).map_err(Error::from);
+                let room_log = DailyLog::get_room_log(&room_id, conn).map_err(Error::from);
                 let _ = send_response.send(room_log);
             }))
             .await?;
