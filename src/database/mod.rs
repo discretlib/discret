@@ -127,4 +127,7 @@ pub enum Error {
 
     #[error("{0}")]
     InvalidFullNode(String),
+
+    #[error("The requested node does not belong to the right room")]
+    InvalidNodeRequest(),
 }

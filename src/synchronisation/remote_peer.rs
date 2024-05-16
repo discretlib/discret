@@ -116,7 +116,7 @@ impl RemoteQueryService {
                                 match res {
                                     Ok(log) => peer.send(msg.id, true, log).await,
                                     Err(e) => {
-                                        log_service.error("RoomLog Channel".to_string(), e.into());
+                                        log_service.error("RoomLog".to_string(), e.into());
                                         peer.send(msg.id, false, Error::RemoteTechnical).await
                                     }
                                 }
@@ -126,6 +126,86 @@ impl RemoteQueryService {
                         };
                         if let Err(e) = r {
                             log_service.error("RoomLog Channel".to_string(), e);
+                            break;
+                        }
+                    }
+                    Query::RoomDailyNodes(room_id, date) => {
+                        let r = {
+                            if peer.allowed_room.contains(&room_id) {
+                                let res = peer.db.get_room_daily_nodes(room_id, date).await;
+                                match res {
+                                    Ok(log) => peer.send(msg.id, true, log).await,
+                                    Err(e) => {
+                                        log_service.error("RoomDailyNodes".to_string(), e.into());
+                                        peer.send(msg.id, false, Error::RemoteTechnical).await
+                                    }
+                                }
+                            } else {
+                                peer.send(msg.id, false, Error::Authorisation).await
+                            }
+                        };
+                        if let Err(e) = r {
+                            log_service.error("RoomDailyNodes Channel".to_string(), e);
+                            break;
+                        }
+                    }
+                    Query::FullNodes(room_id, node_ids) => {
+                        let r = {
+                            if peer.allowed_room.contains(&room_id) {
+                                let res = peer.db.get_full_nodes(room_id, node_ids).await;
+                                match res {
+                                    Ok(log) => peer.send(msg.id, true, log).await,
+                                    Err(e) => {
+                                        log_service.error("FullNodes".to_string(), e.into());
+                                        peer.send(msg.id, false, Error::RemoteTechnical).await
+                                    }
+                                }
+                            } else {
+                                peer.send(msg.id, false, Error::Authorisation).await
+                            }
+                        };
+                        if let Err(e) = r {
+                            log_service.error("FullNodes Channel".to_string(), e);
+                            break;
+                        }
+                    }
+                    Query::EdgeDeletionLog(room_id, date) => {
+                        let r = {
+                            if peer.allowed_room.contains(&room_id) {
+                                let res = peer.db.get_room_edge_deletion_log(room_id, date).await;
+                                match res {
+                                    Ok(log) => peer.send(msg.id, true, log).await,
+                                    Err(e) => {
+                                        log_service.error("EdgeDeletionLog".to_string(), e.into());
+                                        peer.send(msg.id, false, Error::RemoteTechnical).await
+                                    }
+                                }
+                            } else {
+                                peer.send(msg.id, false, Error::Authorisation).await
+                            }
+                        };
+                        if let Err(e) = r {
+                            log_service.error("EdgeDeletionLog Channel".to_string(), e);
+                            break;
+                        }
+                    }
+                    Query::NodeDeletionLog(room_id, date) => {
+                        let r = {
+                            if peer.allowed_room.contains(&room_id) {
+                                let res = peer.db.get_room_node_deletion_log(room_id, date).await;
+                                match res {
+                                    Ok(log) => peer.send(msg.id, true, log).await,
+                                    Err(e) => {
+                                        log_service.error("EdgeDeletionLog".to_string(), e.into());
+                                        peer.send(msg.id, false, Error::RemoteTechnical).await
+                                    }
+                                }
+                            } else {
+                                peer.send(msg.id, false, Error::Authorisation).await
+                            }
+                        };
+                        if let Err(e) = r {
+                            log_service.error("EdgeDeletionLog Channel".to_string(), e);
                             break;
                         }
                     }

@@ -16,14 +16,20 @@ use tokio::{
 
 use crate::{
     cryptography::{base64_encode, random32},
-    database::{daily_log::RoomDefinitionLog, graph_database::GraphDatabaseService},
+    database::{
+        daily_log::{DailyLog, RoomDefinitionLog},
+        edge::EdgeDeletionEntry,
+        graph_database::GraphDatabaseService,
+        node::{NodeDeletionEntry, NodeIdentifier},
+    },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
 };
 
 use super::{
-    peer_service::PeerConnectionService, room_lock::RoomLockService, room_node::RoomNode, Answer,
-    Error, LocalEvent, ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
+    node_full::FullNode, peer_service::PeerConnectionService,
+    room_locking_service::RoomLockService, room_node::RoomNode, Answer, Error, LocalEvent,
+    ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
 static QUERY_SEND_BUFFER: usize = 10;
@@ -184,7 +190,7 @@ impl LocalPeerService {
         });
     }
 
-    pub async fn process_remote_event(
+    async fn process_remote_event(
         event: RemoteEvent,
         peer: &mut LocalPeer,
         lock_reply: mpsc::UnboundedSender<Vec<u8>>,
@@ -221,7 +227,7 @@ impl LocalPeerService {
         Ok(())
     }
 
-    pub async fn process_local_event(
+    async fn process_local_event(
         msg: LocalEvent,
         remote_key: &Arc<Mutex<Vec<u8>>>,
         peer: &LocalPeer,
@@ -246,7 +252,7 @@ impl LocalPeerService {
         Ok(())
     }
 
-    pub async fn process_acquired_lock(
+    async fn process_acquired_lock(
         room: Vec<u8>,
         acquired_lock: &Arc<Mutex<HashSet<Vec<u8>>>>,
         peer: &LocalPeer,
@@ -270,7 +276,7 @@ impl LocalPeerService {
         ret
     }
 
-    pub async fn synchronise_room(room_id: Vec<u8>, peer: &LocalPeer) -> Result<(), crate::Error> {
+    async fn synchronise_room(room_id: Vec<u8>, peer: &LocalPeer) -> Result<(), crate::Error> {
         let remote_room_def: Option<RoomDefinitionLog> =
             peer.query(Query::RoomDefinition(room_id.clone())).await?;
         let local_room_def = peer.db.get_room_definition(room_id.clone()).await?;
@@ -279,14 +285,16 @@ impl LocalPeerService {
             return Err(crate::Error::RoomUnknow(base64_encode(&room_id)));
         }
         let remote_room = remote_room_def.unwrap();
-        Self::synchronise_room_definition(remote_room, local_room_def, peer).await?;
-
+        Self::synchronise_room_definition(&remote_room, &local_room_def, peer).await?;
+        if Self::synchronise_room_data(&remote_room, &local_room_def, peer).await? {
+            peer.db.compute_daily_log().await;
+        }
         Ok(())
     }
 
-    pub async fn synchronise_room_definition(
-        remote_room: RoomDefinitionLog,
-        local_room_def: Option<RoomDefinitionLog>,
+    async fn synchronise_room_definition(
+        remote_room: &RoomDefinitionLog,
+        local_room_def: &Option<RoomDefinitionLog>,
         peer: &LocalPeer,
     ) -> Result<(), crate::Error> {
         let load_room = match local_room_def {
@@ -315,6 +323,138 @@ impl LocalPeerService {
         }
 
         Ok(())
+    }
+
+    async fn synchronise_room_data(
+        remote_room: &RoomDefinitionLog,
+        local_room_def: &Option<RoomDefinitionLog>,
+        peer: &LocalPeer,
+    ) -> Result<bool, crate::Error> {
+        let sync_history = match local_room_def {
+            Some(local_room) => {
+                if remote_room.history_hash.is_some()
+                    && local_room.history_hash.eq(&remote_room.history_hash)
+                    && local_room.last_data_date.eq(&remote_room.last_data_date)
+                {
+                    false
+                } else {
+                    true
+                }
+            }
+            None => true,
+        };
+        if sync_history {
+            Self::synchronise_history(&remote_room.room_id, peer).await
+        } else {
+            Self::synchronise_last_day(remote_room, local_room_def, peer).await
+        }
+    }
+
+    async fn synchronise_history(
+        room_id: &Vec<u8>,
+        peer: &LocalPeer,
+    ) -> Result<bool, crate::Error> {
+        let remote_log: Vec<DailyLog> = peer.query(Query::RoomLog(room_id.clone())).await?;
+        let local_log = peer.db.get_room_log(room_id.clone()).await?;
+
+        let mut local_map = HashMap::with_capacity(local_log.len());
+        for log in local_log {
+            local_map.insert(log.date, log);
+        }
+        let mut modified = false;
+        for remote in &remote_log {
+            let local_log = local_map.get(&remote.date);
+            match local_log {
+                Some(local_log) => {
+                    if !local_log.daily_hash.eq(&remote.daily_hash) {
+                        if Self::synchronise_day(room_id, remote.date, peer).await? {
+                            modified = true;
+                        }
+                    }
+                }
+                None => {
+                    if Self::synchronise_day(room_id, remote.date, peer).await? {
+                        modified = true;
+                    }
+                }
+            }
+        }
+        Ok(modified)
+    }
+
+    async fn synchronise_last_day(
+        remote_room: &RoomDefinitionLog,
+        local_room_def: &Option<RoomDefinitionLog>,
+        peer: &LocalPeer,
+    ) -> Result<bool, crate::Error> {
+        let sync_day = match local_room_def {
+            Some(local_room) => {
+                if local_room.daily_hash.is_some()
+                    && local_room.last_data_date.is_some()
+                    && local_room.daily_hash.eq(&remote_room.daily_hash)
+                {
+                    false
+                } else {
+                    true
+                }
+            }
+            None => true,
+        };
+
+        if sync_day {
+            Self::synchronise_day(
+                &remote_room.room_id,
+                remote_room.last_data_date.unwrap(), //checked by sync_day
+                peer,
+            )
+            .await
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn synchronise_day(
+        room_id: &Vec<u8>,
+        date: i64,
+        peer: &LocalPeer,
+    ) -> Result<bool, crate::Error> {
+        let edge_deletion: Vec<EdgeDeletionEntry> = peer
+            .query(Query::EdgeDeletionLog(room_id.clone(), date))
+            .await?;
+        peer.db.delete_edges(edge_deletion).await?;
+
+        let node_deletion: Vec<NodeDeletionEntry> = peer
+            .query(Query::NodeDeletionLog(room_id.clone(), date))
+            .await?;
+
+        peer.db.delete_nodes(node_deletion).await?;
+
+        let remote_nodes: HashSet<NodeIdentifier> = peer
+            .query(Query::RoomDailyNodes(room_id.clone(), date))
+            .await?;
+
+        let filtered = peer.db.filter_existing_node(remote_nodes, date).await?;
+        let max_nodes = 128;
+        let mut current_list = Vec::with_capacity(max_nodes);
+
+        for node_identifier in filtered {
+            current_list.push(node_identifier.id);
+            if current_list.len() == max_nodes {
+                let nodes: Vec<FullNode> = peer
+                    .query(Query::FullNodes(room_id.clone(), current_list))
+                    .await?;
+                peer.db.add_full_nodes(room_id.clone(), nodes).await?;
+
+                current_list = Vec::with_capacity(max_nodes);
+            }
+        }
+        if !current_list.is_empty() {
+            let nodes: Vec<FullNode> = peer
+                .query(Query::FullNodes(room_id.clone(), current_list))
+                .await?;
+            peer.db.add_full_nodes(room_id.clone(), nodes).await?;
+        }
+        Ok(false)
     }
 }
 

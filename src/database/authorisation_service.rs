@@ -37,6 +37,8 @@ pub enum AuthorisationMessage {
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomForUser(Vec<u8>, i64, Sender<HashSet<Vec<u8>>>),
     AddFullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
+    DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -132,6 +134,12 @@ impl AuthorisationService {
             AuthorisationMessage::Load(rooms, reply) => {
                 let res = auth.load_json(&rooms);
                 let _ = reply.send(res);
+            }
+
+            AuthorisationMessage::Sign(data, reply) => {
+                let verifying = auth.signing_key.export_verifying_key();
+                let signature = auth.signing_key.sign(&data);
+                let _ = reply.send((verifying, signature));
             }
 
             AuthorisationMessage::Deletion(mut deletion_query, reply) => {
@@ -260,11 +268,9 @@ impl AuthorisationService {
 
                 let _ = database_writer.send(query).await;
             }
-            AuthorisationMessage::Sign(data, reply) => {
-                let verifying = auth.signing_key.export_verifying_key();
-                let signature = auth.signing_key.sign(&data);
-                let _ = reply.send((verifying, signature));
-            }
+
+            AuthorisationMessage::DeleteEdges(edges, reply) => todo!(),
+            AuthorisationMessage::DeleteNodes(nodes, reply) => todo!(),
         }
     }
 

@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::cryptography::base64_decode;
 
 use crate::database::{
     daily_log::DailyMutations,
     edge::Edge,
-    node::{extract_json, Node, NodeIdentifier},
+    node::{extract_json, Node},
     query_language::{data_model_parser::Entity, FieldType},
     sqlite_database::Writeable,
     Error, Result,
@@ -36,18 +36,17 @@ pub struct FullNode {
 }
 impl FullNode {
     pub fn get_nodes(
-        node_ids: HashSet<NodeIdentifier>,
+        room_id: &Vec<u8>,
+        node_ids: Vec<Vec<u8>>,
         conn: &Connection,
     ) -> Result<Vec<FullNode>> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
-        let mut ids = Vec::new();
-        while let Some(nid) = it.next() {
+        while let Some(_) = it.next() {
             q.push('?');
             if it.peek().is_some() {
                 q.push(',');
             }
-            ids.push(&nid.id);
         }
 
         let query = format!("
@@ -61,7 +60,7 @@ impl FullNode {
         ", q);
 
         let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(params_from_iter(ids.iter()))?;
+        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
 
         let mut map: HashMap<Vec<u8>, Self> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -79,6 +78,16 @@ impl FullNode {
                     _signature: row.get(8)?,
                     _local_id: row.get(9)?,
                 };
+                match &node.room_id {
+                    Some(rid) => {
+                        if !rid.eq(room_id) {
+                            return Err(Error::InvalidNodeRequest());
+                        }
+                    }
+                    None => {
+                        return Err(Error::InvalidNodeRequest());
+                    }
+                }
 
                 FullNode {
                     node,
@@ -246,20 +255,20 @@ impl FullNode {
         Ok(())
     }
 
-    pub fn prepare_for_insert(nodes: Vec<FullNode>, conn: &Connection) -> Result<Vec<FullNode>> {
-        let mut node_ids: HashSet<NodeIdentifier> = HashSet::new();
+    pub fn prepare_for_insert(
+        room_id: &Vec<u8>,
+        nodes: Vec<FullNode>,
+        conn: &Connection,
+    ) -> Result<Vec<FullNode>> {
+        let mut node_ids = Vec::new();
         let mut node_map = HashMap::new();
 
         for node in nodes {
-            node_ids.insert(NodeIdentifier {
-                id: node.node.id.clone(),
-                mdate: node.node.mdate,
-                signature: node.node._signature.clone(),
-            });
+            node_ids.push(node.node.id.clone());
             node_map.insert(node.node.id.clone(), node);
         }
 
-        let existing_nodes = Self::get_nodes(node_ids, conn)?;
+        let existing_nodes = Self::get_nodes(room_id, node_ids, conn)?;
 
         let mut result: Vec<FullNode> = Vec::new();
         //process existing nodes
@@ -337,7 +346,7 @@ impl Writeable for FullNode {
 #[cfg(test)]
 mod tests {
 
-    use std::{fs, path::PathBuf};
+    use std::{collections::HashSet, fs, path::PathBuf};
 
     use crate::{
         cryptography::{base64_encode, random32, Ed25519SigningKey},
@@ -379,13 +388,9 @@ mod tests {
         raw_node.sign(&signing_key).unwrap();
         raw_node.write(&conn, false, &None, &None).unwrap();
 
-        let mut node_ids = HashSet::new();
-        node_ids.insert(NodeIdentifier {
-            id: raw_node.id.clone(),
-            mdate: date,
-            signature: raw_node._signature.clone(),
-        });
-        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
+        let mut node_ids = Vec::new();
+        node_ids.push(raw_node.id.clone());
+        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
 
@@ -412,13 +417,10 @@ mod tests {
         edge.sign(&signing_key).unwrap();
         edge.write(&conn).unwrap();
 
-        let mut node_ids = HashSet::new();
-        node_ids.insert(NodeIdentifier {
-            id: node_with_one_edge.id.clone(),
-            mdate: date,
-            signature: node_with_one_edge._signature.clone(),
-        });
-        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
+        let mut node_ids = Vec::new();
+        node_ids.push(node_with_one_edge.id.clone());
+
+        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_one_edge.id, full.node.id);
@@ -460,35 +462,21 @@ mod tests {
         edge.sign(&signing_key).unwrap();
         edge.write(&conn).unwrap();
 
-        let mut node_ids = HashSet::new();
-        node_ids.insert(NodeIdentifier {
-            id: node_with_two_edge.id.clone(),
-            mdate: date,
-            signature: node_with_two_edge._signature.clone(),
-        });
-        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
+        let mut node_ids = Vec::new();
+        node_ids.push(node_with_two_edge.id.clone());
+
+        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_two_edge.id, full.node.id);
         assert_eq!(2, full.edges.len());
 
-        let mut node_ids = HashSet::new();
-        node_ids.insert(NodeIdentifier {
-            id: raw_node.id.clone(),
-            mdate: date,
-            signature: raw_node._signature.clone(),
-        });
-        node_ids.insert(NodeIdentifier {
-            id: node_with_one_edge.id.clone(),
-            mdate: date,
-            signature: node_with_one_edge._signature.clone(),
-        });
-        node_ids.insert(NodeIdentifier {
-            id: node_with_two_edge.id.clone(),
-            mdate: date,
-            signature: node_with_two_edge._signature.clone(),
-        });
-        let nodes = FullNode::get_nodes(node_ids, &conn).unwrap();
+        let mut node_ids = Vec::new();
+        node_ids.push(raw_node.id.clone());
+        node_ids.push(node_with_one_edge.id.clone());
+        node_ids.push(node_with_two_edge.id.clone());
+
+        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(3, nodes.len());
     }
 
@@ -555,7 +543,7 @@ mod tests {
             ..Default::default()
         });
 
-        let prepared = FullNode::prepare_for_insert(full_nodes, &conn).unwrap();
+        let prepared = FullNode::prepare_for_insert(&room_id1.to_vec(), full_nodes, &conn).unwrap();
         assert_eq!(1, prepared.len());
         let node = &prepared[0];
         assert!(node.node._local_id.is_some());
@@ -674,7 +662,7 @@ mod tests {
         second_app.add_room_node(node.clone()).await.unwrap();
 
         let node_ids = first_app
-            .get_daily_id_for_room(room_id.clone(), now())
+            .get_room_daily_nodes(room_id.clone(), now())
             .await
             .unwrap();
         assert_eq!(3, node_ids.len());
@@ -693,14 +681,21 @@ mod tests {
         let ser = bincode::serialize(&filtered_nodes).unwrap();
         let filtered_nodes: HashSet<NodeIdentifier> = bincode::deserialize(&ser).unwrap();
 
-        let full_nodes: Vec<FullNode> = first_app.get_full_nodes(filtered_nodes).await.unwrap();
+        let filtered_id: Vec<Vec<u8>> = filtered_nodes.into_iter().map(|e| e.id).collect();
+        let full_nodes: Vec<FullNode> = first_app
+            .get_full_nodes(room_id.clone(), filtered_id)
+            .await
+            .unwrap();
         assert_eq!(3, full_nodes.len());
 
         //full_nodes sent over network
         let ser = bincode::serialize(&full_nodes).unwrap();
         let full_nodes: Vec<FullNode> = bincode::deserialize(&ser).unwrap();
 
-        let v = second_app.add_full_node(full_nodes).await.unwrap();
+        let v = second_app
+            .add_full_nodes(room_id.clone(), full_nodes)
+            .await
+            .unwrap();
         assert_eq!(0, v.len());
 
         let result = second_app

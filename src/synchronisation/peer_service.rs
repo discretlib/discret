@@ -15,7 +15,7 @@ use crate::{
 use super::{
     local_peer::{LocalPeer, LocalPeerService, QueryService},
     remote_peer::{RemotePeerHandle, RemoteQueryService},
-    room_lock::RoomLockService,
+    room_locking_service::RoomLockService,
     Answer, LocalEvent, QueryProtocol, RemoteEvent,
 };
 

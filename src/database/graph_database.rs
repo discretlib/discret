@@ -36,8 +36,10 @@ enum Message {
     UpdateModel(String, Sender<Result<String>>),
     Sign(Vec<u8>, Sender<(Vec<u8>, Vec<u8>)>),
     RoomAdd(RoomNode, Sender<Result<()>>),
-    FullNodeAdd(Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
+    FullNodeAdd(Vec<u8>, Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
     RoomForUser(Vec<u8>, Sender<Result<VecDeque<Vec<u8>>>>),
+    DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
+    DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
 }
 ///
@@ -117,8 +119,8 @@ impl GraphDatabaseService {
                         service.add_room(room_node, reply).await;
                     }
 
-                    Message::FullNodeAdd(nodes, reply) => {
-                        service.add_full_nodes(nodes, reply).await;
+                    Message::FullNodeAdd(room_id, nodes, reply) => {
+                        service.add_full_nodes(room_id, nodes, reply).await;
                     }
 
                     Message::UpdateModel(value, reply) => {
@@ -144,6 +146,12 @@ impl GraphDatabaseService {
 
                     Message::RoomForUser(verifying_key, reply) => {
                         service.get_rooms_for_user(verifying_key, reply).await;
+                    }
+                    Message::DeleteEdges(edges, reply) => {
+                        service.delete_edges(edges, reply).await;
+                    }
+                    Message::DeleteNodes(nodes, reply) => {
+                        service.delete_nodes(nodes, reply).await;
                     }
                 }
             }
@@ -264,6 +272,15 @@ impl GraphDatabaseService {
     }
 
     ///
+    /// Ask the database to compute daily log
+    /// this is an expensive operation that should be used only after a large batch insert whenever possible
+    /// This will send an event that will trigger the peer synchronisation
+    ///
+    pub async fn compute_daily_log(&self) {
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+    }
+
+    ///
     /// sign a byte array
     /// returns  
     ///
@@ -362,6 +379,16 @@ impl GraphDatabaseService {
     }
 
     ///
+    /// get node deletions for a room at a specific day
+    ///
+    pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>) -> Result<()> {
+        let (send_response, receive_response) = oneshot::channel::<Result<()>>();
+        let msg = Message::DeleteNodes(nodes, send_response);
+        let _ = self.sender.send(msg).await;
+        receive_response.await?
+    }
+
+    ///
     /// get edge deletions for a room at a specific day
     ///
     pub async fn get_room_edge_deletion_log(
@@ -382,9 +409,19 @@ impl GraphDatabaseService {
     }
 
     ///
+    /// get node deletions for a room at a specific day
+    ///
+    pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>) -> Result<()> {
+        let (send_response, receive_response) = oneshot::channel::<Result<()>>();
+        let msg = Message::DeleteEdges(edges, send_response);
+        let _ = self.sender.send(msg).await;
+        receive_response.await?
+    }
+
+    ///
     /// get all node id for a room at a specific day
     ///
-    pub async fn get_daily_id_for_room(
+    pub async fn get_room_daily_nodes(
         &self,
         room_id: Vec<u8>,
         date: i64,
@@ -428,11 +465,15 @@ impl GraphDatabaseService {
     ///
     /// get full node definition
     ///
-    pub async fn get_full_nodes(&self, node_ids: HashSet<NodeIdentifier>) -> Result<Vec<FullNode>> {
+    pub async fn get_full_nodes(
+        &self,
+        room_id: Vec<u8>,
+        node_ids: Vec<Vec<u8>>,
+    ) -> Result<Vec<FullNode>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
-                let room_node = FullNode::get_nodes(node_ids, conn);
+                let room_node = FullNode::get_nodes(&room_id, node_ids, conn);
                 let _ = send_response.send(room_node);
             }))
             .await?;
@@ -443,9 +484,13 @@ impl GraphDatabaseService {
     /// insert the full node list
     /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
     ///
-    pub async fn add_full_node(&self, nodes: Vec<FullNode>) -> Result<Vec<Vec<u8>>> {
+    pub async fn add_full_nodes(
+        &self,
+        room_id: Vec<u8>,
+        nodes: Vec<FullNode>,
+    ) -> Result<Vec<Vec<u8>>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
-        let msg = Message::FullNodeAdd(nodes, send_response);
+        let msg = Message::FullNodeAdd(room_id, nodes, send_response);
         let _ = self.sender.send(msg).await;
         receive_response.await?
     }
@@ -755,7 +800,12 @@ impl GraphDatabase {
             .await;
     }
 
-    pub async fn add_full_nodes(&self, nodes: Vec<FullNode>, reply: Sender<Result<Vec<Vec<u8>>>>) {
+    pub async fn add_full_nodes(
+        &self,
+        room_id: Vec<u8>,
+        nodes: Vec<FullNode>,
+        reply: Sender<Result<Vec<Vec<u8>>>>,
+    ) {
         let mut invalid_nodes = Vec::new();
         let mut valid_nodes = Vec::new();
 
@@ -794,7 +844,7 @@ impl GraphDatabase {
             .reader
             .send_async(Box::new(move |conn| {
                 let val_nodes =
-                    FullNode::prepare_for_insert(valid_nodes, conn).map_err(Error::from);
+                    FullNode::prepare_for_insert(&room_id, valid_nodes, conn).map_err(Error::from);
                 match val_nodes {
                     Ok(val_nodes) => {
                         let msg =
@@ -841,6 +891,19 @@ impl GraphDatabase {
                 let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
             }
         }
+    }
+
+    pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>, reply: Sender<Result<()>>) {
+        let _ = self
+            .auth_service
+            .send(AuthorisationMessage::DeleteEdges(edges, reply))
+            .await;
+    }
+    pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>, reply: Sender<Result<()>>) {
+        let _ = self
+            .auth_service
+            .send(AuthorisationMessage::DeleteNodes(nodes, reply))
+            .await;
     }
 }
 

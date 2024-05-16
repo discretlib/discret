@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
@@ -6,6 +8,7 @@ use crate::{
     cryptography::{base64_encode, import_verifying_key, SigningKey},
     date_utils::{date, date_next_day, now},
 };
+use ed25519_dalek::VerifyingKey;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -380,7 +383,7 @@ impl Default for Edge {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EdgeDeletionEntry {
     pub room_id: Vec<u8>,
     pub src: Vec<u8>,
@@ -491,6 +494,21 @@ impl EdgeDeletionEntry {
         }
 
         Ok(result)
+    }
+
+    pub fn with_source_authors(
+        edges: Vec<Self>,
+        conn: &Connection,
+    ) -> Result<HashMap<Vec<u8>, (Self, Option<Vec<u8>>)>> {
+        let mut map = HashMap::new();
+
+        Ok(map)
+    }
+    pub fn delete_all(
+        edges: Vec<Self>,
+        conn: &Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        Ok(())
     }
 }
 impl Writeable for EdgeDeletionEntry {

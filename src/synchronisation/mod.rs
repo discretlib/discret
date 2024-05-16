@@ -6,7 +6,7 @@ pub mod local_peer;
 pub mod node_full;
 pub mod peer_service;
 pub mod remote_peer;
-mod room_lock;
+mod room_locking_service;
 pub mod room_node;
 
 /// Queries have 10 seconds to returns before closing connection
@@ -19,6 +19,10 @@ pub enum Query {
     RoomDefinition(Vec<u8>),
     RoomNode(Vec<u8>),
     RoomLog(Vec<u8>),
+    RoomDailyNodes(Vec<u8>, i64),
+    EdgeDeletionLog(Vec<u8>, i64),
+    NodeDeletionLog(Vec<u8>, i64),
+    FullNodes(Vec<u8>, Vec<Vec<u8>>),
 }
 
 #[derive(Serialize, Deserialize)]

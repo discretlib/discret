@@ -1,4 +1,7 @@
-use std::{collections::HashSet, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use super::{
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
@@ -639,6 +642,22 @@ impl NodeDeletionEntry {
         }
 
         Ok(result)
+    }
+
+    pub fn with_previous_authors(
+        nodes: Vec<Self>,
+        conn: &Connection,
+    ) -> Result<HashMap<Vec<u8>, (Self, Option<Vec<u8>>)>> {
+        let mut map = HashMap::new();
+
+        Ok(map)
+    }
+
+    pub fn delete_all(
+        nodes: Vec<Vec<u8>>,
+        conn: &Connection,
+    ) -> std::result::Result<(), rusqlite::Error> {
+        Ok(())
     }
 }
 impl Writeable for NodeDeletionEntry {
