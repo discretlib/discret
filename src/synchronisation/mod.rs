@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{cryptography, database::room::Room};
 use thiserror::Error;
-pub mod authorisation_node;
 pub mod local_peer;
 pub mod node_full;
 pub mod peer_service;
 pub mod remote_peer;
 mod room_lock;
+pub mod room_node;
 
 /// Queries have 10 seconds to returns before closing connection
 pub static NETWORK_TIMEOUT_SEC: u64 = 10;
@@ -17,6 +17,7 @@ pub enum Query {
     ProveIdentity(Vec<u8>),
     RoomList,
     RoomDefinition(Vec<u8>),
+    RoomNode(Vec<u8>),
     RoomLog(Vec<u8>),
 }
 
@@ -90,6 +91,7 @@ mod tests {
             configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
+            sqlite_database::RowMappingFn,
         },
         event_service::EventService,
         log_service::LogService,
@@ -137,7 +139,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn synchronise_existing() {
+    async fn synchronise_room() {
         init_database_path();
         let path: PathBuf = DATA_PATH.into();
         let model = "Person{name:String,}";
@@ -190,13 +192,14 @@ mod tests {
 
         let first_key = first_peer.db.verifying_key().clone();
 
+        let id = room_id.clone();
         let event_fn: EventFn = Box::new(move |event| match event {
             Event::PeerConnected(id, _, _) => {
                 assert_eq!(id, first_key);
                 return false;
             }
             Event::RoomSynchronized(room) => {
-                assert_eq!(room, room_id);
+                assert_eq!(room, id.clone());
                 return true;
             }
 
@@ -207,6 +210,8 @@ mod tests {
             Log::Error(_, src, e) => Err(format!("src:{} Err:{} ", src, e)),
             Log::Info(_, _) => Ok(()),
         });
+
+        //        tokio::time::sleep(Duration::from_millis(100)).await;
 
         connect_peers(&first_peer.peer_service, &second_peer.peer_service).await;
 
@@ -223,5 +228,31 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+
+        let room_query = "query q{ _Room{ id mdate }}";
+        let first_res = first_peer.db.query(room_query, None).await.unwrap();
+        let second_res = second_peer.db.query(room_query, None).await.unwrap();
+
+        assert_eq!(second_res, first_res);
+
+        let query = "SELECT mdate  FROM _room_changelog WHERE room_id=?";
+        struct Changelog {
+            mdate: i64,
+        }
+        let mapping: RowMappingFn<Changelog> = |row| Ok(Box::new(Changelog { mdate: row.get(0)? }));
+        let res = first_peer
+            .db
+            .select(query.to_string(), vec![Box::new(room_id.clone())], mapping)
+            .await
+            .unwrap();
+        let room_first_date = res[0].mdate;
+
+        let res = second_peer
+            .db
+            .select(query.to_string(), vec![Box::new(room_id.clone())], mapping)
+            .await
+            .unwrap();
+
+        assert_eq!(room_first_date, res[0].mdate);
     }
 }

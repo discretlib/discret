@@ -29,7 +29,8 @@ impl RemoteQueryService {
             while let Some(msg) = receiver.recv().await {
                 match msg.query {
                     Query::ProveIdentity(challenge) => {
-                        let res = peer.local_db.sign(challenge).await;
+                        let res = peer.db.sign(challenge).await;
+
                         if let Err(e) = peer
                             .send(
                                 msg.id,
@@ -69,7 +70,7 @@ impl RemoteQueryService {
                     Query::RoomDefinition(room_id) => {
                         let r = {
                             if peer.allowed_room.contains(&room_id) {
-                                let res = peer.local_db.get_room_definition(room_id).await;
+                                let res = peer.db.get_room_definition(room_id).await;
                                 match res {
                                     Ok(definition) => peer.send(msg.id, true, definition).await,
                                     Err(e) => {
@@ -86,10 +87,32 @@ impl RemoteQueryService {
                             break;
                         }
                     }
+
+                    Query::RoomNode(room_id) => {
+                        let r = {
+                            if peer.allowed_room.contains(&room_id) {
+                                let res = peer.db.get_room_node(room_id).await;
+                                match res {
+                                    Ok(definition) => peer.send(msg.id, true, definition).await,
+                                    Err(e) => {
+                                        log_service.error("RoomNode".to_string(), e.into());
+                                        peer.send(msg.id, false, Error::RemoteTechnical).await
+                                    }
+                                }
+                            } else {
+                                peer.send(msg.id, false, Error::Authorisation).await
+                            }
+                        };
+                        if let Err(e) = r {
+                            log_service.error("RoomNode Channel".to_string(), e);
+                            break;
+                        }
+                    }
+
                     Query::RoomLog(room_id) => {
                         let r = {
                             if peer.allowed_room.contains(&room_id) {
-                                let res = peer.local_db.get_room_log(room_id).await;
+                                let res = peer.db.get_room_log(room_id).await;
                                 match res {
                                     Ok(log) => peer.send(msg.id, true, log).await,
                                     Err(e) => {
@@ -117,7 +140,7 @@ impl RemoteQueryService {
 pub struct RemotePeerHandle {
     pub hardware_id: Vec<u8>,
     pub allowed_room: HashSet<Vec<u8>>,
-    pub local_db: GraphDatabaseService,
+    pub db: GraphDatabaseService,
     pub reply: mpsc::Sender<Answer>,
 }
 impl RemotePeerHandle {
@@ -125,7 +148,7 @@ impl RemotePeerHandle {
         &mut self,
         verifying_key: Vec<u8>,
     ) -> Result<VecDeque<Vec<u8>>, crate::Error> {
-        let rooms = self.local_db.get_rooms_for_user(verifying_key).await?;
+        let rooms = self.db.get_rooms_for_user(verifying_key).await?;
         if self.allowed_room.is_empty() {
             for room in &rooms {
                 self.allowed_room.insert(room.clone());

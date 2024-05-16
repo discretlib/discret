@@ -60,6 +60,9 @@ pub enum Error {
 
     #[error("Timeout occured while sending {0}")]
     TimeOut(String),
+
+    #[error("Remote Room did not sent back a room definition {0}")]
+    RoomUnknow(String),
 }
 
 // lazy_static::lazy_static! {

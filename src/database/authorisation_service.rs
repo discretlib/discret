@@ -7,10 +7,8 @@ use crate::{
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
     synchronisation::{
-        authorisation_node::{
-            parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode,
-        },
         node_full::FullNode,
+        room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     },
 };
 
@@ -72,9 +70,8 @@ pub struct RoomNodeWriteQuery {
 impl Writeable for RoomNodeWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.room.write(conn)?;
-        if let Some(id) = &self.room.node.room_id {
-            DailyLog::log_room_definition(id, self.room.last_modified, conn)?;
-        }
+
+        DailyLog::log_room_definition(&self.room.node.id, self.room.last_modified, conn)?;
 
         Ok(())
     }

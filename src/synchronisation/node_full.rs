@@ -349,7 +349,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
-        synchronisation::authorisation_node::RoomNode,
+        synchronisation::room_node::RoomNode,
     };
 
     use super::*;

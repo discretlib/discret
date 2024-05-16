@@ -16,14 +16,14 @@ use tokio::{
 
 use crate::{
     cryptography::{base64_encode, random32},
-    database::graph_database::GraphDatabaseService,
+    database::{daily_log::RoomDefinitionLog, graph_database::GraphDatabaseService},
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
 };
 
 use super::{
-    peer_service::PeerConnectionService, room_lock::RoomLockService, Answer, Error, LocalEvent,
-    ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
+    peer_service::PeerConnectionService, room_lock::RoomLockService, room_node::RoomNode, Answer,
+    Error, LocalEvent, ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
 static QUERY_SEND_BUFFER: usize = 10;
@@ -192,7 +192,6 @@ impl LocalPeerService {
         match event {
             RemoteEvent::Ready => {
                 let rooms: VecDeque<Vec<u8>> = peer.query(Query::RoomList).await?;
-                println!("Room List len {}", rooms.len());
                 for room in &rooms {
                     peer.remote_rooms.insert(room.clone());
                 }
@@ -254,12 +253,67 @@ impl LocalPeerService {
         event_service: &EventService,
     ) -> Result<(), crate::Error> {
         acquired_lock.lock().await.insert(room.clone());
-        println!("Room lock Acquired {}", base64_encode(&room));
+
+        let ret = match Self::synchronise_room(room.clone(), peer).await {
+            Ok(_) => {
+                event_service
+                    .notify(EventServiceMessage::RoomSynchronized(room.clone()))
+                    .await;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+
         peer.lock_service.unlock(room.clone()).await;
         acquired_lock.lock().await.remove(&room);
-        event_service
-            .notify(EventServiceMessage::RoomSynchronized(room))
-            .await;
+
+        ret
+    }
+
+    pub async fn synchronise_room(room_id: Vec<u8>, peer: &LocalPeer) -> Result<(), crate::Error> {
+        let remote_room_def: Option<RoomDefinitionLog> =
+            peer.query(Query::RoomDefinition(room_id.clone())).await?;
+        let local_room_def = peer.db.get_room_definition(room_id.clone()).await?;
+
+        if remote_room_def.is_none() {
+            return Err(crate::Error::RoomUnknow(base64_encode(&room_id)));
+        }
+        let remote_room = remote_room_def.unwrap();
+        Self::synchronise_room_definition(remote_room, local_room_def, peer).await?;
+
+        Ok(())
+    }
+
+    pub async fn synchronise_room_definition(
+        remote_room: RoomDefinitionLog,
+        local_room_def: Option<RoomDefinitionLog>,
+        peer: &LocalPeer,
+    ) -> Result<(), crate::Error> {
+        let load_room = match local_room_def {
+            Some(local_room) => {
+                if local_room.room_def_date < remote_room.room_def_date {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => true,
+        };
+
+        if load_room {
+            let node: Option<RoomNode> = peer
+                .query(Query::RoomNode(remote_room.room_id.clone()))
+                .await?;
+            match node {
+                Some(node) => peer.db.add_room_node(node).await?,
+                None => {
+                    return Err(crate::Error::RoomUnknow(base64_encode(
+                        &remote_room.room_id,
+                    )))
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -267,7 +321,7 @@ impl LocalPeerService {
 pub struct LocalPeer {
     pub hardware_id: Vec<u8>,
     pub remote_rooms: HashSet<Vec<u8>>,
-    pub database_service: GraphDatabaseService,
+    pub db: GraphDatabaseService,
     pub lock_service: RoomLockService,
     pub query_service: QueryService,
     pub event_sender: Sender<RemoteEvent>,

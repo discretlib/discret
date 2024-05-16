@@ -958,7 +958,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
-        synchronisation::authorisation_node::*,
+        synchronisation::room_node::*,
     };
     use std::{fs, path::PathBuf};
     const DATA_PATH: &str = "test_data/database/authorisation_synch_test/";

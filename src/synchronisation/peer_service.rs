@@ -73,7 +73,7 @@ impl PeerConnectionService {
                         RemoteQueryService::start(
                             RemotePeerHandle {
                                 hardware_id: hardware_id.clone(),
-                                local_db: local_db.clone(),
+                                db: local_db.clone(),
                                 allowed_room: HashSet::new(),
                                 reply: answer_sender,
                             },
@@ -86,7 +86,7 @@ impl PeerConnectionService {
                         let local_peer = LocalPeer {
                             hardware_id: hardware_id.clone(),
                             remote_rooms: HashSet::new(),
-                            database_service: local_db.clone(),
+                            db: local_db.clone(),
                             lock_service: lock_service.clone(),
                             query_service: QueryService::start(
                                 query_sender,

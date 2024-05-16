@@ -24,8 +24,8 @@ use super::{
 use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
 use crate::date_utils::now;
 use crate::event_service::EventService;
-use crate::synchronisation::authorisation_node::RoomNode;
 use crate::synchronisation::node_full::FullNode;
+use crate::synchronisation::room_node::RoomNode;
 
 const LRU_SIZE: usize = 128;
 
