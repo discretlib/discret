@@ -113,8 +113,8 @@ pub enum Error {
     #[error("Unknown room id {0} ")]
     UnknownRoom(String),
 
-    #[error("User '{0}' does not belong to the parent rooms of room '{1}' ")]
-    UserNotInParentRoom(String, String),
+    #[error("{0} Entity cannot have a room_id defined")]
+    ForbiddenRoomId(String),
 
     #[error("Updates not allowed, Only inserts can be performed for this entity")]
     UpdateNotAllowed(),

@@ -828,7 +828,6 @@ pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
     let mut room = Room {
         id: room_node.node.id.clone(),
         mdate: room_node.node.mdate,
-        parent: room_node.node.room_id.clone(),
         ..Default::default()
     };
 

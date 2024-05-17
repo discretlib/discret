@@ -21,7 +21,6 @@ use super::{
 pub struct Room {
     pub id: Vec<u8>,
     pub mdate: i64,
-    pub parent: Option<Vec<u8>>,
     pub admins: HashMap<Vec<u8>, Vec<User>>,
     pub user_admins: HashMap<Vec<u8>, Vec<User>>,
     pub authorisations: HashMap<Vec<u8>, Authorisation>,

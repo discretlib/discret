@@ -15,7 +15,7 @@ use crate::{
 use super::{
     configuration::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_ID_FIELD, ROOM_USER_ADMIN_FIELD,
+        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_USER_ADMIN_FIELD,
     },
     daily_log::{DailyLog, DailyMutations},
     deletion::DeletionQuery,
@@ -578,27 +578,12 @@ impl RoomAuthorisations {
                     //no history, no node to insert, it is a reference
                     return Ok(None);
                 }
-                if let Some(room_id) = &node_insert.room_id {
-                    if let Some(room) = self.rooms.get(room_id) {
-                        if !room.can(
-                            verifying_key,
-                            ROOM_ENT,
-                            node_insert.date,
-                            &RightType::MutateSelf,
-                        ) {
-                            return Err(Error::AuthorisationRejected(
-                                node_insert.entity.clone(),
-                                base64_encode(room_id),
-                            ));
-                        }
-                    } else {
-                        return Err(Error::UnknownRoom(base64_encode(room_id)));
-                    }
+                if node_insert.room_id.is_some() {
+                    return Err(Error::ForbiddenRoomId("_Room".to_string()));
                 }
 
                 let room = Room {
                     id: node_insert.id.clone(),
-                    parent: node_insert.room_id.clone(),
                     ..Default::default()
                 };
                 room
@@ -627,6 +612,9 @@ impl RoomAuthorisations {
 
                         let node_insert = &insert_entity.node_to_mutate;
                         if let Some(node) = &node_insert.node {
+                            if node_insert.room_id.is_some() {
+                                return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
+                            }
                             if let Some(json) = &node._json {
                                 let user = user_from_json(json, node.mdate)?;
                                 room.add_admin_user(user)?;
@@ -651,6 +639,9 @@ impl RoomAuthorisations {
 
                         let node_insert = &insert_entity.node_to_mutate;
                         if let Some(node) = &node_insert.node {
+                            if node_insert.room_id.is_some() {
+                                return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
+                            }
                             if let Some(json) = &node._json {
                                 let user = user_from_json(json, node.mdate)?;
                                 room.add_user_admin_user(user)?;
@@ -707,9 +698,10 @@ impl RoomAuthorisations {
             ));
         }
 
-        let room_user = &room.clone();
         let node_insert = &insert_entity.node_to_mutate;
-
+        if node_insert.room_id.is_some() {
+            return Err(Error::ForbiddenRoomId("_Authorisation".to_string()));
+        }
         //verify that the passed authentication belongs to the room
         let authorisation = match &node_insert.node {
             Some(_) => match room.get_auth_mut(&node_insert.id) {
@@ -754,6 +746,9 @@ impl RoomAuthorisations {
                         if node_insert.node.is_none() || node_insert.old_node.is_some() {
                             return Err(Error::UpdateNotAllowed());
                         }
+                        if node_insert.room_id.is_some() {
+                            return Err(Error::ForbiddenRoomId("_Rights".to_string()));
+                        }
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
                                 let right = entity_right_from_json(node.mdate, json)?;
@@ -776,7 +771,16 @@ impl RoomAuthorisations {
                         {
                             return Err(Error::UpdateNotAllowed());
                         }
-                        self.validate_user(insert_entity, room_user, authorisation)?;
+                        let node_insert = &insert_entity.node_to_mutate;
+                        if node_insert.room_id.is_some() {
+                            return Err(Error::ForbiddenRoomId("_Rights".to_string()));
+                        }
+                        if let Some(node) = &node_insert.node {
+                            if let Some(json) = &node._json {
+                                let user = user_from_json(json, node.mdate)?;
+                                authorisation.add_user(user)?;
+                            }
+                        }
                     }
                 }
                 _ => unreachable!(),
@@ -784,41 +788,6 @@ impl RoomAuthorisations {
         }
 
         Ok((need_room_mutation, need_user_mutation))
-    }
-
-    fn validate_user(
-        &self,
-        insert_entity: &InsertEntity,
-        room_user: &Room,
-        authorisation: &mut Authorisation,
-    ) -> Result<()> {
-        let node_insert = &insert_entity.node_to_mutate;
-        if let Some(node) = &node_insert.node {
-            if let Some(json) = &node._json {
-                let user = user_from_json(json, node.mdate)?;
-                if room_user.has_user(&user.verifying_key) || room_user.parent.is_none() {
-                    authorisation.add_user(user)?;
-                } else {
-                    let mut found = false;
-                    for parent_id in &room_user.parent {
-                        if let Some(parent) = self.rooms.get(parent_id) {
-                            if parent.has_user(&user.verifying_key) {
-                                authorisation.add_user(user.clone())?;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !found {
-                        return Err(Error::UserNotInParentRoom(
-                            base64_encode(&user.verifying_key),
-                            base64_encode(&room_user.id),
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Vec<u8>> {
@@ -885,12 +854,6 @@ impl RoomAuthorisations {
                 .as_i64()
                 .unwrap();
 
-            let parent_str = room_map.get(ROOM_ID_FIELD).unwrap().as_str();
-            let parent = match parent_str {
-                Some(str) => Some(base64_decode(str.as_bytes())?),
-                None => None,
-            };
-
             let mut authorisations = HashMap::new();
             let auth_array = room_map
                 .get(ROOM_AUTHORISATION_FIELD)
@@ -905,7 +868,6 @@ impl RoomAuthorisations {
             let mut room = Room {
                 id,
                 mdate,
-                parent,
                 authorisations,
                 admins: HashMap::new(),
                 user_admins: HashMap::new(),
