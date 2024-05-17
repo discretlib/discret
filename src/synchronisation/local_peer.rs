@@ -422,14 +422,24 @@ impl LocalPeerService {
         date: i64,
         peer: &LocalPeer,
     ) -> Result<bool, crate::Error> {
+        let mut has_changes = false;
+
+        //edge deletion
         let edge_deletion: Vec<EdgeDeletionEntry> = peer
             .query(Query::EdgeDeletionLog(room_id.clone(), date))
             .await?;
+        if !edge_deletion.is_empty() {
+            has_changes = true;
+        }
         peer.db.delete_edges(edge_deletion).await?;
 
+        //node deletion
         let node_deletion: Vec<NodeDeletionEntry> = peer
             .query(Query::NodeDeletionLog(room_id.clone(), date))
             .await?;
+        if !node_deletion.is_empty() {
+            has_changes = true;
+        }
         let max_deletion = 512;
         let mut current = Vec::with_capacity(max_deletion);
         for node_del in node_deletion {
@@ -443,11 +453,15 @@ impl LocalPeerService {
             peer.db.delete_nodes(current).await?;
         }
 
+        //node insertion
         let remote_nodes: HashSet<NodeIdentifier> = peer
             .query(Query::RoomDailyNodes(room_id.clone(), date))
             .await?;
 
         let filtered = peer.db.filter_existing_node(remote_nodes, date).await?;
+        if !filtered.is_empty() {
+            has_changes = true;
+        }
         let max_nodes = 128;
         let mut current_list = Vec::with_capacity(max_nodes);
 
@@ -468,7 +482,7 @@ impl LocalPeerService {
                 .await?;
             peer.db.add_full_nodes(room_id.clone(), nodes).await?;
         }
-        Ok(false)
+        Ok(has_changes)
     }
 }
 
