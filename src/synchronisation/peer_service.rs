@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use crate::{
     database::graph_database::GraphDatabaseService,
     date_utils::now,
-    event_service::{EventService, EventServiceMessage},
+    event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
 };
 
@@ -49,93 +49,46 @@ impl PeerConnectionService {
         log_service: LogService,
         max_concurent_synchronisation: usize,
     ) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
+        let (sender, mut connection_receiver) =
+            mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
         let (local_event_broadcast, _) = broadcast::channel::<LocalEvent>(16);
         let lock_service = RoomLockService::start(max_concurent_synchronisation);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
         tokio::spawn(async move {
             let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
-
-            while let Some(msg) = receiver.recv().await {
-                match msg {
-                    PeerConnectionMessage::NewPeer(
-                        hardware_id,
-                        answer_sender,
-                        answer_receiver,
-                        query_sender,
-                        query_receiver,
-                        event_sender,
-                        event_receiver,
-                    ) => {
-                        let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-
-                        RemoteQueryService::start(
-                            RemotePeerHandle {
-                                hardware_id: hardware_id.clone(),
-                                db: local_db.clone(),
-                                allowed_room: HashSet::new(),
-                                reply: answer_sender,
+            let mut event_receiver = event_service.subcribe().await;
+            loop {
+                tokio::select! {
+                    msg = connection_receiver.recv() =>{
+                        match msg{
+                            Some(msg) =>{
+                                Self::process_connection(
+                                    msg,
+                                    &local_db,
+                                    &event_service,
+                                    &log_service,
+                                    &peer_service,
+                                    &lock_service,
+                                    local_event_broadcast.subscribe(),
+                                    &mut peer_map,
+                                ).await;
                             },
-                            query_receiver,
-                            log_service.clone(),
-                            peer_service.clone(),
-                            verifying_key.clone(),
-                        );
-
-                        let local_peer = LocalPeer {
-                            hardware_id: hardware_id.clone(),
-                            remote_rooms: HashSet::new(),
-                            db: local_db.clone(),
-                            lock_service: lock_service.clone(),
-                            query_service: QueryService::start(
-                                query_sender,
-                                answer_receiver,
-                                log_service.clone(),
-                            ),
-                            event_sender,
-                        };
-
-                        LocalPeerService::start(
-                            local_peer,
-                            event_receiver,
-                            local_event_broadcast.subscribe(),
-                            verifying_key,
-                            log_service.clone(),
-                            peer_service.clone(),
-                            event_service.clone(),
-                        );
-                    }
-                    PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
-                        let entry = peer_map.entry(verifying_key.clone()).or_default();
-                        entry.insert(hardware_id.clone());
-                        let _ = event_service
-                            .sender
-                            .send(EventServiceMessage::PeerConnected(
-                                verifying_key,
-                                now(),
-                                hardware_id,
-                            ))
-                            .await;
-                    }
-
-                    PeerConnectionMessage::PeerDisconnected(verifying_key, hardware_id) => {
-                        let entry = peer_map.remove(&verifying_key);
-                        if let Some(mut entries) = entry {
-                            entries.remove(&hardware_id);
-                            if !entries.is_empty() {
-                                peer_map.insert(verifying_key.clone(), entries);
-                            }
+                            None => break,
                         }
 
-                        let _ = event_service
-                            .sender
-                            .send(EventServiceMessage::PeerDisconnected(
-                                verifying_key,
-                                now(),
-                                hardware_id,
-                            ))
-                            .await;
+
+                    }
+                    msg = event_receiver.recv() =>{
+                        match msg{
+                            Ok(event) => {
+                                Self::process_event(event, &local_event_broadcast, &log_service).await;
+                            },
+                            Err(e) => match e {
+                                broadcast::error::RecvError::Closed => break,
+                                broadcast::error::RecvError::Lagged(_) => {},
+                            },
+                        }
                     }
                 }
             }
@@ -162,10 +115,132 @@ impl PeerConnectionService {
             ))
             .await;
     }
+
+    async fn process_connection(
+        msg: PeerConnectionMessage,
+        local_db: &GraphDatabaseService,
+        event_service: &EventService,
+        log_service: &LogService,
+        peer_service: &PeerConnectionService,
+        lock_service: &RoomLockService,
+        local_event_broadcast: broadcast::Receiver<LocalEvent>,
+        peer_map: &mut HashMap<Vec<u8>, HashSet<Vec<u8>>>,
+    ) {
+        match msg {
+            PeerConnectionMessage::NewPeer(
+                hardware_id,
+                answer_sender,
+                answer_receiver,
+                query_sender,
+                query_receiver,
+                event_sender,
+                event_receiver,
+            ) => {
+                let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+                RemoteQueryService::start(
+                    RemotePeerHandle {
+                        hardware_id: hardware_id.clone(),
+                        db: local_db.clone(),
+                        allowed_room: HashSet::new(),
+                        reply: answer_sender,
+                    },
+                    query_receiver,
+                    log_service.clone(),
+                    peer_service.clone(),
+                    verifying_key.clone(),
+                );
+
+                let local_peer = LocalPeer {
+                    hardware_id: hardware_id.clone(),
+                    remote_rooms: HashSet::new(),
+                    db: local_db.clone(),
+                    lock_service: lock_service.clone(),
+                    query_service: QueryService::start(
+                        query_sender,
+                        answer_receiver,
+                        log_service.clone(),
+                    ),
+                    event_sender,
+                };
+
+                LocalPeerService::start(
+                    local_peer,
+                    event_receiver,
+                    local_event_broadcast,
+                    verifying_key,
+                    log_service.clone(),
+                    peer_service.clone(),
+                    event_service.clone(),
+                );
+            }
+            PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
+                let entry = peer_map.entry(verifying_key.clone()).or_default();
+                entry.insert(hardware_id.clone());
+                let _ = event_service
+                    .sender
+                    .send(EventServiceMessage::PeerConnected(
+                        verifying_key,
+                        now(),
+                        hardware_id,
+                    ))
+                    .await;
+            }
+
+            PeerConnectionMessage::PeerDisconnected(verifying_key, hardware_id) => {
+                let entry = peer_map.remove(&verifying_key);
+                if let Some(mut entries) = entry {
+                    entries.remove(&hardware_id);
+                    if !entries.is_empty() {
+                        peer_map.insert(verifying_key.clone(), entries);
+                    }
+                }
+
+                let _ = event_service
+                    .sender
+                    .send(EventServiceMessage::PeerDisconnected(
+                        verifying_key,
+                        now(),
+                        hardware_id,
+                    ))
+                    .await;
+            }
+        }
+    }
+
+    async fn process_event(
+        event: Event,
+        local_event_broadcast: &broadcast::Sender<LocalEvent>,
+        log_service: &LogService,
+    ) {
+        match event {
+            Event::ComputedDailyLog(daily_log) => {
+                match daily_log {
+                    Ok(daily_log) => {
+                        let mut rooms = Vec::new();
+                        for room in daily_log.room_dates {
+                            rooms.push(room.0);
+                        }
+                        let _ = local_event_broadcast.send(LocalEvent::RoomDataChanged(rooms));
+                    }
+                    Err(err) => {
+                        log_service.error(
+                            "ComputedDailyLog".to_string(),
+                            crate::Error::ComputeDailyLog(err),
+                        );
+                    }
+                };
+            }
+            Event::RoomModified(room) => {
+                let _ = local_event_broadcast.send(LocalEvent::RoomDefinitionChanged(room));
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
-pub use crate::{cryptography::random32, event_service::Event, log_service::Log};
+pub use crate::{cryptography::random32, log_service::Log};
 
 #[cfg(test)]
 pub type LogFn = Box<dyn Fn(Log) -> Result<(), String> + Send + 'static>;

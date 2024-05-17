@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::{
+    daily_log::DailyMutations,
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
@@ -684,6 +685,7 @@ impl NodeDeletionEntry {
 
     pub fn delete_all(
         nodes: &mut Vec<Self>,
+        daily_log: &mut DailyMutations,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         let mut nodes_id: Vec<Vec<u8>> = Vec::with_capacity(nodes.len());
@@ -698,6 +700,8 @@ impl NodeDeletionEntry {
             }
             //deletiong log is written before real deletion but this function is performed inside a transaction
             node.write(conn)?;
+            daily_log.set_need_update(node.room_id.clone(), node.deletion_date);
+            daily_log.set_need_update(node.room_id.clone(), node.mdate);
         }
         let query = format!("DELETE FROM _node WHERE id in ({})", in_clause);
         let mut stmt = conn.prepare(&query)?;
@@ -1067,7 +1071,7 @@ mod tests {
         assert!(entry.1.is_some());
         let mut deletion: Vec<NodeDeletionEntry> =
             log_with_author.into_iter().map(|e| e.1 .0).collect();
-        NodeDeletionEntry::delete_all(&mut deletion, &conn).unwrap();
+        NodeDeletionEntry::delete_all(&mut deletion, &mut DailyMutations::new(), &conn).unwrap();
 
         assert!(Node::get(&node.id, &entity, &conn).unwrap().is_none());
     }

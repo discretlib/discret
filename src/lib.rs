@@ -63,6 +63,9 @@ pub enum Error {
 
     #[error("Remote Room did not sent back a room definition {0}")]
     RoomUnknow(String),
+
+    #[error("An error occured while computing daily logs: {0}")]
+    ComputeDailyLog(String),
 }
 
 // lazy_static::lazy_static! {

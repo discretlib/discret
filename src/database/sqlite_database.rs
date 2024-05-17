@@ -596,13 +596,13 @@ impl BufferedDatabaseWriter {
                     }
                 }
                 WriteMessage::DeleteEdges(edges, _) => {
-                    if let Err(e) = EdgeDeletionEntry::delete_all(edges, conn) {
+                    if let Err(e) = EdgeDeletionEntry::delete_all(edges, &mut daily_log, conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }
                 }
                 WriteMessage::DeleteNodes(nodes, _) => {
-                    if let Err(e) = NodeDeletionEntry::delete_all(nodes, conn) {
+                    if let Err(e) = NodeDeletionEntry::delete_all(nodes, &mut daily_log, conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }

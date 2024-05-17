@@ -59,7 +59,7 @@ pub enum Error {
 #[derive(Clone)]
 pub enum LocalEvent {
     RoomDefinitionChanged(Room),
-    RoomDataChanged(Vec<u8>),
+    RoomDataChanged(Vec<Vec<u8>>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,7 +87,7 @@ impl ProveAnswer {
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use tests::peer_service::{connect_peers, listen_for_event, Event, EventFn, Log, LogFn};
+    use tests::peer_service::{connect_peers, listen_for_event, EventFn, Log, LogFn};
 
     use crate::{
         cryptography::base64_encode,
@@ -97,7 +97,7 @@ mod tests {
             query_language::parameter::{Parameters, ParametersAdd},
             sqlite_database::RowMappingFn,
         },
-        event_service::EventService,
+        event_service::{Event, EventService},
         log_service::LogService,
     };
 
@@ -258,5 +258,139 @@ mod tests {
             .unwrap();
 
         assert_eq!(room_first_date, res[0].mdate);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn synchronise_data() {
+        init_database_path();
+        let path: PathBuf = DATA_PATH.into();
+        let model = "Person{name:String,}";
+
+        let first_peer = Peer::new(path.clone(), model).await;
+        let second_peer = Peer::new(path, model).await;
+
+        let first_user_id = base64_encode(first_peer.db.verifying_key());
+        let second_user_id = base64_encode(second_peer.db.verifying_key());
+
+        let mut param = Parameters::default();
+        param.add("first_id", first_user_id.clone()).unwrap();
+        param.add("second_id", second_user_id.clone()).unwrap();
+
+        let room = first_peer
+            .db
+            .mutate_raw(
+                r#"mutation mut {
+                _Room{
+                    admin: [{
+                        verifying_key:$first_id
+                    }]
+                    user_admin: [{
+                        verifying_key:$first_id
+                    }]
+                    authorisations:[{
+                        name:"admin"
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:true
+                            mutate_all:false
+                        }]
+                        users: [{
+                            verifying_key:$first_id
+                        },{
+                            verifying_key:$second_id
+                        }]
+                    }]
+                }
+
+            }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let room_insert = &room.mutate_entities[0];
+        let room_id = room_insert.node_to_mutate.id.clone();
+
+        let first_key = first_peer.db.verifying_key().clone();
+
+        let mut param = Parameters::default();
+        param.add("room_id", base64_encode(&room_id)).unwrap();
+
+        first_peer
+            .db
+            .mutate_raw(
+                r#"mutation mut {
+                    Person{
+                        room_id: $room_id
+                        name: "someone"
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", base64_encode(&room_id)).unwrap();
+        first_peer
+            .db
+            .mutate_raw(
+                r#"mutation mut {
+                    Person{
+                        room_id: $room_id
+                        name: "another"
+                    }
+
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+
+        let id = room_id.clone();
+        let event_fn: EventFn = Box::new(move |event| match event {
+            Event::PeerConnected(id, _, _) => {
+                assert_eq!(id, first_key);
+                return false;
+            }
+            Event::RoomSynchronized(room) => {
+                assert_eq!(room, id.clone());
+                return true;
+            }
+
+            _ => return false,
+        });
+
+        let log_fn: LogFn = Box::new(|log| match log {
+            Log::Error(_, src, e) => Err(format!("src:{} Err:{} ", src, e)),
+            Log::Info(_, _) => Ok(()),
+        });
+
+        //        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        connect_peers(&first_peer.peer_service, &second_peer.peer_service).await;
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            listen_for_event(
+                second_peer.event.clone(),
+                second_peer.log.clone(),
+                first_peer.log.clone(),
+                event_fn,
+                log_fn,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let query = "query g { 
+            Person(order_by(name desc)){ id room_id mdate cdate name } 
+        }";
+        let res1 = first_peer.db.query(query, None).await.unwrap();
+        let res2 = second_peer.db.query(query, None).await.unwrap();
+
+        assert_eq!(res1, res2);
     }
 }

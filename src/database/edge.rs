@@ -1,4 +1,5 @@
 use super::{
+    daily_log::DailyMutations,
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
@@ -537,6 +538,7 @@ impl EdgeDeletionEntry {
     ///
     pub fn delete_all(
         edges: &mut Vec<Self>,
+        daily_log: &mut DailyMutations,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         let query = "
@@ -550,6 +552,7 @@ impl EdgeDeletionEntry {
         let mut stmt = conn.prepare_cached(query)?;
         for e in edges {
             stmt.execute((&e.src, &e.src_entity, &e.label, &e.dest, &e.cdate))?;
+            daily_log.set_need_update(e.room_id.clone(), e.deletion_date);
             e.write(conn)?;
         }
         Ok(())
@@ -797,7 +800,7 @@ mod tests {
         assert!(edge.is_some());
 
         let mut entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
-        EdgeDeletionEntry::delete_all(&mut entries, &conn).unwrap();
+        EdgeDeletionEntry::delete_all(&mut entries, &mut DailyMutations::new(), &conn).unwrap();
 
         let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();
         assert!(edge.is_none());

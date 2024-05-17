@@ -241,11 +241,15 @@ impl LocalPeerService {
                         .map_err(|_| crate::Error::TimeOut("RoomDefinitionChanged".to_string()))?;
                 }
             }
-            LocalEvent::RoomDataChanged(room) => {
-                if peer.remote_rooms.contains(&room) {
-                    peer.send_event(RemoteEvent::RoomDataChanged(room))
-                        .await
-                        .map_err(|_| crate::Error::TimeOut("RoomDefinitionChanged".to_string()))?;
+            LocalEvent::RoomDataChanged(rooms) => {
+                for room in rooms {
+                    if peer.remote_rooms.contains(&room) {
+                        peer.send_event(RemoteEvent::RoomDataChanged(room))
+                            .await
+                            .map_err(|_| {
+                                crate::Error::TimeOut("RoomDefinitionChanged".to_string())
+                            })?;
+                    }
                 }
             }
         }
@@ -426,8 +430,18 @@ impl LocalPeerService {
         let node_deletion: Vec<NodeDeletionEntry> = peer
             .query(Query::NodeDeletionLog(room_id.clone(), date))
             .await?;
-
-        peer.db.delete_nodes(node_deletion).await?;
+        let max_deletion = 512;
+        let mut current = Vec::with_capacity(max_deletion);
+        for node_del in node_deletion {
+            current.push(node_del);
+            if current.len() == max_deletion {
+                peer.db.delete_nodes(current).await?;
+                current = Vec::with_capacity(max_deletion);
+            }
+        }
+        if !current.is_empty() {
+            peer.db.delete_nodes(current).await?;
+        }
 
         let remote_nodes: HashSet<NodeIdentifier> = peer
             .query(Query::RoomDailyNodes(room_id.clone(), date))
