@@ -132,7 +132,7 @@ pub const USER_ENABLED_SHORT: &str = "33";
 
 pub const RIGHT_ENTITY_SHORT: &str = "32";
 pub const RIGHT_MUTATE_SELF_SHORT: &str = "33";
-pub const RIGHT_MUTATE_SHORT: &str = "34";
+pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
 pub const SYSTEM_DATA_MODEL: &str = "    
     _Room {

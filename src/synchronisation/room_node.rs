@@ -8,9 +8,9 @@ use crate::cryptography::base64_decode;
 use crate::database::{
     configuration::{
         AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
-        ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_SELF_SHORT, RIGHT_MUTATE_SHORT,
-        ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT, ROOM_ENT_SHORT,
-        ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT,
+        ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_ALL_SHORT,
+        RIGHT_MUTATE_SELF_SHORT, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT,
+        ROOM_ENT_SHORT, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT,
         USER_VERIFYING_KEY_SHORT,
     },
     edge::Edge,
@@ -928,7 +928,7 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
         None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
     };
 
-    let mutate_all = match right_map.get(RIGHT_MUTATE_SHORT) {
+    let mutate_all = match right_map.get(RIGHT_MUTATE_ALL_SHORT) {
         Some(v) => match v.as_bool() {
             Some(v) => v,
             None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
@@ -936,12 +936,13 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
         None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
     };
 
-    let entity_right = EntityRight {
-        valid_from: entity_right_node.node.mdate,
+    let entity_right = EntityRight::new(
+        entity_right_node.node.mdate,
         entity,
         mutate_self,
         mutate_all,
-    };
+    );
+
     Ok(entity_right)
 }
 

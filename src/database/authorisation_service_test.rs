@@ -102,23 +102,16 @@ mod tests {
 
         let ent_date: i64 = 100;
         let entity = "Person";
-        let mut person_right = EntityRight {
-            valid_from: ent_date,
-            entity: entity.to_string(),
-            mutate_self: true,
-            mutate_all: true,
-        };
+        let person_right = EntityRight::new(ent_date, entity.to_string(), true, true);
 
-        auth.add_right(person_right.clone()).unwrap();
+        auth.add_right(person_right).unwrap();
 
-        person_right.valid_from = ent_date - 1;
-        auth.add_right(person_right.clone())
+        let person_right = EntityRight::new(ent_date - 1, entity.to_string(), true, true);
+
+        auth.add_right(person_right)
             .expect_err("Cannot insert a right before an existing one");
-
-        person_right.mutate_self = false;
-        person_right.mutate_all = false;
-
-        person_right.valid_from = ent_date + 1000;
+        let last_date = ent_date + 1000;
+        let person_right = EntityRight::new(last_date, entity.to_string(), false, false);
         auth.add_right(person_right.clone()).unwrap();
 
         room.add_auth(auth).unwrap();
@@ -156,13 +149,13 @@ mod tests {
         assert!(!room.can(
             &user1.verifying_key,
             entity,
-            person_right.valid_from,
+            last_date,
             &RightType::MutateSelf
         ));
         assert!(!room.can(
             &user1.verifying_key,
             entity,
-            person_right.valid_from,
+            last_date,
             &RightType::MutateAll
         ));
     }
@@ -1292,7 +1285,7 @@ mod tests {
                         rights:[{
                             entity:"Person"
                             mutate_self:false
-                            mutate_all:true
+                            mutate_all:false
                         }]
                     }]
                 }

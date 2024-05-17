@@ -243,10 +243,26 @@ pub struct User {
 ///  - false: can only mutate its own entity
 #[derive(Default, Clone, Debug)]
 pub struct EntityRight {
-    pub valid_from: i64,
-    pub entity: String,
-    pub mutate_self: bool,
-    pub mutate_all: bool,
+    valid_from: i64,
+    entity: String,
+    mutate_self: bool,
+    mutate_all: bool,
+}
+impl EntityRight {
+    pub fn new(valid_from: i64, entity: String, mutate_self: bool, mutate_all: bool) -> Self {
+        // mutate_all:true cannot have mutate_self:false
+        // overide the mutate_self value in that case
+        let mut mutate_self = mutate_self;
+        if mutate_all {
+            mutate_self = true;
+        }
+        Self {
+            valid_from,
+            entity,
+            mutate_self,
+            mutate_all,
+        }
+    }
 }
 
 ///
@@ -333,48 +349,68 @@ pub fn load_user_from_json(user_value: &serde_json::Value) -> Result<User> {
     Ok(user)
 }
 
-pub fn user_from_json(json: &str, date: i64) -> Result<Option<User>> {
+pub fn user_from_json(json: &str, date: i64) -> Result<User> {
     let value: serde_json::Value = serde_json::from_str(json)?;
-    if let Some(map) = value.as_object() {
-        if let Some(verifying_key) = map.get(configuration::USER_VERIFYING_KEY_SHORT) {
-            if let Some(base64) = verifying_key.as_str() {
-                let verifying_key = base64_decode(base64.as_bytes())?;
-                let enabled = match map.get(configuration::USER_ENABLED_SHORT) {
-                    Some(value) => value.as_bool().unwrap_or(true),
-                    None => true,
-                };
-                let user = User {
-                    verifying_key,
-                    date,
-                    enabled,
-                };
+    let map = value
+        .as_object()
+        .ok_or(Error::InvalidJsonObject("User".to_string()))?;
 
-                return Ok(Some(user));
-            }
-        }
-    }
-    Ok(None)
+    let verifying_key = map
+        .get(configuration::USER_VERIFYING_KEY_SHORT)
+        .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
+    let verifying_key = verifying_key
+        .as_str()
+        .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
+    let verifying_key = base64_decode(verifying_key.as_bytes())?;
+
+    let enabled = match map.get(configuration::USER_ENABLED_SHORT) {
+        Some(value) => value.as_bool().unwrap_or(true),
+        None => true,
+    };
+
+    Ok(User {
+        verifying_key,
+        date,
+        enabled,
+    })
 }
 
-pub fn entity_right_from_json(entity_right: &mut EntityRight, json: &str) -> Result<()> {
+pub fn entity_right_from_json(valid_from: i64, json: &str) -> Result<EntityRight> {
     let value: serde_json::Value = serde_json::from_str(json)?;
-    if let Some(map) = value.as_object() {
-        if let Some(entity) = map.get(configuration::RIGHT_ENTITY_SHORT) {
-            if let Some(entity) = entity.as_str() {
-                entity_right.entity = entity.to_string();
-            }
-        }
-        if let Some(mutate_self) = map.get(configuration::RIGHT_MUTATE_SELF_SHORT) {
-            if let Some(mutate_self) = mutate_self.as_bool() {
-                entity_right.mutate_self = mutate_self;
-            }
-        }
 
-        if let Some(mutate_all) = map.get(configuration::RIGHT_MUTATE_SHORT) {
-            if let Some(mutate_all) = mutate_all.as_bool() {
-                entity_right.mutate_all = mutate_all;
-            }
-        }
-    }
-    Ok(())
+    let map = value
+        .as_object()
+        .ok_or(Error::InvalidJsonObject("EntityRight".to_string()))?;
+
+    let entity = map
+        .get(configuration::RIGHT_ENTITY_SHORT)
+        .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
+    let entity = entity
+        .as_str()
+        .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
+
+    let mutate_self =
+        map.get(configuration::RIGHT_MUTATE_SELF_SHORT)
+            .ok_or(Error::MissingJsonField(
+                "EntityRight.mutate_self".to_string(),
+            ))?;
+    let mutate_self = mutate_self.as_bool().ok_or(Error::MissingJsonField(
+        "EntityRight.mutate_self".to_string(),
+    ))?;
+
+    let mutate_all =
+        map.get(configuration::RIGHT_MUTATE_ALL_SHORT)
+            .ok_or(Error::MissingJsonField(
+                "EntityRight.mutate_self".to_string(),
+            ))?;
+    let mutate_all = mutate_all.as_bool().ok_or(Error::MissingJsonField(
+        "EntityRight.mutate_self".to_string(),
+    ))?;
+
+    Ok(EntityRight::new(
+        valid_from,
+        entity.to_string(),
+        mutate_self,
+        mutate_all,
+    ))
 }

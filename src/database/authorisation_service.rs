@@ -629,9 +629,7 @@ impl RoomAuthorisations {
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
                                 let user = user_from_json(json, node.mdate)?;
-                                if let Some(u) = user {
-                                    room.add_admin_user(u)?;
-                                }
+                                room.add_admin_user(user)?;
                             }
                         }
                     }
@@ -655,9 +653,7 @@ impl RoomAuthorisations {
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
                                 let user = user_from_json(json, node.mdate)?;
-                                if let Some(u) = user {
-                                    room.add_user_admin_user(u)?;
-                                }
+                                room.add_user_admin_user(user)?;
                             }
                         }
                     }
@@ -760,12 +756,7 @@ impl RoomAuthorisations {
                         }
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
-                                let mut right = EntityRight {
-                                    valid_from: node.mdate,
-                                    ..Default::default()
-                                };
-                                entity_right_from_json(&mut right, json)?;
-
+                                let right = entity_right_from_json(node.mdate, json)?;
                                 authorisation.add_right(right)?;
                             }
                         }
@@ -805,26 +796,24 @@ impl RoomAuthorisations {
         if let Some(node) = &node_insert.node {
             if let Some(json) = &node._json {
                 let user = user_from_json(json, node.mdate)?;
-                if let Some(u) = user {
-                    if room_user.has_user(&u.verifying_key) || room_user.parent.is_none() {
-                        authorisation.add_user(u)?;
-                    } else {
-                        let mut found = false;
-                        for parent_id in &room_user.parent {
-                            if let Some(parent) = self.rooms.get(parent_id) {
-                                if parent.has_user(&u.verifying_key) {
-                                    authorisation.add_user(u.clone())?;
-                                    found = true;
-                                    break;
-                                }
+                if room_user.has_user(&user.verifying_key) || room_user.parent.is_none() {
+                    authorisation.add_user(user)?;
+                } else {
+                    let mut found = false;
+                    for parent_id in &room_user.parent {
+                        if let Some(parent) = self.rooms.get(parent_id) {
+                            if parent.has_user(&user.verifying_key) {
+                                authorisation.add_user(user.clone())?;
+                                found = true;
+                                break;
                             }
                         }
-                        if !found {
-                            return Err(Error::UserNotInParentRoom(
-                                base64_encode(&u.verifying_key),
-                                base64_encode(&room_user.id),
-                            ));
-                        }
+                    }
+                    if !found {
+                        return Err(Error::UserNotInParentRoom(
+                            base64_encode(&user.verifying_key),
+                            base64_encode(&room_user.id),
+                        ));
                     }
                 }
             }
