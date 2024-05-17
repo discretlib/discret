@@ -458,7 +458,9 @@ impl InsertEntity {
         if let Some(room_id) = &self.node_to_mutate.room_id {
             daily_log.set_need_update(room_id.clone(), self.node_to_mutate.date);
             if let Some(node) = &self.node_to_mutate.old_node {
-                daily_log.set_need_update(room_id.clone(), node.mdate);
+                if let Some(room_id) = &node.room_id {
+                    daily_log.set_need_update(room_id.clone(), node.mdate);
+                }
             }
         }
 

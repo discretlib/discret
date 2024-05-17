@@ -464,8 +464,39 @@ impl RoomAuthorisations {
                 match &to_insert.old_node {
                     Some(old_node) => {
                         let same_user = old_node._verifying_key.eq(verifying_key);
+
                         if let Some(room_id) = &to_insert.room_id {
                             if let Some(room) = self.rooms.get(room_id) {
+                                if let Some(old_room_id) = &old_node.room_id {
+                                    if !old_room_id.eq(room_id) {
+                                        if let Some(old_room) = self.rooms.get(room_id) {
+                                            let can = if same_user {
+                                                old_room.can(
+                                                    verifying_key,
+                                                    &to_insert.entity,
+                                                    to_insert.date,
+                                                    &RightType::MutateSelf,
+                                                )
+                                            } else {
+                                                old_room.can(
+                                                    verifying_key,
+                                                    &to_insert.entity,
+                                                    to_insert.date,
+                                                    &RightType::MutateAll,
+                                                )
+                                            };
+                                            if !can {
+                                                return Err(Error::AuthorisationRejected(
+                                                    to_insert.entity.clone(),
+                                                    base64_encode(room_id),
+                                                ));
+                                            }
+                                        } else {
+                                            return Err(Error::UnknownRoom(base64_encode(room_id)));
+                                        }
+                                    }
+                                }
+
                                 let can = if same_user {
                                     room.can(
                                         verifying_key,
@@ -541,7 +572,6 @@ impl RoomAuthorisations {
                 }
             }
         }
-
         Ok(rooms)
     }
 
@@ -773,7 +803,7 @@ impl RoomAuthorisations {
                         }
                         let node_insert = &insert_entity.node_to_mutate;
                         if node_insert.room_id.is_some() {
-                            return Err(Error::ForbiddenRoomId("_Rights".to_string()));
+                            return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
                         }
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
@@ -937,6 +967,28 @@ impl RoomAuthorisations {
             return false;
         }
         let room_id = room_id.clone().unwrap();
+
+        if let Some(old_room_id) = &node.old_room_id {
+            if !old_room_id.eq(&room_id) {
+                let room = self.rooms.get(old_room_id);
+                if room.is_none() {
+                    return false;
+                }
+                let room = room.unwrap();
+                if node.entity_name.is_none() {
+                    return false;
+                }
+                let entity_name = &node.entity_name.clone().unwrap();
+                if !room.can(
+                    &node.node._verifying_key,
+                    entity_name,
+                    node.node.mdate,
+                    &required_right,
+                ) {
+                    return false;
+                }
+            }
+        }
 
         let room = self.rooms.get(&room_id);
         if room.is_none() {

@@ -14,11 +14,11 @@ use crate::database::{
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
-//
-// data structure to get a node and all its edges
-// used during synchronisation
-// index,  old_fts_str, node_fts_str is intended to be filled by the reciever
-//
+///
+/// data structure to get a node and all its edges
+/// used during synchronisation
+/// only node and edges are sent, the rest is used by the receiver to synchronise data
+///
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct FullNode {
     pub node: Node,
@@ -28,6 +28,10 @@ pub struct FullNode {
     #[serde(skip)]
     pub index: bool,
     #[serde(skip)]
+    pub old_room_id: Option<Vec<u8>>,
+    #[serde(skip)]
+    pub old_mdate: i64,
+    #[serde(skip)]
     pub old_verifying_key: Option<Vec<u8>>,
     #[serde(skip)]
     pub old_fts_str: Option<String>,
@@ -35,7 +39,7 @@ pub struct FullNode {
     pub node_fts_str: Option<String>,
 }
 impl FullNode {
-    pub fn get_nodes(
+    pub fn get_nodes_filtered_by_room(
         room_id: &Vec<u8>,
         node_ids: Vec<Vec<u8>>,
         conn: &Connection,
@@ -65,10 +69,22 @@ impl FullNode {
         let mut map: HashMap<Vec<u8>, Self> = HashMap::new();
         while let Some(row) = rows.next()? {
             let id: Vec<u8> = row.get(0)?;
-            let entry = map.entry(id.clone()).or_insert({
+
+            if !map.contains_key(&id) {
+                let db_room_id: Option<Vec<u8>> = row.get(1)?;
+                match &db_room_id {
+                    Some(rid) => {
+                        if !rid.eq(room_id) {
+                            continue;
+                        }
+                    }
+                    None => {
+                        continue;
+                    }
+                }
                 let node = Node {
                     id: id.clone(),
-                    room_id: row.get(1)?,
+                    room_id: db_room_id,
                     cdate: row.get(2)?,
                     mdate: row.get(3)?,
                     _entity: row.get(4)?,
@@ -78,23 +94,91 @@ impl FullNode {
                     _signature: row.get(8)?,
                     _local_id: row.get(9)?,
                 };
-                match &node.room_id {
-                    Some(rid) => {
-                        if !rid.eq(room_id) {
-                            return Err(Error::InvalidNodeRequest());
-                        }
-                    }
-                    None => {
-                        return Err(Error::InvalidNodeRequest());
-                    }
-                }
 
-                FullNode {
-                    node,
-                    edges: Vec::new(),
-                    ..Default::default()
-                }
-            });
+                map.insert(
+                    id.clone(),
+                    FullNode {
+                        node,
+                        edges: Vec::new(),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            let entry = map.get_mut(&id).unwrap(); //a new value as been inserted just before
+
+            let src_opt: Option<Vec<u8>> = row.get(10)?;
+            if let Some(src) = src_opt {
+                let edge = Edge {
+                    src,
+                    src_entity: row.get(11)?,
+                    label: row.get(12)?,
+                    dest: row.get(13)?,
+                    cdate: row.get(14)?,
+                    verifying_key: row.get(15)?,
+                    signature: row.get(16)?,
+                };
+                entry.edges.push(edge);
+            }
+        }
+
+        let res: Vec<FullNode> = map.into_iter().map(|(_, node)| node).collect();
+        Ok(res)
+    }
+
+    pub fn get_local_nodes(node_ids: Vec<Vec<u8>>, conn: &Connection) -> Result<Vec<FullNode>> {
+        let it = &mut node_ids.iter().peekable();
+        let mut q = String::new();
+        while let Some(_) = it.next() {
+            q.push('?');
+            if it.peek().is_some() {
+                q.push(',');
+            }
+        }
+
+        let query = format!("
+        SELECT 
+            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, rowid,
+            _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature
+        FROM _node
+        LEFT JOIN _edge ON _node.id = _edge.src 
+        WHERE 
+            _node.id in ({}) 
+        ", q);
+
+        let mut stmt = conn.prepare(&query)?;
+        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
+
+        let mut map: HashMap<Vec<u8>, Self> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let id: Vec<u8> = row.get(0)?;
+
+            if !map.contains_key(&id) {
+                let db_room_id: Option<Vec<u8>> = row.get(1)?;
+                let node = Node {
+                    id: id.clone(),
+                    room_id: db_room_id,
+                    cdate: row.get(2)?,
+                    mdate: row.get(3)?,
+                    _entity: row.get(4)?,
+                    _json: row.get(5)?,
+                    _binary: row.get(6)?,
+                    _verifying_key: row.get(7)?,
+                    _signature: row.get(8)?,
+                    _local_id: row.get(9)?,
+                };
+
+                map.insert(
+                    id.clone(),
+                    FullNode {
+                        node,
+                        edges: Vec::new(),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            let entry = map.get_mut(&id).unwrap(); //a new value as been inserted just before
 
             let src_opt: Option<Vec<u8>> = row.get(10)?;
             if let Some(src) = src_opt {
@@ -264,11 +348,24 @@ impl FullNode {
         let mut node_map = HashMap::new();
 
         for node in nodes {
+            //
+            // filter invalid room_id
+            // It comes from a peer so let's be prudent
+            //
+            match &node.node.room_id {
+                Some(rid) => {
+                    if !room_id.eq(rid) {
+                        continue;
+                    }
+                }
+                None => continue,
+            }
+
             node_ids.push(node.node.id.clone());
             node_map.insert(node.node.id.clone(), node);
         }
 
-        let existing_nodes = Self::get_nodes(room_id, node_ids, conn)?;
+        let existing_nodes = Self::get_local_nodes(node_ids, conn)?;
 
         let mut result: Vec<FullNode> = Vec::new();
         //process existing nodes
@@ -293,7 +390,9 @@ impl FullNode {
                     }
                     let rowid: i64 = existing.node._local_id.unwrap();
                     new_node.node._local_id = Some(rowid);
-
+                    new_node.old_verifying_key = Some(existing.node._verifying_key.clone());
+                    new_node.old_mdate = existing.node.mdate;
+                    new_node.old_room_id = existing.node.room_id.clone();
                     //filter existing edges
                     let mut new_edges: Vec<Edge> = Vec::new();
                     for new_edge in new_node.edges {
@@ -325,6 +424,11 @@ impl FullNode {
 
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         if let Some(room_id) = &self.node.room_id {
+            if let Some(old_id) = &self.old_room_id {
+                if !room_id.eq(old_id) {
+                    daily_log.set_need_update(old_id.clone(), self.old_mdate);
+                }
+            }
             daily_log.set_need_update(room_id.clone(), self.node.mdate);
         }
     }
@@ -338,7 +442,6 @@ impl Writeable for FullNode {
         for edge in &self.edges {
             edge.write(conn)?;
         }
-
         Ok(())
     }
 }
@@ -390,7 +493,8 @@ mod tests {
 
         let mut node_ids = Vec::new();
         node_ids.push(raw_node.id.clone());
-        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
+        let nodes =
+            FullNode::get_nodes_filtered_by_room(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
 
@@ -420,7 +524,8 @@ mod tests {
         let mut node_ids = Vec::new();
         node_ids.push(node_with_one_edge.id.clone());
 
-        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
+        let nodes =
+            FullNode::get_nodes_filtered_by_room(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_one_edge.id, full.node.id);
@@ -465,7 +570,8 @@ mod tests {
         let mut node_ids = Vec::new();
         node_ids.push(node_with_two_edge.id.clone());
 
-        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
+        let nodes =
+            FullNode::get_nodes_filtered_by_room(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_two_edge.id, full.node.id);
@@ -476,7 +582,8 @@ mod tests {
         node_ids.push(node_with_one_edge.id.clone());
         node_ids.push(node_with_two_edge.id.clone());
 
-        let nodes = FullNode::get_nodes(&room_id1.to_vec(), node_ids, &conn).unwrap();
+        let nodes =
+            FullNode::get_nodes_filtered_by_room(&room_id1.to_vec(), node_ids, &conn).unwrap();
         assert_eq!(3, nodes.len());
     }
 

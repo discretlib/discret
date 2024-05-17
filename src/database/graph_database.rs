@@ -473,7 +473,7 @@ impl GraphDatabaseService {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
-                let room_node = FullNode::get_nodes(&room_id, node_ids, conn);
+                let room_node = FullNode::get_nodes_filtered_by_room(&room_id, node_ids, conn);
                 let _ = send_response.send(room_node);
             }))
             .await?;
