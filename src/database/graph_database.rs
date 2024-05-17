@@ -893,16 +893,53 @@ impl GraphDatabase {
         }
     }
 
-    pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>, reply: Sender<Result<()>>) {
+    pub async fn delete_edges(&self, mut edges: Vec<EdgeDeletionEntry>, reply: Sender<Result<()>>) {
+        for edge in &mut edges {
+            let entity_name = self.data_model.name_for(&edge.src_entity);
+            edge.entity_name = entity_name;
+        }
+        let auth_service = self.auth_service.clone();
         let _ = self
-            .auth_service
-            .send(AuthorisationMessage::DeleteEdges(edges, reply))
+            .graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let edges =
+                    EdgeDeletionEntry::with_source_authors(edges, conn).map_err(Error::from);
+                match edges {
+                    Ok(edges) => {
+                        let msg = AuthorisationMessage::DeleteEdges(edges, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }))
             .await;
     }
-    pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>, reply: Sender<Result<()>>) {
+
+    pub async fn delete_nodes(&self, mut nodes: Vec<NodeDeletionEntry>, reply: Sender<Result<()>>) {
+        for node in &mut nodes {
+            let entity_name = self.data_model.name_for(&node.entity);
+            node.entity_name = entity_name;
+        }
+        let auth_service = self.auth_service.clone();
         let _ = self
-            .auth_service
-            .send(AuthorisationMessage::DeleteNodes(nodes, reply))
+            .graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let nodes =
+                    NodeDeletionEntry::with_previous_authors(nodes, conn).map_err(Error::from);
+                match nodes {
+                    Ok(nodes) => {
+                        let msg = AuthorisationMessage::DeleteNodes(nodes, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }))
             .await;
     }
 }

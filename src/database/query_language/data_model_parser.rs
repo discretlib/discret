@@ -307,8 +307,11 @@ impl DataModel {
         Ok(())
     }
 
-    pub fn name_for(&self, short_name: &str) -> Option<&String> {
-        self.entities_short.get(short_name)
+    pub fn name_for(&self, short_name: &str) -> Option<String> {
+        match self.entities_short.get(short_name) {
+            Some(v) => Some(v.clone()),
+            None => None,
+        }
     }
 
     fn parse_internal(model: &str, system: bool) -> Result<DataModel, Error> {

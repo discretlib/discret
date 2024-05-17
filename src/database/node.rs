@@ -552,15 +552,18 @@ pub struct NodeDeletionEntry {
     pub deletion_date: i64,
     pub verifying_key: Vec<u8>,
     pub signature: Vec<u8>,
+    //used for synchronisation authorisation
+    #[serde(skip)]
+    pub entity_name: Option<String>,
 }
 impl NodeDeletionEntry {
     pub fn build(
         room: Vec<u8>,
         node: &Node,
         deletion_date: i64,
-        verifying_key: Vec<u8>,
         signing_key: &impl SigningKey,
     ) -> Self {
+        let verifying_key = signing_key.export_verifying_key();
         let signature = Self::sign(&room, node, deletion_date, &verifying_key, signing_key);
         Self {
             room_id: room,
@@ -570,6 +573,7 @@ impl NodeDeletionEntry {
             deletion_date,
             verifying_key,
             signature,
+            entity_name: None,
         }
     }
 
@@ -638,6 +642,7 @@ impl NodeDeletionEntry {
                 deletion_date: row.get(4)?,
                 verifying_key: row.get(5)?,
                 signature: row.get(6)?,
+                entity_name: None,
             })
         }
 
@@ -649,14 +654,54 @@ impl NodeDeletionEntry {
         conn: &Connection,
     ) -> Result<HashMap<Vec<u8>, (Self, Option<Vec<u8>>)>> {
         let mut map = HashMap::new();
+        let mut nodes_id: Vec<Vec<u8>> = Vec::with_capacity(nodes.len());
+        let it = &mut nodes.into_iter().peekable();
 
+        let mut in_clause = String::new();
+        while let Some(nid) = it.next() {
+            in_clause.push('?');
+            nodes_id.push(nid.id.clone());
+            map.insert(nid.id.clone(), (nid, None));
+            if it.peek().is_some() {
+                in_clause.push(',');
+            }
+        }
+        let query = format!(
+            "SELECT id, _verifying_key  FROM _node WHERE id in ({})",
+            in_clause
+        );
+        let mut stmt = conn.prepare(&query)?;
+        let mut rows = stmt.query(params_from_iter(nodes_id.iter()))?;
+        while let Some(row) = rows.next()? {
+            let id: Vec<u8> = row.get(0)?;
+            let verifying_key: Option<Vec<u8>> = row.get(1)?;
+            if let Some(entry) = map.get_mut(&id) {
+                entry.1 = verifying_key;
+            }
+        }
         Ok(map)
     }
 
     pub fn delete_all(
-        nodes: Vec<Vec<u8>>,
+        nodes: &mut Vec<Self>,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
+        let mut nodes_id: Vec<Vec<u8>> = Vec::with_capacity(nodes.len());
+        let it = &mut nodes.into_iter().peekable();
+
+        let mut in_clause = String::new();
+        while let Some(node) = it.next() {
+            in_clause.push('?');
+            nodes_id.push(node.id.clone());
+            if it.peek().is_some() {
+                in_clause.push(',');
+            }
+            //deletiong log is written before real deletion but this function is performed inside a transaction
+            node.write(conn)?;
+        }
+        let query = format!("DELETE FROM _node WHERE id in ({})", in_clause);
+        let mut stmt = conn.prepare(&query)?;
+        stmt.execute(params_from_iter(nodes_id.iter()))?;
         Ok(())
     }
 }
@@ -916,13 +961,8 @@ mod tests {
         node.write(&conn, false, &None, &None).unwrap();
         Node::delete(&node.id, &conn).unwrap();
 
-        let mut node_deletion_log = NodeDeletionEntry::build(
-            room_id.clone(),
-            &node,
-            now(),
-            signing_key.export_verifying_key(),
-            &signing_key,
-        );
+        let mut node_deletion_log =
+            NodeDeletionEntry::build(room_id.clone(), &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
         let deletion_logs =
@@ -986,5 +1026,49 @@ mod tests {
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
         assert_eq!(0, ids.len());
+    }
+
+    #[test]
+    fn delete_from_deletion_log() {
+        let conn = Connection::open_in_memory().unwrap();
+        Node::create_tables(&conn).unwrap();
+
+        let signing_key = Ed25519SigningKey::new();
+        let entity = "Pet";
+        let room_id = random32().to_vec();
+        let mut node = Node {
+            room_id: Some(room_id.clone()),
+            _entity: String::from(entity),
+            ..Default::default()
+        };
+        node.sign(&signing_key).unwrap();
+        node.write(&conn, false, &None, &None).unwrap();
+
+        let mut node_deletion_log =
+            NodeDeletionEntry::build(room_id.clone(), &node, now(), &signing_key);
+        node_deletion_log.write(&conn).unwrap();
+
+        let deletion_logs =
+            NodeDeletionEntry::get_entries(&room_id, date(node_deletion_log.deletion_date), &conn)
+                .unwrap();
+
+        let entry = &deletion_logs[0];
+
+        assert_eq!(&node.room_id.unwrap(), &entry.room_id);
+        assert_eq!(&node.id, &entry.id);
+        assert_eq!(&node._entity, &entry.entity);
+        assert_eq!(&node.mdate, &entry.mdate);
+
+        assert!(Node::get(&node.id, &entity, &conn).unwrap().is_some());
+
+        let log_with_author =
+            NodeDeletionEntry::with_previous_authors(deletion_logs, &conn).unwrap();
+        let entry = log_with_author.get(&node.id).unwrap();
+        assert!(entry.1.is_some());
+        let mut deletion: Vec<NodeDeletionEntry> =
+            log_with_author.into_iter().map(|e| e.1 .0).collect();
+        NodeDeletionEntry::delete_all(&mut deletion, &conn).unwrap();
+
+        assert!(Node::get(&node.id, &entity, &conn).unwrap().is_none());
     }
 }

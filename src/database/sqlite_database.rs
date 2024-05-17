@@ -17,9 +17,9 @@ use super::{
     configuration,
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
-    edge::Edge,
+    edge::{Edge, EdgeDeletionEntry},
     mutation_query::MutationQuery,
-    node::Node,
+    node::{Node, NodeDeletionEntry},
     Error, Result,
 };
 
@@ -332,6 +332,8 @@ pub enum WriteMessage {
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
     FullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
+    DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
     ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
 }
@@ -473,6 +475,12 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::FullNode(_, invalid_nodes, r) => {
                                     let _ = r.send(Ok(invalid_nodes));
                                 }
+                                WriteMessage::DeleteEdges(_, r) => {
+                                    let _ = r.send(Ok(()));
+                                }
+                                WriteMessage::DeleteNodes(_, r) => {
+                                    let _ = r.send(Ok(()));
+                                }
                             }
                         }
                     }
@@ -507,6 +515,12 @@ impl BufferedDatabaseWriter {
                                     ));
                                 }
                                 WriteMessage::FullNode(_, _, r) => {
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
+                                }
+                                WriteMessage::DeleteEdges(_, r) => {
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
+                                }
+                                WriteMessage::DeleteNodes(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                             }
@@ -577,6 +591,18 @@ impl BufferedDatabaseWriter {
                 }
                 WriteMessage::ComputeDailyLog(daily_mutations, _) => {
                     if let Err(e) = daily_mutations.compute(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                }
+                WriteMessage::DeleteEdges(edges, _) => {
+                    if let Err(e) = EdgeDeletionEntry::delete_all(edges, conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                }
+                WriteMessage::DeleteNodes(nodes, _) => {
+                    if let Err(e) = NodeDeletionEntry::delete_all(nodes, conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);
                     }

@@ -37,8 +37,14 @@ pub enum AuthorisationMessage {
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomForUser(Vec<u8>, i64, Sender<HashSet<Vec<u8>>>),
     AddFullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
-    DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
-    DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
+    DeleteEdges(
+        Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
+        Sender<Result<()>>,
+    ),
+    DeleteNodes(
+        HashMap<Vec<u8>, (NodeDeletionEntry, Option<Vec<u8>>)>,
+        Sender<Result<()>>,
+    ),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -269,8 +275,26 @@ impl AuthorisationService {
                 let _ = database_writer.send(query).await;
             }
 
-            AuthorisationMessage::DeleteEdges(edges, reply) => todo!(),
-            AuthorisationMessage::DeleteNodes(nodes, reply) => todo!(),
+            AuthorisationMessage::DeleteEdges(edges, reply) => {
+                let filtered_edges = auth.validate_edge_deletions(edges);
+                if filtered_edges.is_empty() {
+                    let _ = reply.send(Ok(()));
+                } else {
+                    let _ = database_writer
+                        .send(WriteMessage::DeleteEdges(filtered_edges, reply))
+                        .await;
+                }
+            }
+            AuthorisationMessage::DeleteNodes(nodes, reply) => {
+                let filtered_nodes = auth.validate_node_deletions(nodes);
+                if filtered_nodes.is_empty() {
+                    let _ = reply.send(Ok(()));
+                } else {
+                    let _ = database_writer
+                        .send(WriteMessage::DeleteNodes(filtered_nodes, reply))
+                        .await;
+                }
+            }
         }
     }
 
@@ -336,7 +360,6 @@ impl RoomAuthorisations {
                                     room.id.clone(),
                                     &node.node,
                                     now,
-                                    verifying_key.clone(),
                                     &self.signing_key,
                                 );
 
@@ -388,7 +411,6 @@ impl RoomAuthorisations {
                                     room.id.clone(),
                                     &edge.edge,
                                     now,
-                                    verifying_key.clone(),
                                     &self.signing_key,
                                 );
                                 deletion_query.edge_log.push(log_entry);
@@ -413,7 +435,6 @@ impl RoomAuthorisations {
 
             rooms.append(&mut rooms_ent);
         }
-
         Ok(rooms)
     }
 
@@ -471,7 +492,6 @@ impl RoomAuthorisations {
                                         room.id.clone(),
                                         edge_deletion,
                                         now,
-                                        verifying_key.clone(),
                                         &self.signing_key,
                                     );
                                     entity_to_mutate.edge_deletions_log.push(log);
@@ -501,7 +521,6 @@ impl RoomAuthorisations {
                                         room.id.clone(),
                                         edge_deletion,
                                         now,
-                                        verifying_key.clone(),
                                         &self.signing_key,
                                     );
                                     entity_to_mutate.edge_deletions_log.push(log);
@@ -1009,5 +1028,116 @@ impl RoomAuthorisations {
         }
 
         true
+    }
+
+    ///
+    /// best effort edge validation
+    ///
+    pub fn validate_edge_deletions(
+        &self,
+        edges: Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
+    ) -> Vec<EdgeDeletionEntry> {
+        let mut result = Vec::new();
+        for entry in edges {
+            let deletion = entry.0;
+            if deletion.entity_name.is_none() {
+                continue;
+            };
+            let entity_name = &deletion.entity_name.clone().unwrap();
+            if deletion.verify().is_err() {
+                continue;
+            }
+
+            let room = &deletion.room_id;
+            let room = self.rooms.get(room);
+            if room.is_none() {
+                continue;
+            }
+            let room = room.unwrap();
+            let del_author = &deletion.verifying_key;
+            let edge_author = entry.1;
+            let valid = match edge_author {
+                Some(author) => match author.eq(del_author) {
+                    true => room.can(
+                        del_author,
+                        entity_name,
+                        deletion.deletion_date,
+                        &RightType::MutateSelf,
+                    ),
+                    false => room.can(
+                        del_author,
+                        entity_name,
+                        deletion.deletion_date,
+                        &RightType::MutateAll,
+                    ),
+                },
+                None => room.can(
+                    del_author,
+                    entity_name,
+                    deletion.deletion_date,
+                    &RightType::MutateSelf,
+                ),
+            };
+            if valid {
+                result.push(deletion);
+            }
+        }
+        result
+    }
+
+    ///
+    /// best effort node deletion validation
+    ///
+    fn validate_node_deletions(
+        &self,
+        nodes: HashMap<Vec<u8>, (NodeDeletionEntry, Option<Vec<u8>>)>,
+    ) -> Vec<NodeDeletionEntry> {
+        let mut result = Vec::new();
+        for entry in nodes {
+            let entry = entry.1;
+            let deletion = entry.0;
+            if deletion.entity_name.is_none() {
+                continue;
+            };
+            let entity_name = &deletion.entity_name.clone().unwrap();
+            if deletion.verify().is_err() {
+                continue;
+            }
+
+            let room = &deletion.room_id;
+            let room = self.rooms.get(room);
+            if room.is_none() {
+                continue;
+            }
+            let room = room.unwrap();
+            let del_author = &deletion.verifying_key;
+            let edge_author = entry.1;
+            let valid = match edge_author {
+                Some(author) => match author.eq(del_author) {
+                    true => room.can(
+                        del_author,
+                        entity_name,
+                        deletion.deletion_date,
+                        &RightType::MutateSelf,
+                    ),
+                    false => room.can(
+                        del_author,
+                        entity_name,
+                        deletion.deletion_date,
+                        &RightType::MutateAll,
+                    ),
+                },
+                None => room.can(
+                    del_author,
+                    entity_name,
+                    deletion.deletion_date,
+                    &RightType::MutateSelf,
+                ),
+            };
+            if valid {
+                result.push(deletion);
+            }
+        }
+        result
     }
 }

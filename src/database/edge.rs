@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::{
     sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
@@ -8,7 +6,7 @@ use crate::{
     cryptography::{base64_encode, import_verifying_key, SigningKey},
     date_utils::{date, date_next_day, now},
 };
-use ed25519_dalek::VerifyingKey;
+
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -322,8 +320,10 @@ impl Edge {
     ) -> Result<Option<Box<Edge>>> {
         let mut get_stmt = conn.prepare_cached(Self::EDGE_QUERY)?;
 
-        let edge = get_stmt.query_row((src, label, dest), Self::EDGE_MAPPING)?;
-        Ok(Some(edge))
+        let edge = get_stmt
+            .query_row((src, label, dest), Self::EDGE_MAPPING)
+            .optional()?;
+        Ok(edge)
     }
 
     ///
@@ -394,15 +394,18 @@ pub struct EdgeDeletionEntry {
     pub deletion_date: i64,
     pub verifying_key: Vec<u8>,
     pub signature: Vec<u8>,
+    //used for synchronisation authorisation
+    #[serde(skip)]
+    pub entity_name: Option<String>,
 }
 impl EdgeDeletionEntry {
     pub fn build(
         room_id: Vec<u8>,
         edge: &Edge,
         deletion_date: i64,
-        verifying_key: Vec<u8>,
         signing_key: &impl SigningKey,
     ) -> Self {
+        let verifying_key = signing_key.export_verifying_key();
         let signature = Self::sign(&room_id, edge, deletion_date, &verifying_key, signing_key);
         Self {
             room_id,
@@ -414,6 +417,7 @@ impl EdgeDeletionEntry {
             deletion_date,
             verifying_key,
             signature,
+            entity_name: None,
         }
     }
 
@@ -490,24 +494,64 @@ impl EdgeDeletionEntry {
                 deletion_date: row.get(6)?,
                 verifying_key: row.get(7)?,
                 signature: row.get(8)?,
+                entity_name: None,
             })
         }
 
         Ok(result)
     }
 
+    ///
+    /// find the edge author to verify authorisation before deletion
+    ///
     pub fn with_source_authors(
         edges: Vec<Self>,
         conn: &Connection,
-    ) -> Result<HashMap<Vec<u8>, (Self, Option<Vec<u8>>)>> {
-        let mut map = HashMap::new();
+    ) -> Result<Vec<(Self, Option<Vec<u8>>)>> {
+        let mut result = Vec::new();
 
-        Ok(map)
+        let query = "
+        SELECT verifying_key  
+        FROM _edge WHERE 
+            src=? AND 
+            src_entity=? AND 
+            label=? AND 
+            dest=? AND 
+            cdate=?";
+        let mut stmt = conn.prepare_cached(query)?;
+        for e in edges {
+            let rs: Option<Vec<u8>> = stmt
+                .query_row(
+                    (&e.src, &e.src_entity, &e.label, &e.dest, &e.cdate),
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            result.push((e, rs));
+        }
+        Ok(result)
     }
+
+    ///
+    /// Delete every entry
+    ///
     pub fn delete_all(
-        edges: Vec<Self>,
+        edges: &mut Vec<Self>,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
+        let query = "
+        DELETE FROM _edge WHERE 
+            src=? AND 
+            src_entity=? AND 
+            label=? AND 
+            dest=? AND 
+            cdate=?
+        ";
+        let mut stmt = conn.prepare_cached(query)?;
+        for e in edges {
+            stmt.execute((&e.src, &e.src_entity, &e.label, &e.dest, &e.cdate))?;
+            e.write(conn)?;
+        }
         Ok(())
     }
 }
@@ -697,13 +741,7 @@ mod tests {
         e.write(&conn).unwrap();
         e.delete(&conn).unwrap();
         let room_id = random32().to_vec();
-        let mut log = EdgeDeletionEntry::build(
-            room_id.clone(),
-            &e,
-            now(),
-            signing_key.export_verifying_key(),
-            &signing_key,
-        );
+        let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
 
         log.write(&conn).unwrap();
 
@@ -716,5 +754,52 @@ mod tests {
         assert_eq!(&e.src_entity, &entry.src_entity);
         assert_eq!(&e.label, &entry.label);
         assert_eq!(&e.dest, &entry.dest);
+    }
+
+    #[test]
+    fn delete_edge_from_log() {
+        let signing_key = Ed25519SigningKey::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+        let label = "pet";
+        let from = new_id();
+        let to = new_id();
+        let mut e = Edge {
+            src: from.clone(),
+            src_entity: "0".to_string(),
+            label: String::from(label),
+            dest: to.clone(),
+            ..Default::default()
+        };
+        e.sign(&signing_key).unwrap();
+        e.write(&conn).unwrap();
+
+        let room_id = random32().to_vec();
+        let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
+        log.write(&conn).unwrap();
+
+        let entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
+        assert_eq!(1, entries.len());
+        let entry = &entries[0];
+        entry.verify().unwrap();
+
+        assert_eq!(&e.src, &entry.src);
+        assert_eq!(&e.src_entity, &entry.src_entity);
+        assert_eq!(&e.label, &entry.label);
+        assert_eq!(&e.dest, &entry.dest);
+
+        let with_author = EdgeDeletionEntry::with_source_authors(entries, &conn).unwrap();
+        assert_eq!(1, with_author.len());
+        let entry = &with_author[0];
+        assert!(entry.1.is_some());
+
+        let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();
+        assert!(edge.is_some());
+
+        let mut entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
+        EdgeDeletionEntry::delete_all(&mut entries, &conn).unwrap();
+
+        let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();
+        assert!(edge.is_none());
     }
 }
