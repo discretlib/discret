@@ -18,11 +18,11 @@ COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
-variable    = @{ "$" ~ identifier }
-entity_name =  { identifier ~ (":" ~ identifier)? }
-deletion    =  { SOI ~ "deletion" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
-
-entity = { entity_name ~ "{" ~ id_field ~ array_field* ~ "}" }
+variable      = @{ "$" ~ identifier }
+entity_name   =  { identifier ~ (":" ~ identifier)? }
+deletion      =  { SOI ~ deletion_name ~ "{" ~ entity+ ~ "}" ~ EOI }
+deletion_name =  { "deletion" ~ (identifier)? }
+entity        =  { entity_name ~ "{" ~ id_field ~ array_field* ~ "}" }
 
 id_field = { variable }
 

@@ -131,7 +131,11 @@ impl MutationParser {
 
         if parse.as_rule() == Rule::mutation {
             let mut mutation_pairs = parse.into_inner();
-            mutation.name = mutation_pairs.next().unwrap().as_str().to_string();
+
+            let mutation_name = mutation_pairs.next().unwrap();
+            if let Some(name) = mutation_name.into_inner().next() {
+                mutation.name = name.as_str().to_string();
+            }
 
             for entity_pair in mutation_pairs {
                 match entity_pair.as_rule() {
@@ -738,7 +742,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutation  {
                 Person {
                     id : $id
                     name : [{id : $pet_id}]
@@ -751,7 +755,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutation  {
                 Person {
                     id : $id
                     name : {id : $pet_id}
@@ -764,7 +768,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutation  {
                 Person {
                     id : $id
                     name: $name
@@ -778,7 +782,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutation  {
                 Person {
                     id : $id
                     weight : true
@@ -791,7 +795,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutation  {
                 Person {
                     id : $id
                     weight : 1

@@ -18,7 +18,8 @@ identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
 comma      =  { "," }
 
-mutation = { SOI ~ "mutation" ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
+mutation      = { SOI ~ mutation_name ~ "{" ~ entity+ ~ "}" ~ EOI }
+mutation_name = { "mutation" ~ (identifier)? }
 
 entity      = { entity_name ~ "{" ~ field+ ~ "}" }
 entity_name = { identifier ~ (":" ~ identifier)? }

@@ -122,7 +122,7 @@ mod tests {
 
         let query = QueryParser::parse(
             r#"
-            query aquery {
+            query {
                 Person {
                     name 
                    
@@ -135,7 +135,7 @@ mod tests {
 
         let query = QueryParser::parse(
             r#"
-            query aquery {
+            query {
                 Person {
                     name 
                     parents{
@@ -150,7 +150,7 @@ mod tests {
 
         let query = QueryParser::parse(
             r#"
-            query aquery {
+            query  {
                 Person {
                     name 
                     aliased : parents {

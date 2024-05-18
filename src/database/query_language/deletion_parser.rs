@@ -76,7 +76,11 @@ impl DeletionParser {
         match parse.as_rule() {
             Rule::deletion => {
                 let mut deletion_pairs = parse.into_inner();
-                deletion.name = deletion_pairs.next().unwrap().as_str().to_string();
+
+                let deletion_name = deletion_pairs.next().unwrap();
+                if let Some(name) = deletion_name.into_inner().next() {
+                    deletion.name = name.as_str().to_string();
+                }
 
                 for entity_pair in deletion_pairs {
                     match entity_pair.as_rule() {
@@ -276,7 +280,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_pet {
+            deletion  {
                 pet {
                     $id3
                 }
@@ -289,7 +293,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_pet {
+            deletion  {
                 Pet {
                     $id3
                 }
@@ -302,7 +306,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_pet{
+            deletion {
                 Person {
                     $id1
                     Parent[$id2]
@@ -318,7 +322,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_pet{
+            deletion {
                 Person {
                     $id1
                     parent[$id2]
@@ -332,7 +336,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_pet{
+            deletion {
                 Person {
                     $id1
                     parent[]

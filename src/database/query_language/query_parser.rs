@@ -51,11 +51,7 @@ pub enum Function {
     Sum(String),
 }
 
-#[derive(Debug)]
-pub enum QueryType {
-    Query,
-    Subscription,
-}
+
 
 const DEFAULT_LIMIT: i64 = 100;
 #[derive(Debug)]
@@ -302,7 +298,6 @@ impl EntityQuery {
 #[derive(Debug)]
 pub struct QueryParser {
     pub name: String,
-    pub query_type: QueryType,
     pub variables: Variables,
     pub queries: Vec<EntityQuery>,
 }
@@ -315,7 +310,6 @@ impl QueryParser {
     pub fn new() -> Self {
         Self {
             name: "".to_string(),
-            query_type: QueryType::Query,
             variables: Variables::new(),
             queries: Vec::new(),
         }
@@ -337,14 +331,12 @@ impl QueryParser {
         if parse.as_rule() == Rule::query  {
             let mut query_pairs = parse.into_inner();
 
-            let query_type = query_pairs.next().unwrap();
-            match query_type.as_str() {
-                "query" => query.query_type = QueryType::Query,
-                "subscription" => query.query_type = QueryType::Subscription,
-                _ => unreachable!(),
+            let query_name = query_pairs.next().unwrap();
+            if let Some(name) = query_name.into_inner().next(){
+                query.name = name.as_str().to_string();
             }
-
-            query.name = query_pairs.next().unwrap().as_str().to_string();
+          
+            //query.name = query_pairs.next().unwrap().as_str().to_string();
 
             for entity_pair in query_pairs {
                 match entity_pair.as_rule() {

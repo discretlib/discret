@@ -5,8 +5,8 @@ comma      =  { "," }
 identifier = @{ (LETTER | NUMBER | "_")+ }
 variable   = @{ "$" ~ identifier }
 
-query      = { SOI ~ query_type ~ identifier ~ "{" ~ entity+ ~ "}" ~ EOI }
-query_type = { "query" | "subscription" }
+query      = { SOI ~ query_name ~ "{" ~ entity+ ~ "}" ~ EOI }
+query_name = { "query" ~ (identifier)? }
 
 entity      = { entity_name ~ entity_param? ~ "{" ~ field+ ~ "}" }
 entity_name = { identifier ~ (":" ~ identifier)? }
