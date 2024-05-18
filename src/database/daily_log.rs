@@ -503,7 +503,6 @@ mod tests {
     use rusqlite::Connection;
 
     use crate::{
-        cryptography::{base64_encode, random32},
         database::{
             configuration::Configuration,
             graph_database::GraphDatabaseService,
@@ -511,6 +510,7 @@ mod tests {
         },
         date_utils::{date, now},
         event_service::EventService,
+        security::{base64_encode, random32},
     };
 
     use super::*;

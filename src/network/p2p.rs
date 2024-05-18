@@ -117,12 +117,12 @@ impl rustls::client::ServerCertVerifier for ServerCertVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cryptography;
+    use crate::security;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() -> Result<(), Box<dyn Error>> {
         let addr = "0.0.0.0:0".parse().unwrap();
-        let (pub_key, secret_key) = cryptography::generate_self_signed_certificate();
+        let (pub_key, secret_key) = security::generate_self_signed_certificate();
         add_valid_certificate(pub_key.clone());
 
         let endpoint = endpoint(addr, pub_key, secret_key).await.unwrap();
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv6() -> Result<(), Box<dyn Error>> {
         let addr = "[::]:0".parse().unwrap();
-        let (pub_key, secret_key) = cryptography::generate_self_signed_certificate();
+        let (pub_key, secret_key) = security::generate_self_signed_certificate();
         add_valid_certificate(pub_key.clone());
 
         let endpoint = endpoint(addr, pub_key, secret_key).await.unwrap();
@@ -180,7 +180,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_invalid_certificate() -> Result<(), Box<dyn Error>> {
         let addr = "[::]:0".parse().unwrap();
-        let (pub_key, secret_key) = cryptography::generate_self_signed_certificate();
+        let (pub_key, secret_key) = security::generate_self_signed_certificate();
 
         // the server's certificate is not added to the valid list
         // add_valid_certificate(pub_key.clone());

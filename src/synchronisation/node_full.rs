@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::cryptography::base64_decode;
+use crate::security::base64_decode;
 
 use crate::database::{
     daily_log::DailyMutations,
@@ -452,7 +452,6 @@ mod tests {
     use std::{collections::HashSet, fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
             configuration::Configuration,
             graph_database::GraphDatabaseService,
@@ -461,6 +460,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
+        security::{base64_encode, random32, Ed25519SigningKey},
         synchronisation::room_node::RoomNode,
     };
 

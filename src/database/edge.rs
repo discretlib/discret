@@ -4,8 +4,8 @@ use super::{
     Error, Result,
 };
 use crate::{
-    cryptography::{base64_encode, import_verifying_key, SigningKey},
     date_utils::{date, date_next_day, now},
+    security::{base64_encode, import_verifying_key, SigningKey},
 };
 
 use rusqlite::{Connection, OptionalExtension};
@@ -593,8 +593,8 @@ impl Writeable for EdgeDeletionEntry {
 mod tests {
 
     use crate::{
-        cryptography::{new_id, random32, Ed25519SigningKey, SigningKey},
         database::sqlite_database::{prepare_connection, DB_ID_MAX_SIZE},
+        security::{new_id, random32, Ed25519SigningKey, SigningKey},
     };
 
     use super::*;

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    cryptography::base64_decode,
     database::configuration::{ID_FIELD, ROOM_ID_FIELD},
+    security::base64_decode,
 };
 
 use super::{

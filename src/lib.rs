@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-mod cryptography;
 mod database;
 mod date_utils;
 mod event_service;
 mod log_service;
 mod message;
 mod network;
+mod security;
 mod synchronisation;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -20,7 +20,7 @@ pub enum Error {
     AccountExists,
 
     #[error(transparent)]
-    CryptoError(#[from] crate::cryptography::Error),
+    CryptoError(#[from] crate::security::Error),
 
     #[error(transparent)]
     DatabaseError(#[from] crate::database::Error),

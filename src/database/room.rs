@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt};
 
-use crate::cryptography::base64_decode;
+use crate::security::base64_decode;
 
 use super::{
     configuration::{self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD},

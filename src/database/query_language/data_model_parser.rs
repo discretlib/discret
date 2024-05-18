@@ -1,10 +1,10 @@
 use crate::{
-    cryptography::base64_decode,
     database::configuration::{
         AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
         ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, ROOM_ID_FIELD,
         SIGNATURE_FIELD,
     },
+    security::base64_decode,
 };
 
 use super::{Error, FieldType, Value, VariableType};

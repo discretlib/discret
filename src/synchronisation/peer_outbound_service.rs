@@ -9,7 +9,8 @@ use tokio::sync::{mpsc, Mutex};
 use crate::{database::graph_database::GraphDatabaseService, log_service::LogService};
 
 use super::{
-    peer_service::PeerConnectionService, Answer, Error, ProveAnswer, Query, QueryProtocol,
+    peer_connection_service::PeerConnectionService, Answer, Error, ProveAnswer, Query,
+    QueryProtocol,
 };
 
 ///

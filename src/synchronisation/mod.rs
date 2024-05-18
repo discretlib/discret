@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{cryptography, database::room::Room};
+use crate::{database::room::Room, security};
 use thiserror::Error;
-pub mod local_peer;
 pub mod node_full;
-pub mod peer_service;
-pub mod remote_peer;
+pub mod peer_connection_service;
+pub mod peer_inbound_service;
+pub mod peer_outbound_service;
 mod room_locking_service;
 pub mod room_node;
 
@@ -76,8 +76,8 @@ pub struct ProveAnswer {
     pub chall_signature: Vec<u8>,
 }
 impl ProveAnswer {
-    pub fn verify(&self, challenge: &Vec<u8>) -> Result<(), cryptography::Error> {
-        let pub_key = cryptography::import_verifying_key(&self.verifying_key)?;
+    pub fn verify(&self, challenge: &Vec<u8>) -> Result<(), security::Error> {
+        let pub_key = security::import_verifying_key(&self.verifying_key)?;
         pub_key.verify(challenge, &self.chall_signature)?;
         Ok(())
     }
@@ -87,10 +87,9 @@ impl ProveAnswer {
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use tests::peer_service::{connect_peers, listen_for_event, EventFn, Log, LogFn};
+    use tests::peer_connection_service::{connect_peers, listen_for_event, EventFn, Log, LogFn};
 
     use crate::{
-        cryptography::base64_encode,
         database::{
             configuration::Configuration,
             graph_database::GraphDatabaseService,
@@ -99,9 +98,10 @@ mod tests {
         },
         event_service::{Event, EventService},
         log_service::LogService,
+        security::base64_encode,
     };
 
-    use self::{cryptography::random32, peer_service::PeerConnectionService};
+    use self::{peer_connection_service::PeerConnectionService, security::random32};
 
     use super::*;
 

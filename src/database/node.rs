@@ -9,8 +9,8 @@ use super::{
     Error, Result,
 };
 use crate::{
-    cryptography::{base64_encode, import_verifying_key, new_id, SigningKey},
     date_utils::{date, date_next_day, now},
+    security::{base64_encode, import_verifying_key, new_id, SigningKey},
 };
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -765,7 +765,7 @@ pub fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
 #[cfg(test)]
 mod tests {
 
-    use crate::cryptography::{random32, Ed25519SigningKey};
+    use crate::security::{random32, Ed25519SigningKey};
 
     use super::*;
 

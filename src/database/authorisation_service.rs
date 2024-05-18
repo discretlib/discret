@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, oneshot::Sender};
 
 use crate::{
-    cryptography::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
+    security::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
     synchronisation::{
         node_full::FullNode,
         room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},

@@ -3,7 +3,7 @@ use std::cmp::max;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::cryptography::base64_decode;
+use crate::security::base64_decode;
 
 use crate::database::{
     configuration::{
@@ -949,7 +949,6 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
 mod tests {
 
     use crate::{
-        cryptography::{base64_encode, random32, Ed25519SigningKey},
         database::{
             configuration::{Configuration, ROOM_AUTHORISATION_FIELD},
             graph_database::GraphDatabaseService,
@@ -958,6 +957,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
+        security::{base64_encode, random32, Ed25519SigningKey},
         synchronisation::room_node::*,
     };
     use std::{fs, path::PathBuf};

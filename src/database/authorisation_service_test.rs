@@ -4,7 +4,6 @@ mod tests {
     use std::{collections::HashMap, fs, path::PathBuf};
 
     use crate::{
-        cryptography::{base64_decode, base64_encode, random32, Ed25519SigningKey},
         database::{
             authorisation_service::*,
             configuration::Configuration,
@@ -14,6 +13,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
+        security::{base64_decode, base64_encode, random32, Ed25519SigningKey},
     };
 
     #[test]

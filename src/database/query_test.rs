@@ -5,7 +5,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::cryptography::Ed25519SigningKey;
+    use crate::security::Ed25519SigningKey;
     use crate::database::sqlite_database::Writeable;
     use crate::database::mutation_query::MutationQuery;
     use crate::database::query_language::parameter::ParametersAdd;

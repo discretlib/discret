@@ -7,10 +7,10 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::cryptography::ALPN_QUIC_HTTP;
 use crate::message::Message;
 use crate::network::beacon_server::OutboundMessage;
 use crate::network::beacon_server::PeerInfo;
+use crate::security::ALPN_QUIC_HTTP;
 
 use super::beacon_server::InbounddMessage;
 use super::beacon_server::Token;
@@ -270,8 +270,8 @@ mod test {
 
     use super::*;
     use crate::{
-        cryptography::generate_self_signed_certificate,
         network::beacon_server::{start_beacon_server, TOKEN_SIZE},
+        security::generate_self_signed_certificate,
     };
 
     #[test]

@@ -21,9 +21,9 @@ use super::{
     sqlite_database::{Database, DatabaseReader, RowMappingFn, WriteMessage, Writeable},
     Error, Result,
 };
-use crate::cryptography::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
 use crate::date_utils::now;
 use crate::event_service::EventService;
+use crate::security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
 use crate::synchronisation::node_full::FullNode;
 use crate::synchronisation::room_node::RoomNode;
 
@@ -977,7 +977,7 @@ mod tests {
         // }
     }
 
-    use crate::{cryptography::random32, database::query_language::parameter::ParametersAdd};
+    use crate::{database::query_language::parameter::ParametersAdd, security::random32};
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]

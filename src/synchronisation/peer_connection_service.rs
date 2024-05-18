@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    local_peer::{LocalPeer, LocalPeerService, QueryService},
-    remote_peer::{RemotePeerHandle, RemoteQueryService},
+    peer_inbound_service::{LocalPeer, LocalPeerService, QueryService},
+    peer_outbound_service::{RemotePeerHandle, RemoteQueryService},
     room_locking_service::RoomLockService,
     Answer, LocalEvent, QueryProtocol, RemoteEvent,
 };
@@ -240,7 +240,7 @@ impl PeerConnectionService {
 }
 
 #[cfg(test)]
-pub use crate::{cryptography::random32, log_service::Log};
+pub use crate::{log_service::Log, security::random32};
 
 #[cfg(test)]
 pub type LogFn = Box<dyn Fn(Log) -> Result<(), String> + Send + 'static>;

@@ -4,16 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, Result};
 
-use quinn::{Endpoint, IdleTimeout, TransportConfig, VarInt, ConnectionError};
+use quinn::{ConnectionError, Endpoint, IdleTimeout, TransportConfig, VarInt};
 
 use std::sync::Mutex as stdMutex;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::cryptography::ALPN_QUIC_HTTP;
+use crate::security::ALPN_QUIC_HTTP;
 use tracing::{debug, error, info, trace};
-
 
 pub const BEACON_MTU: usize = 1200;
 pub const KEEP_ALIVE_INTERVAL: u64 = 8;
@@ -113,45 +112,39 @@ async fn handle_connection(
     connection_map: ConnMap,
     token: Arc<stdMutex<Token>>,
 ) -> Result<(), ConnectionError> {
+    info!("established");
+    let socket_adress = connection.remote_address();
 
+    let conn = match connection.await {
+        Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+            info!("connection closed");
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(e);
+        }
+        Ok(s) => s,
+    };
 
-        info!("established");
-        let socket_adress = connection.remote_address();
-  
-        let conn = match connection.await {
-            Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                info!("connection closed");
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(e);
-            }
-            Ok(s) => s,
-        };
+    let stream = match conn.accept_bi().await {
+        Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+            info!("connection closed");
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(e);
+        }
+        Ok(s) => s,
+    };
+    let conn_map = connection_map.clone();
+    let token = token.clone();
+    tokio::spawn(async move {
+        if let Err(e) = handle_request(stream, socket_adress, conn_map, token).await {
+            error!("failed: {reason}", reason = e.to_string());
+        }
+    });
 
-
-
-        
-            let stream = match conn.accept_bi().await {
-                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                    info!("connection closed");
-                    return Ok(());
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-                Ok(s) => s,
-            };
-            let conn_map = connection_map.clone();
-            let token = token.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_request(stream, socket_adress, conn_map, token).await {
-                    error!("failed: {reason}", reason = e.to_string());
-                }
-            });
-        
-        Ok(())
-
+    Ok(())
 }
 
 async fn handle_request(

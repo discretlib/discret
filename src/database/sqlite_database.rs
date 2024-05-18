@@ -7,8 +7,8 @@ use tokio::sync::{
 };
 
 use crate::{
-    cryptography::{base64_decode, base64_encode},
     event_service::EventServiceMessage,
+    security::{base64_decode, base64_encode},
     synchronisation::node_full::FullNode,
 };
 
@@ -733,8 +733,8 @@ pub fn add_base64_function(db: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cryptography::hash;
     use crate::database::Error;
+    use crate::security::hash;
     use std::result::Result;
     use std::{fs, path::Path, time::Instant};
     #[derive(Debug)]

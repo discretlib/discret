@@ -17,7 +17,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    Cryptography(#[from] crate::cryptography::Error),
+    Cryptography(#[from] crate::security::Error),
 
     #[error(transparent)]
     Database(#[from] rusqlite::Error),

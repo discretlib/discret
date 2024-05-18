@@ -15,7 +15,6 @@ use tokio::{
 };
 
 use crate::{
-    cryptography::{base64_encode, random32},
     database::{
         daily_log::{DailyLog, RoomDefinitionLog},
         edge::EdgeDeletionEntry,
@@ -24,10 +23,11 @@ use crate::{
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
+    security::{base64_encode, random32},
 };
 
 use super::{
-    node_full::FullNode, peer_service::PeerConnectionService,
+    node_full::FullNode, peer_connection_service::PeerConnectionService,
     room_locking_service::RoomLockService, room_node::RoomNode, Answer, Error, LocalEvent,
     ProveAnswer, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };

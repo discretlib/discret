@@ -131,7 +131,7 @@ impl RoomLockService {
 mod tests {
 
     use super::*;
-    use crate::cryptography::{base64_encode, random32};
+    use crate::security::{base64_encode, random32};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn one_room_one_peer() {

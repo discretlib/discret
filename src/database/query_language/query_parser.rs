@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{cryptography::base64_decode, database::query_language::VariableType};
+use crate::{security::base64_decode, database::query_language::VariableType};
 
 use super::{
     data_model_parser::{DataModel, Entity, Field},
