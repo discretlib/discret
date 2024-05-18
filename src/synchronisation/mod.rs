@@ -43,13 +43,13 @@ pub struct Answer {
 
 #[derive(Serialize, Deserialize, Debug, Error)]
 pub enum Error {
-    #[error("Authorisation")]
-    Authorisation,
+    #[error("Authorisation for Query {0}")]
+    Authorisation(String),
 
-    #[error("RemoteTechnical")]
-    RemoteTechnical,
+    #[error("RemoteTechnical for Query {0}")]
+    RemoteTechnical(String),
 
-    #[error("TimeOut")]
+    #[error("TimeOut ")]
     TimeOut,
 
     #[error("Parsing")]
@@ -236,7 +236,7 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        let room_query = "query q{ _Room{ id mdate }}";
+        let room_query = "query{ _Room{ id mdate }}";
         let first_res = first_peer.db.query(room_query, None).await.unwrap();
         let second_res = second_peer.db.query(room_query, None).await.unwrap();
 

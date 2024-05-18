@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    peer_inbound_service::{LocalPeer, LocalPeerService, QueryService},
-    peer_outbound_service::{RemotePeerHandle, RemoteQueryService},
+    peer_inbound_service::{LocalPeerService, QueryService},
+    peer_outbound_service::{InboundQueryService, RemotePeerHandle},
     room_locking_service::RoomLockService,
     Answer, LocalEvent, QueryProtocol, RemoteEvent,
 };
@@ -138,7 +138,7 @@ impl PeerConnectionService {
             ) => {
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
-                RemoteQueryService::start(
+                let inbound_query_service = InboundQueryService::start(
                     RemotePeerHandle {
                         hardware_id: hardware_id.clone(),
                         db: local_db.clone(),
@@ -151,27 +151,22 @@ impl PeerConnectionService {
                     verifying_key.clone(),
                 );
 
-                let local_peer = LocalPeer {
-                    hardware_id: hardware_id.clone(),
-                    remote_rooms: HashSet::new(),
-                    db: local_db.clone(),
-                    lock_service: lock_service.clone(),
-                    query_service: QueryService::start(
-                        query_sender,
-                        answer_receiver,
-                        log_service.clone(),
-                    ),
-                    event_sender,
-                };
+                let query_service =
+                    QueryService::start(query_sender, answer_receiver, log_service.clone());
 
                 LocalPeerService::start(
-                    local_peer,
                     event_receiver,
                     local_event_broadcast,
-                    verifying_key,
+                    hardware_id,
+                    verifying_key.clone(),
+                    local_db.clone(),
+                    lock_service.clone(),
+                    query_service,
+                    event_sender.clone(),
                     log_service.clone(),
                     peer_service.clone(),
                     event_service.clone(),
+                    inbound_query_service,
                 );
             }
             PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
