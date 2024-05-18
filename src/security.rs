@@ -287,7 +287,7 @@ pub fn random32() -> [u8; 32] {
 pub type Uid = [u8; DB_ID_SIZE];
 
 ///
-///
+/// generate a 16 byte uid with the time on the first 4 bytes to improve index locality
 ///
 ///
 fn uid() -> Uid {
