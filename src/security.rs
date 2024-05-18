@@ -162,13 +162,6 @@ impl Ed25519SigningKey {
     }
 }
 
-pub fn random32() -> [u8; 32] {
-    let mut random: [u8; 32] = [0; 32];
-
-    OsRng.fill_bytes(&mut random);
-    random
-}
-
 ///
 /// Defines the necessary functions to sign  data  
 ///
@@ -284,7 +277,33 @@ pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::Priva
     (verifying_key, signing_key)
 }
 
+pub fn random32() -> [u8; 32] {
+    let mut random: [u8; 32] = [0; 32];
+
+    OsRng.fill_bytes(&mut random);
+    random
+}
+
+pub type Uid = [u8; DB_ID_SIZE];
+
 ///
+///
+///
+///
+fn uid() -> Uid {
+    const TIME_BYTES: usize = 4;
+    let time = now();
+    let time = &time.to_be_bytes()[TIME_BYTES..];
+
+    let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
+    let (one, two) = whole.split_at_mut(time.len());
+
+    one.copy_from_slice(time);
+    OsRng.fill_bytes(two);
+
+    whole
+}
+
 /// id with the current time on the first four bytes to improve index locality
 ///
 pub fn new_id() -> Vec<u8> {

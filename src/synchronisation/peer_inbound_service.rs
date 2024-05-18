@@ -1,9 +1,11 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
+use futures::Future;
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::{
@@ -34,8 +36,9 @@ use super::{
 
 static QUERY_SEND_BUFFER: usize = 10;
 
-pub type AnswerFn = Box<dyn FnOnce(bool, Vec<u8>) + Send + 'static>;
+pub type AnswerFn = Box<dyn FnOnce(bool, Vec<u8>) -> Pin<Box<AsnwerResultFut>> + Send + 'static>;
 
+pub type AsnwerResultFut = dyn Future<Output = ()> + Send + 'static;
 pub struct QueryService {
     sender: mpsc::Sender<(Query, AnswerFn)>,
 }
@@ -77,7 +80,7 @@ impl QueryService {
                         match msg {
                             Some(msg) => {
                                 if let Some(func) = sent_query.remove(&msg.id) {
-                                    func(msg.success, msg.serialized);
+                                    func(msg.success, msg.serialized).await;
                                 }
                             }
                             None => {
@@ -461,27 +464,54 @@ impl LocalPeerService {
         let filtered = peer.db.filter_existing_node(remote_nodes, date).await?;
         if !filtered.is_empty() {
             has_changes = true;
+        } else {
+            return Ok(has_changes);
         }
         let max_nodes = 128;
-        let mut current_list = Vec::with_capacity(max_nodes);
 
-        for node_identifier in filtered {
-            current_list.push(node_identifier.id);
-            if current_list.len() == max_nodes {
-                let nodes: Vec<FullNode> = peer
-                    .query(Query::FullNodes(room_id.clone(), current_list))
+        //put in a block to remove the reply:Sender<> at the top that would
+        //prevent the loop in the next tokio::spawn to end when all messages are processed
+        let mut receiver = {
+            let (reply, receiver) =
+                mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
+
+            let mut current_list = Vec::with_capacity(max_nodes);
+
+            for node_identifier in filtered {
+                current_list.push(node_identifier.id);
+                if current_list.len() == max_nodes {
+                    peer.query_mpsc(
+                        Query::FullNodes(room_id.clone(), current_list),
+                        reply.clone(),
+                    )
                     .await?;
-                peer.db.add_full_nodes(room_id.clone(), nodes).await?;
 
-                current_list = Vec::with_capacity(max_nodes);
+                    current_list = Vec::with_capacity(max_nodes);
+                }
             }
-        }
-        if !current_list.is_empty() {
-            let nodes: Vec<FullNode> = peer
-                .query(Query::FullNodes(room_id.clone(), current_list))
+            if !current_list.is_empty() {
+                peer.query_mpsc(
+                    Query::FullNodes(room_id.clone(), current_list),
+                    reply.clone(),
+                )
                 .await?;
-            peer.db.add_full_nodes(room_id.clone(), nodes).await?;
-        }
+            }
+            receiver
+        };
+
+        let db: GraphDatabaseService = peer.db.clone();
+        let room_id = room_id.clone();
+        tokio::spawn(async move {
+            while let Some(nodes) =
+                timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
+            {
+                let nodes = nodes?;
+                db.add_full_nodes(room_id.clone(), nodes).await?;
+            }
+            Ok::<(), crate::Error>(())
+        })
+        .await??;
+
         Ok(has_changes)
     }
 }
@@ -507,25 +537,19 @@ impl LocalPeer {
     async fn query<T: DeserializeOwned + Send + 'static>(&self, query: Query) -> Result<T, Error> {
         let (send, recieve) = oneshot::channel::<Result<T, Error>>();
         let answer: AnswerFn = Box::new(move |succes, serialized| {
-            if succes {
+            let answer = if succes {
                 match bincode::deserialize::<T>(&serialized) {
-                    Ok(result) => {
-                        let _ = send.send(Ok(result));
-                    }
-                    Err(_) => {
-                        let _ = send.send(Err(Error::Parsing));
-                    }
+                    Ok(result) => Ok(result),
+                    Err(_) => Err(Error::Parsing),
                 }
             } else {
                 match bincode::deserialize::<Error>(&serialized) {
-                    Ok(result) => {
-                        let _ = send.send(Err(result));
-                    }
-                    Err(_) => {
-                        let _ = send.send(Err(Error::Parsing));
-                    }
+                    Ok(result) => Err(result),
+                    Err(_) => Err(Error::Parsing),
                 }
             };
+            let _ = send.send(answer);
+            Box::pin(async {})
         });
 
         self.query_service.send(query, answer).await;
@@ -536,6 +560,33 @@ impl LocalPeer {
             },
             Err(_) => return Err(Error::TimeOut),
         }
+    }
+
+    async fn query_mpsc<T: DeserializeOwned + Send + 'static>(
+        &self,
+        query: Query,
+        sender: mpsc::Sender<Result<T, Error>>,
+    ) -> Result<(), Error> {
+        let answer: AnswerFn = Box::new(move |succes, serialized| {
+            let answer = if succes {
+                match bincode::deserialize::<T>(&serialized) {
+                    Ok(result) => Ok(result),
+                    Err(_) => Err(Error::Parsing),
+                }
+            } else {
+                match bincode::deserialize::<Error>(&serialized) {
+                    Ok(result) => Err(result),
+                    Err(_) => Err(Error::Parsing),
+                }
+            };
+
+            Box::pin(async move {
+                let _ = sender.send(answer).await;
+            })
+        });
+
+        self.query_service.send(query, answer).await;
+        Ok(())
     }
 
     ///

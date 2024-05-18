@@ -14,19 +14,11 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Invalid account")]
-    InvalidAccount,
-    #[error("An account allready exists")]
-    AccountExists,
-
     #[error(transparent)]
     CryptoError(#[from] crate::security::Error),
 
     #[error(transparent)]
     DatabaseError(#[from] crate::database::Error),
-
-    #[error("{0}")]
-    DatabaseWrite(String),
 
     #[error(transparent)]
     ParsingError(#[from] crate::database::query_language::Error),
@@ -35,13 +27,13 @@ pub enum Error {
     JSONError(#[from] serde_json::Error),
 
     #[error(transparent)]
+    TokioJoinError(#[from] tokio::task::JoinError),
+
+    #[error(transparent)]
+    TimeoutElapsed(#[from] tokio::time::error::Elapsed),
+
+    #[error(transparent)]
     SerialisationError(#[from] Box<bincode::ErrorKind>),
-
-    #[error("Provider signer is not allowed to sign the datamodel")]
-    InvalidSigner(),
-
-    #[error("Application Template cannot be updated with a template with another id")]
-    InvalidUpdateTemplate(),
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
@@ -49,14 +41,25 @@ pub enum Error {
     #[error(transparent)]
     RecvError(#[from] tokio::sync::oneshot::error::RecvError),
 
+    #[error(transparent)]
+    SynchError(#[from] crate::synchronisation::Error),
+
+    #[error("Invalid account")]
+    InvalidAccount,
+    #[error("An account allready exists")]
+    AccountExists,
+
+    #[error("Provider signer is not allowed to sign the datamodel")]
+    InvalidSigner(),
+
+    #[error("Application Template cannot be updated with a template with another id")]
+    InvalidUpdateTemplate(),
+
     #[error("tokio send error")]
     SendError(String),
 
     #[error("{0}")]
     ChannelError(String),
-
-    #[error(transparent)]
-    SynchError(#[from] crate::synchronisation::Error),
 
     #[error("Timeout occured while sending {0}")]
     TimeOut(String),

@@ -511,7 +511,7 @@ impl BufferedDatabaseWriter {
                                 }
                                 WriteMessage::ComputeDailyLog(_, r) => {
                                     let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
-                                        Err(crate::Error::DatabaseWrite(e.to_string())),
+                                        Err(crate::Error::ComputeDailyLog(e.to_string())),
                                     ));
                                 }
                                 WriteMessage::FullNode(_, _, r) => {
