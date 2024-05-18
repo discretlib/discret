@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::{
     date_utils::now,
-    security::{base64_decode, base64_encode, SigningKey},
+    security::{base64_decode, base64_encode, default_uid, uid_from, SigningKey, Uid},
 };
 
 use super::{
@@ -22,10 +22,10 @@ use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug)]
 pub struct NodeToMutate {
-    pub id: Vec<u8>,
+    pub id: Uid,
     pub date: i64,
     pub entity: String,
-    pub room_id: Option<Vec<u8>>,
+    pub room_id: Option<Uid>,
     pub node: Option<Node>,
     pub node_fts_str: Option<String>,
     pub old_node: Option<Node>,
@@ -56,7 +56,7 @@ impl NodeToMutate {
 impl Default for NodeToMutate {
     fn default() -> Self {
         Self {
-            id: Vec::new(),
+            id: default_uid(),
             room_id: None,
             entity: "".to_string(),
             date: now(),
@@ -328,14 +328,19 @@ impl MutationQuery {
         let entity_short = &entity.short_name;
 
         let room_id = match entity.fields.get(ROOM_ID_FIELD) {
-            Some(room_field) => Self::base64_field(room_field, parameters)?,
+            Some(room_field) => {
+                let id_s = Self::base64_field(room_field, parameters)?
+                    .ok_or(Error::InvalidId(entity_name.clone()))?;
+                Some(uid_from(id_s)?)
+            }
             None => None,
         };
 
         let node_to_mutate = match entity.fields.get(ID_FIELD) {
             Some(id_field) => {
-                let id: Vec<u8> = Self::base64_field(id_field, parameters)?.unwrap();
-
+                let id_s = Self::base64_field(id_field, parameters)?
+                    .ok_or(Error::InvalidId(entity_name.clone()))?;
+                let id = uid_from(id_s)?;
                 let mut node: NodeToMutate = match Node::get(&id, entity_short, conn)? {
                     Some(old_node) => {
                         let node_room = if room_id.is_some() {

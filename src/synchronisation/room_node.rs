@@ -3,7 +3,7 @@ use std::cmp::max;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::security::base64_decode;
+use crate::security::{base64_decode, Uid};
 
 use crate::database::{
     configuration::{
@@ -167,10 +167,7 @@ impl RoomNode {
         Ok(())
     }
 
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+    pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
@@ -324,10 +321,7 @@ impl AuthorisationNode {
         Ok(())
     }
 
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+    pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, AUTHORISATION_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
@@ -386,10 +380,7 @@ impl UserNode {
         }
         Ok(())
     }
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+    pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, USER_AUTH_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
@@ -410,10 +401,7 @@ impl EntityRightNode {
         }
         Ok(())
     }
-    pub fn read(
-        conn: &Connection,
-        id: &Vec<u8>,
-    ) -> std::result::Result<Option<Self>, rusqlite::Error> {
+    pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, ENTITY_RIGHT_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
@@ -957,7 +945,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
-        security::{base64_encode, random32, Ed25519SigningKey},
+        security::{base64_encode, new_uid, random32, Ed25519SigningKey},
         synchronisation::room_node::*,
     };
     use std::{fs, path::PathBuf};
@@ -1805,7 +1793,7 @@ mod tests {
             .unwrap()
             .unwrap();
         //trigger a consistency error
-        node.admin_edges[0].dest = random32().to_vec();
+        node.admin_edges[0].dest = new_uid();
         node.admin_edges[0].sign(&bad_signing).unwrap();
         //serialize and deserialize to get rid of the local_id
         let ser = bincode::serialize(&node).unwrap();

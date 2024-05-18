@@ -23,6 +23,9 @@ pub enum Error {
 
     #[error(transparent)]
     Decode(#[from] base64::DecodeError),
+
+    #[error("Invalid Base64 encoded Uid")]
+    Uid(),
 }
 
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
@@ -56,7 +59,7 @@ pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
     hash(hashed.as_bytes())
 }
 
-const DB_ID_SIZE: usize = 16;
+const UID_SIZE: usize = 16;
 
 ///
 /// hash a byte array using the Blake3 hash function
@@ -284,40 +287,50 @@ pub fn random32() -> [u8; 32] {
     random
 }
 
-pub type Uid = [u8; DB_ID_SIZE];
+pub type Uid = [u8; UID_SIZE];
 
+const DEFAULT_UID: Uid = [0; UID_SIZE];
 ///
 /// generate a 16 byte uid with the time on the first 4 bytes to improve index locality
 ///
 ///
-fn uid() -> Uid {
+pub fn new_uid() -> Uid {
     const TIME_BYTES: usize = 4;
     let time = now();
     let time = &time.to_be_bytes()[TIME_BYTES..];
 
-    let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
-    let (one, two) = whole.split_at_mut(time.len());
+    let mut uid = DEFAULT_UID.clone();
+    let (one, two) = uid.split_at_mut(time.len());
 
     one.copy_from_slice(time);
     OsRng.fill_bytes(two);
 
-    whole
+    uid
+}
+
+pub fn default_uid() -> Uid {
+    DEFAULT_UID
+}
+
+pub fn uid_decode(base64: &str) -> Result<Uid, Error> {
+    let s = base64_decode(base64.as_bytes())?;
+    let uid: Uid = s.try_into().map_err(|_| Error::Uid())?;
+    Ok(uid)
+}
+
+pub fn uid_encode(uid: &Uid) -> String {
+    base64_encode(uid)
+}
+
+pub fn uid_from(v: Vec<u8>) -> Result<Uid, Error> {
+    let uid: Uid = v.try_into().map_err(|_| Error::Uid())?;
+    Ok(uid)
 }
 
 /// id with the current time on the first four bytes to improve index locality
 ///
 pub fn new_id() -> Vec<u8> {
-    const TIME_BYTES: usize = 4;
-    let time = now();
-    let time = &time.to_be_bytes()[TIME_BYTES..];
-
-    let mut whole: [u8; DB_ID_SIZE] = [0; DB_ID_SIZE];
-    let (one, two) = whole.split_at_mut(time.len());
-
-    one.copy_from_slice(time);
-    OsRng.fill_bytes(two);
-
-    whole.to_vec()
+    new_uid().to_vec()
 }
 
 #[cfg(test)]

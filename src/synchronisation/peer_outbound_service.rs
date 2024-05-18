@@ -6,7 +6,9 @@ use std::{
 use serde::Serialize;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::{database::graph_database::GraphDatabaseService, log_service::LogService};
+use crate::{
+    database::graph_database::GraphDatabaseService, log_service::LogService, security::Uid,
+};
 
 use super::{
     peer_connection_service::PeerConnectionService, Answer, Error, ProveAnswer, Query,
@@ -220,7 +222,7 @@ impl RemoteQueryService {
 
 pub struct RemotePeerHandle {
     pub hardware_id: Vec<u8>,
-    pub allowed_room: HashSet<Vec<u8>>,
+    pub allowed_room: HashSet<Uid>,
     pub db: GraphDatabaseService,
     pub reply: mpsc::Sender<Answer>,
 }
@@ -228,7 +230,7 @@ impl RemotePeerHandle {
     async fn load_allowed_room(
         &mut self,
         verifying_key: Vec<u8>,
-    ) -> Result<VecDeque<Vec<u8>>, crate::Error> {
+    ) -> Result<VecDeque<Uid>, crate::Error> {
         let rooms = self.db.get_rooms_for_user(verifying_key).await?;
         if self.allowed_room.is_empty() {
             for room in &rooms {

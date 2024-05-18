@@ -5,12 +5,12 @@ use std::{
 
 use super::{
     daily_log::DailyMutations,
-    sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
+    sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::{
     date_utils::{date, date_next_day, now},
-    security::{base64_encode, import_verifying_key, new_id, SigningKey},
+    security::{base64_encode, import_verifying_key, new_uid, SigningKey, Uid},
 };
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ impl Default for Node {
     fn default() -> Self {
         let date = now();
         Self {
-            id: new_id(),
+            id: new_uid(),
             room_id: None,
             cdate: date,
             mdate: date,
@@ -36,8 +36,8 @@ impl Default for Node {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Node {
-    pub id: Vec<u8>,
-    pub room_id: Option<Vec<u8>>,
+    pub id: Uid,
+    pub room_id: Option<Uid>,
     pub cdate: i64,
     pub mdate: i64,
     pub _entity: String,
@@ -199,10 +199,6 @@ impl Node {
     /// check the node's signature
     ///
     pub fn verify(&self) -> Result<()> {
-        if !is_valid_id_len(&self.id) {
-            return Err(Error::InvalidLenghtId("id".to_string()));
-        }
-
         if self._entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
         }
@@ -238,10 +234,6 @@ impl Node {
     ///
     pub fn sign(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         self._verifying_key = signing_key.export_verifying_key();
-
-        if !is_valid_id_len(&self.id) {
-            return Err(Error::InvalidLenghtId("id".to_string()));
-        }
 
         if self._entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
@@ -303,7 +295,7 @@ impl Node {
     /// Retrieve a node using its primary key
     ///
     pub fn get(
-        id: &Vec<u8>,
+        id: &Uid,
         entity: &str,
         conn: &Connection,
     ) -> std::result::Result<Option<Box<Node>>, rusqlite::Error> {
@@ -324,7 +316,7 @@ impl Node {
     /// Deleting an allready deleted node wil result in an hard deletion
     /// Hard deletions are not synchronized
     ///
-    pub fn delete(id: &Vec<u8>, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+    pub fn delete(id: &Uid, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut delete_stmt = conn.prepare_cached("DELETE FROM _node WHERE id=? ")?;
         delete_stmt.execute([id])?;
         Ok(())
@@ -333,7 +325,7 @@ impl Node {
     ///
     /// Verify the existence of a specific Node
     ///
-    pub fn exist(id: &Vec<u8>, entity: &str, conn: &Connection) -> Result<bool> {
+    pub fn exist(id: &Uid, entity: &str, conn: &Connection) -> Result<bool> {
         let mut exists_stmt =
             conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
         let node: Option<i64> = exists_stmt
@@ -442,7 +434,7 @@ impl Node {
     // used for synchonisation
     //
     pub fn get_daily_nodes_for_room(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         day: i64,
         conn: &Connection,
     ) -> Result<HashSet<NodeIdentifier>> {
@@ -528,7 +520,7 @@ impl Node {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeIdentifier {
-    pub id: Vec<u8>,
+    pub id: Uid,
     pub mdate: i64,
     pub signature: Vec<u8>,
 }
@@ -546,8 +538,8 @@ impl Hash for NodeIdentifier {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeDeletionEntry {
-    pub room_id: Vec<u8>,
-    pub id: Vec<u8>,
+    pub room_id: Uid,
+    pub id: Uid,
     pub entity: String,
     pub mdate: i64,
     pub deletion_date: i64,
@@ -559,7 +551,7 @@ pub struct NodeDeletionEntry {
 }
 impl NodeDeletionEntry {
     pub fn build(
-        room: Vec<u8>,
+        room: Uid,
         node: &Node,
         deletion_date: i64,
         signing_key: &impl SigningKey,
@@ -611,7 +603,7 @@ impl NodeDeletionEntry {
     }
 
     pub fn get_entries(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         del_date: i64,
         conn: &Connection,
     ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
@@ -653,9 +645,9 @@ impl NodeDeletionEntry {
     pub fn with_previous_authors(
         nodes: Vec<Self>,
         conn: &Connection,
-    ) -> Result<HashMap<Vec<u8>, (Self, Option<Vec<u8>>)>> {
+    ) -> Result<HashMap<Uid, (Self, Option<Vec<u8>>)>> {
         let mut map = HashMap::new();
-        let mut nodes_id: Vec<Vec<u8>> = Vec::with_capacity(nodes.len());
+        let mut nodes_id: Vec<Uid> = Vec::with_capacity(nodes.len());
         let it = &mut nodes.into_iter().peekable();
 
         let mut in_clause = String::new();
@@ -674,7 +666,7 @@ impl NodeDeletionEntry {
         let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query(params_from_iter(nodes_id.iter()))?;
         while let Some(row) = rows.next()? {
-            let id: Vec<u8> = row.get(0)?;
+            let id: Uid = row.get(0)?;
             let verifying_key: Option<Vec<u8>> = row.get(1)?;
             if let Some(entry) = map.get_mut(&id) {
                 entry.1 = verifying_key;
@@ -688,7 +680,7 @@ impl NodeDeletionEntry {
         daily_log: &mut DailyMutations,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        let mut nodes_id: Vec<Vec<u8>> = Vec::with_capacity(nodes.len());
+        let mut nodes_id: Vec<Uid> = Vec::with_capacity(nodes.len());
         let it = &mut nodes.into_iter().peekable();
 
         let mut in_clause = String::new();
@@ -765,7 +757,7 @@ pub fn extract_json(val: &serde_json::Value, buff: &mut String) -> Result<()> {
 #[cfg(test)]
 mod tests {
 
-    use crate::security::{random32, Ed25519SigningKey};
+    use crate::security::{new_uid, Ed25519SigningKey};
 
     use super::*;
 
@@ -779,12 +771,7 @@ mod tests {
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node.id = b"key too short".to_vec();
-        node.verify().expect_err("Key is too short");
-        node.sign(&keypair)
-            .expect_err("Key is too short to be signed");
-
-        node.id = new_id();
+        node.id = new_uid();
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
@@ -955,7 +942,7 @@ mod tests {
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
-        let room_id = random32().to_vec();
+        let room_id = new_uid();
         let mut node = Node {
             room_id: Some(room_id.clone()),
             _entity: String::from(entity),
@@ -988,10 +975,10 @@ mod tests {
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
-        let room_id1 = random32();
+        let room_id1 = new_uid();
         let date = 1000;
         let mut node1 = Node {
-            room_id: Some(room_id1.to_vec()),
+            room_id: Some(room_id1.clone()),
             _entity: String::from(entity),
             mdate: date,
             ..Default::default()
@@ -1000,7 +987,7 @@ mod tests {
         node1.write(&conn, false, &None, &None).unwrap();
 
         let mut node2 = Node {
-            room_id: Some(room_id1.to_vec()),
+            room_id: Some(room_id1.clone()),
             _entity: String::from(entity),
             mdate: date,
             ..Default::default()
@@ -1009,7 +996,7 @@ mod tests {
         node2.write(&conn, false, &None, &None).unwrap();
 
         let mut node3 = Node {
-            room_id: Some(room_id1.to_vec()),
+            room_id: Some(room_id1.clone()),
             _entity: String::from(entity),
             mdate: date,
             ..Default::default()
@@ -1017,7 +1004,7 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let mut ids = Node::get_daily_nodes_for_room(&room_id1.to_vec(), date, &conn).unwrap();
+        let mut ids = Node::get_daily_nodes_for_room(&room_id1, date, &conn).unwrap();
         assert_eq!(3, ids.len());
 
         let date2 = now();
@@ -1025,7 +1012,7 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let ids_2 = Node::get_daily_nodes_for_room(&room_id1.to_vec(), date, &conn).unwrap();
+        let ids_2 = Node::get_daily_nodes_for_room(&room_id1, date, &conn).unwrap();
         assert_eq!(2, ids_2.len());
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
@@ -1039,7 +1026,7 @@ mod tests {
 
         let signing_key = Ed25519SigningKey::new();
         let entity = "Pet";
-        let room_id = random32().to_vec();
+        let room_id = new_uid();
         let mut node = Node {
             room_id: Some(room_id.clone()),
             _entity: String::from(entity),

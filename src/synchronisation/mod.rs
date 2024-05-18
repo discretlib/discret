@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{database::room::Room, security};
+use crate::{
+    database::room::Room,
+    security::{self, Uid},
+};
 use thiserror::Error;
 pub mod node_full;
 pub mod peer_connection_service;
@@ -16,13 +19,13 @@ pub static NETWORK_TIMEOUT_SEC: u64 = 10;
 pub enum Query {
     ProveIdentity(Vec<u8>),
     RoomList,
-    RoomDefinition(Vec<u8>),
-    RoomNode(Vec<u8>),
-    RoomLog(Vec<u8>),
-    RoomDailyNodes(Vec<u8>, i64),
-    EdgeDeletionLog(Vec<u8>, i64),
-    NodeDeletionLog(Vec<u8>, i64),
-    FullNodes(Vec<u8>, Vec<Vec<u8>>),
+    RoomDefinition(Uid),
+    RoomNode(Uid),
+    RoomLog(Uid),
+    RoomDailyNodes(Uid, i64),
+    EdgeDeletionLog(Uid, i64),
+    NodeDeletionLog(Uid, i64),
+    FullNodes(Uid, Vec<Uid>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,14 +62,14 @@ pub enum Error {
 #[derive(Clone)]
 pub enum LocalEvent {
     RoomDefinitionChanged(Room),
-    RoomDataChanged(Vec<Vec<u8>>),
+    RoomDataChanged(Vec<Uid>),
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum RemoteEvent {
     Ready, //indicate that this end of the connection is ready to synchronize
-    RoomDefinitionChanged(Vec<u8>),
-    RoomDataChanged(Vec<u8>),
+    RoomDefinitionChanged(Uid),
+    RoomDataChanged(Uid),
 }
 
 #[derive(Serialize, Deserialize)]

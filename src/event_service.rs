@@ -1,6 +1,9 @@
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::database::{daily_log::DailyLogsUpdate, room::Room};
+use crate::{
+    database::{daily_log::DailyLogsUpdate, room::Room},
+    security::Uid,
+};
 
 pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<Event>>),
@@ -8,7 +11,7 @@ pub enum EventServiceMessage {
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Vec<u8>),
     PeerDisconnected(Vec<u8>, i64, Vec<u8>),
-    RoomSynchronized(Vec<u8>),
+    RoomSynchronized(Uid),
 }
 
 #[derive(Clone)]
@@ -17,7 +20,7 @@ pub enum Event {
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Vec<u8>),
     PeerDisconnected(Vec<u8>, i64, Vec<u8>),
-    RoomSynchronized(Vec<u8>),
+    RoomSynchronized(Uid),
 }
 
 #[derive(Clone)]

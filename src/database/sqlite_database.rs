@@ -8,7 +8,7 @@ use tokio::sync::{
 
 use crate::{
     event_service::EventServiceMessage,
-    security::{base64_decode, base64_encode},
+    security::{base64_decode, base64_encode, Uid},
     synchronisation::node_full::FullNode,
 };
 
@@ -331,7 +331,7 @@ pub enum WriteMessage {
     Mutation(MutationQuery, Sender<Result<MutationQuery>>),
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
-    FullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    FullNode(Vec<FullNode>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
@@ -666,20 +666,6 @@ impl Writeable for Optimize {
 /// set to a relatively low value to avoid large rows that would eats lots of ram and bandwith during synchronisation
 ///
 pub const MAX_ROW_LENTGH: usize = 1024 * 1024; //1MB
-
-/// min numbers of char in an id
-pub const DB_ID_MIN_SIZE: usize = 16;
-
-/// set to 33 to be allow the use of a signing key as the id
-pub const DB_ID_MAX_SIZE: usize = 33;
-
-///
-/// control the validity of the id
-///
-pub fn is_valid_id_len(id: &[u8]) -> bool {
-    let v = id.len();
-    (DB_ID_MIN_SIZE..=DB_ID_MAX_SIZE).contains(&v)
-}
 
 ///
 /// Creates a Sqlite function to encode and decode base64 in sql queries

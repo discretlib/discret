@@ -13,7 +13,7 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
-        security::{base64_decode, base64_encode, random32, Ed25519SigningKey},
+        security::{base64_encode, new_uid, random32, uid_decode, Ed25519SigningKey},
     };
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
         };
 
         let mut room = Room {
-            id: random32().to_vec(),
+            id: new_uid(),
             ..Default::default()
         };
         room.add_admin_user(user1.clone()).unwrap();
@@ -1449,7 +1449,7 @@ mod tests {
         .unwrap();
 
         let del_log = app
-            .get_room_node_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
+            .get_room_node_deletion_log(uid_decode(&room_id).unwrap(), now())
             .await
             .unwrap();
         assert_eq!(1, del_log.len());
@@ -1472,7 +1472,7 @@ mod tests {
         .await
         .unwrap();
         let log_entries = app
-            .get_room_edge_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
+            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), now())
             .await
             .unwrap();
 
@@ -1497,7 +1497,7 @@ mod tests {
         .await
         .unwrap();
         let log_entries = app
-            .get_room_edge_deletion_log(base64_decode(&room_id.as_bytes()).unwrap(), now())
+            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), now())
             .await
             .unwrap();
 

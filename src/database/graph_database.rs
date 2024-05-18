@@ -23,7 +23,7 @@ use super::{
 };
 use crate::date_utils::now;
 use crate::event_service::EventService;
-use crate::security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey};
+use crate::security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey, Uid};
 use crate::synchronisation::node_full::FullNode;
 use crate::synchronisation::room_node::RoomNode;
 
@@ -36,8 +36,8 @@ enum Message {
     UpdateModel(String, Sender<Result<String>>),
     Sign(Vec<u8>, Sender<(Vec<u8>, Vec<u8>)>),
     RoomAdd(RoomNode, Sender<Result<()>>),
-    FullNodeAdd(Vec<u8>, Vec<FullNode>, Sender<Result<Vec<Vec<u8>>>>),
-    RoomForUser(Vec<u8>, Sender<Result<VecDeque<Vec<u8>>>>),
+    FullNodeAdd(Uid, Vec<FullNode>, Sender<Result<Vec<Uid>>>),
+    RoomForUser(Vec<u8>, Sender<Result<VecDeque<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
@@ -293,7 +293,7 @@ impl GraphDatabaseService {
     ///
     /// get a full database definition of a room
     ///
-    pub async fn get_room_node(&self, room_id: Vec<u8>) -> Result<Option<RoomNode>> {
+    pub async fn get_room_node(&self, room_id: Uid) -> Result<Option<RoomNode>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Option<RoomNode>>>();
 
         self.database_reader
@@ -319,8 +319,8 @@ impl GraphDatabaseService {
     ///
     /// get all room id ordered by last modification date
     ///
-    pub async fn get_rooms_for_user(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<VecDeque<Vec<u8>>>>();
+    pub async fn get_rooms_for_user(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Uid>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<VecDeque<Uid>>>();
         let _ = self
             .sender
             .send(Message::RoomForUser(verifying_key, send_response))
@@ -332,7 +332,7 @@ impl GraphDatabaseService {
     ///
     /// get the most recent log and the last definition modification date
     ///
-    pub async fn get_room_definition(&self, room_id: Vec<u8>) -> Result<Option<RoomDefinitionLog>> {
+    pub async fn get_room_definition(&self, room_id: Uid) -> Result<Option<RoomDefinitionLog>> {
         let (send_response, receive_response) =
             oneshot::channel::<Result<Option<RoomDefinitionLog>>>();
         self.database_reader
@@ -347,7 +347,7 @@ impl GraphDatabaseService {
     ///
     /// get the complete dayly log for a specific room
     ///
-    pub async fn get_room_log(&self, room_id: Vec<u8>) -> Result<Vec<DailyLog>> {
+    pub async fn get_room_log(&self, room_id: Uid) -> Result<Vec<DailyLog>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<DailyLog>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
@@ -363,7 +363,7 @@ impl GraphDatabaseService {
     ///
     pub async fn get_room_node_deletion_log(
         &self,
-        room_id: Vec<u8>,
+        room_id: Uid,
         del_date: i64,
     ) -> Result<Vec<NodeDeletionEntry>> {
         let (send_response, receive_response) =
@@ -393,7 +393,7 @@ impl GraphDatabaseService {
     ///
     pub async fn get_room_edge_deletion_log(
         &self,
-        room_id: Vec<u8>,
+        room_id: Uid,
         del_date: i64,
     ) -> Result<Vec<EdgeDeletionEntry>> {
         let (send_response, receive_response) =
@@ -423,7 +423,7 @@ impl GraphDatabaseService {
     ///
     pub async fn get_room_daily_nodes(
         &self,
-        room_id: Vec<u8>,
+        room_id: Uid,
         date: i64,
     ) -> Result<HashSet<NodeIdentifier>> {
         let (send_response, receive_response) =
@@ -465,11 +465,7 @@ impl GraphDatabaseService {
     ///
     /// get full node definition
     ///
-    pub async fn get_full_nodes(
-        &self,
-        room_id: Vec<u8>,
-        node_ids: Vec<Vec<u8>>,
-    ) -> Result<Vec<FullNode>> {
+    pub async fn get_full_nodes(&self, room_id: Uid, node_ids: Vec<Uid>) -> Result<Vec<FullNode>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
         self.database_reader
             .send_async(Box::new(move |conn| {
@@ -484,12 +480,8 @@ impl GraphDatabaseService {
     /// insert the full node list
     /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
     ///
-    pub async fn add_full_nodes(
-        &self,
-        room_id: Vec<u8>,
-        nodes: Vec<FullNode>,
-    ) -> Result<Vec<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
+    pub async fn add_full_nodes(&self, room_id: Uid, nodes: Vec<FullNode>) -> Result<Vec<Uid>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Uid>>>();
         let msg = Message::FullNodeAdd(room_id, nodes, send_response);
         let _ = self.sender.send(msg).await;
         receive_response.await?
@@ -802,9 +794,9 @@ impl GraphDatabase {
 
     pub async fn add_full_nodes(
         &self,
-        room_id: Vec<u8>,
+        room_id: Uid,
         nodes: Vec<FullNode>,
-        reply: Sender<Result<Vec<Vec<u8>>>>,
+        reply: Sender<Result<Vec<Uid>>>,
     ) {
         let mut invalid_nodes = Vec::new();
         let mut valid_nodes = Vec::new();
@@ -862,9 +854,9 @@ impl GraphDatabase {
     pub async fn get_rooms_for_user(
         &self,
         verifying_key: Vec<u8>,
-        reply: Sender<Result<VecDeque<Vec<u8>>>>,
+        reply: Sender<Result<VecDeque<Uid>>>,
     ) {
-        let (send_response, receive_response) = oneshot::channel::<HashSet<Vec<u8>>>();
+        let (send_response, receive_response) = oneshot::channel::<HashSet<Uid>>();
         let _ = self
             .auth_service
             .send(AuthorisationMessage::RoomForUser(

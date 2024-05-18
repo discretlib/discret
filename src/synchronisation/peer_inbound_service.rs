@@ -25,7 +25,7 @@ use crate::{
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
-    security::{base64_encode, random32},
+    security::{base64_encode, random32, Uid},
 };
 
 use super::{
@@ -112,7 +112,7 @@ impl LocalPeerService {
         peer_service: PeerConnectionService,
         event_service: EventService,
     ) {
-        let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Uid>();
 
         tokio::spawn(async move {
             let challenge = random32().to_vec();
@@ -144,8 +144,7 @@ impl LocalPeerService {
                 return;
             }
 
-            let acquired_lock: Arc<Mutex<HashSet<Vec<u8>>>> =
-                Arc::new(Mutex::new(HashSet::<Vec<u8>>::new()));
+            let acquired_lock = Arc::new(Mutex::new(HashSet::<Uid>::new()));
             loop {
                 tokio::select! {
                     msg = remote_event.recv() =>{
@@ -183,7 +182,7 @@ impl LocalPeerService {
                 }
             }
             let acquere = acquired_lock.lock().await;
-            let mut rooms: Vec<Vec<u8>> = Vec::new();
+            let mut rooms: Vec<Uid> = Vec::new();
             for room in acquere.iter() {
                 rooms.push(room.clone());
             }
@@ -196,11 +195,11 @@ impl LocalPeerService {
     async fn process_remote_event(
         event: RemoteEvent,
         peer: &mut LocalPeer,
-        lock_reply: mpsc::UnboundedSender<Vec<u8>>,
+        lock_reply: mpsc::UnboundedSender<Uid>,
     ) -> Result<(), crate::Error> {
         match event {
             RemoteEvent::Ready => {
-                let rooms: VecDeque<Vec<u8>> = peer.query(Query::RoomList).await?;
+                let rooms: VecDeque<Uid> = peer.query(Query::RoomList).await?;
                 for room in &rooms {
                     peer.remote_rooms.insert(room.clone());
                 }
@@ -260,8 +259,8 @@ impl LocalPeerService {
     }
 
     async fn process_acquired_lock(
-        room: Vec<u8>,
-        acquired_lock: &Arc<Mutex<HashSet<Vec<u8>>>>,
+        room: Uid,
+        acquired_lock: &Arc<Mutex<HashSet<Uid>>>,
         peer: &LocalPeer,
         event_service: &EventService,
     ) -> Result<(), crate::Error> {
@@ -283,7 +282,7 @@ impl LocalPeerService {
         ret
     }
 
-    async fn synchronise_room(room_id: Vec<u8>, peer: &LocalPeer) -> Result<(), crate::Error> {
+    async fn synchronise_room(room_id: Uid, peer: &LocalPeer) -> Result<(), crate::Error> {
         let remote_room_def: Option<RoomDefinitionLog> =
             peer.query(Query::RoomDefinition(room_id.clone())).await?;
         let local_room_def = peer.db.get_room_definition(room_id.clone()).await?;
@@ -357,10 +356,7 @@ impl LocalPeerService {
         }
     }
 
-    async fn synchronise_history(
-        room_id: &Vec<u8>,
-        peer: &LocalPeer,
-    ) -> Result<bool, crate::Error> {
+    async fn synchronise_history(room_id: &Uid, peer: &LocalPeer) -> Result<bool, crate::Error> {
         let remote_log: Vec<DailyLog> = peer.query(Query::RoomLog(room_id.clone())).await?;
         let local_log = peer.db.get_room_log(room_id.clone()).await?;
 
@@ -421,7 +417,7 @@ impl LocalPeerService {
     }
 
     async fn synchronise_day(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         date: i64,
         peer: &LocalPeer,
     ) -> Result<bool, crate::Error> {
@@ -518,7 +514,7 @@ impl LocalPeerService {
 
 pub struct LocalPeer {
     pub hardware_id: Vec<u8>,
-    pub remote_rooms: HashSet<Vec<u8>>,
+    pub remote_rooms: HashSet<Uid>,
     pub db: GraphDatabaseService,
     pub lock_service: RoomLockService,
     pub query_service: QueryService,
@@ -593,7 +589,7 @@ impl LocalPeer {
     /// cleanup locks that could have been acquired
     /// and ask the peer service to remove this peer
     ///
-    pub async fn cleanup(&self, rooms: Vec<Vec<u8>>) {
+    pub async fn cleanup(&self, rooms: Vec<Uid>) {
         for room in rooms {
             self.lock_service.unlock(room).await;
         }

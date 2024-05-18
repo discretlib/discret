@@ -58,13 +58,6 @@ pub enum Error {
     #[error("{0}")]
     ChannelSend(String),
 
-    #[error(
-        "{0} length must be between {} and {} bytes",
-        crate::database::sqlite_database::DB_ID_MIN_SIZE,
-        crate::database::sqlite_database::DB_ID_MAX_SIZE
-    )]
-    InvalidLenghtId(String),
-
     #[error("Entity cannot be empty")]
     EmptyNodeEntity(),
 
@@ -73,6 +66,9 @@ pub enum Error {
 
     #[error("entity {0} with id {1} could not be found and cannot be updated")]
     InvalidMutationId(String, String),
+
+    #[error("could not find id while querying entity {0}")]
+    InvalidId(String),
 
     #[error("unknown entity {0} with id {1} and cannot be inserted in field {2}.{3}")]
     UnknownFieldEntity(String, String, String, String),

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt};
 
-use crate::security::base64_decode;
+use crate::security::{base64_decode, uid_decode, Uid};
 
 use super::{
     configuration::{self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD},
@@ -19,11 +19,11 @@ use super::{
 ///
 #[derive(Default, Clone, Debug)]
 pub struct Room {
-    pub id: Vec<u8>,
+    pub id: Uid,
     pub mdate: i64,
     pub admins: HashMap<Vec<u8>, Vec<User>>,
     pub user_admins: HashMap<Vec<u8>, Vec<User>>,
-    pub authorisations: HashMap<Vec<u8>, Authorisation>,
+    pub authorisations: HashMap<Uid, Authorisation>,
 }
 
 impl Room {
@@ -35,11 +35,11 @@ impl Room {
         Ok(())
     }
 
-    pub fn get_auth(&self, id: &Vec<u8>) -> Option<&Authorisation> {
+    pub fn get_auth(&self, id: &Uid) -> Option<&Authorisation> {
         self.authorisations.get(id)
     }
 
-    pub fn get_auth_mut(&mut self, id: &Vec<u8>) -> Option<&mut Authorisation> {
+    pub fn get_auth_mut(&mut self, id: &Uid) -> Option<&mut Authorisation> {
         self.authorisations.get_mut(id)
     }
 
@@ -152,7 +152,7 @@ impl Room {
 ///
 #[derive(Default, Clone, Debug)]
 pub struct Authorisation {
-    pub id: Vec<u8>,
+    pub id: Uid,
     pub mdate: i64,
     pub users: HashMap<Vec<u8>, Vec<User>>,
     pub rights: HashMap<String, Vec<EntityRight>>,
@@ -280,7 +280,8 @@ impl fmt::Display for RightType {
 
 pub fn load_auth_from_json(value: &serde_json::Value) -> Result<Authorisation> {
     let auth_map = value.as_object().unwrap();
-    let id = base64_decode(auth_map.get(ID_FIELD).unwrap().as_str().unwrap().as_bytes())?;
+    let id = uid_decode(auth_map.get(ID_FIELD).unwrap().as_str().unwrap())?;
+
     let mdate = auth_map
         .get(MODIFICATION_DATE_FIELD)
         .unwrap()

@@ -1,11 +1,11 @@
 use super::{
     daily_log::DailyMutations,
-    sqlite_database::{is_valid_id_len, RowMappingFn, Writeable, MAX_ROW_LENTGH},
+    sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
     Error, Result,
 };
 use crate::{
-    date_utils::{date, date_next_day, now},
-    security::{base64_encode, import_verifying_key, SigningKey},
+    date_utils::{date, date_next_day},
+    security::{base64_encode, import_verifying_key, SigningKey, Uid},
 };
 
 use rusqlite::{Connection, OptionalExtension};
@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 ///
 /// One of the two tables that defines the graph database
 ///
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Edge {
-    pub src: Vec<u8>,
+    pub src: Uid,
     pub src_entity: String,
     pub label: String,
-    pub dest: Vec<u8>,
+    pub dest: Uid,
     pub cdate: i64,
     pub verifying_key: Vec<u8>,
     pub signature: Vec<u8>,
@@ -154,16 +154,6 @@ impl Edge {
             return Err(Error::EmptyEdgeLabel());
         }
 
-        if !is_valid_id_len(&self.src) {
-            return Err(Error::InvalidLenghtId(format!(
-                "src: '{}'",
-                base64_encode(&self.src)
-            )));
-        }
-
-        if !is_valid_id_len(&self.dest) {
-            return Err(Error::InvalidLenghtId("dest".to_string()));
-        }
         let hash = self.hash();
 
         let verifying_key = import_verifying_key(&self.verifying_key)?;
@@ -175,17 +165,6 @@ impl Edge {
     /// sign the edge after performing some checks
     ///
     pub fn sign(&mut self, signing_key: &impl SigningKey) -> Result<()> {
-        if !is_valid_id_len(&self.src) {
-            return Err(Error::InvalidLenghtId(format!(
-                "src: '{}'",
-                base64_encode(&self.src)
-            )));
-        }
-
-        if !is_valid_id_len(&self.dest) {
-            return Err(Error::InvalidLenghtId("dest".to_string()));
-        }
-
         if self.src_entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
         }
@@ -260,10 +239,7 @@ impl Edge {
     /// Delete all edges the same source
     ///
     ///
-    pub fn delete_src(
-        src: &Vec<u8>,
-        conn: &Connection,
-    ) -> std::result::Result<(), rusqlite::Error> {
+    pub fn delete_src(src: &Uid, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut delete_stmt = conn.prepare_cached(
             "DELETE FROM _edge
             WHERE 
@@ -278,10 +254,7 @@ impl Edge {
     /// Delete all edges the same source
     ///
     ///
-    pub fn delete_dest(
-        dest: &Vec<u8>,
-        conn: &Connection,
-    ) -> std::result::Result<(), rusqlite::Error> {
+    pub fn delete_dest(dest: &Uid, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         let mut delete_stmt = conn.prepare_cached(
             "DELETE FROM _edge
             WHERE 
@@ -293,9 +266,9 @@ impl Edge {
     }
 
     pub fn delete_edge(
-        src: &Vec<u8>,
+        src: &Uid,
         label: &str,
-        dest: &Vec<u8>,
+        dest: &Uid,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         let mut delete_stmt = conn.prepare_cached(
@@ -313,12 +286,7 @@ impl Edge {
     ///
     /// retrieve an edge
     ///
-    pub fn get(
-        src: &Vec<u8>,
-        label: &str,
-        dest: &Vec<u8>,
-        conn: &Connection,
-    ) -> Result<Option<Box<Edge>>> {
+    pub fn get(src: &Uid, label: &str, dest: &Uid, conn: &Connection) -> Result<Option<Box<Edge>>> {
         let mut get_stmt = conn.prepare_cached(Self::EDGE_QUERY)?;
 
         let edge = get_stmt
@@ -330,7 +298,7 @@ impl Edge {
     ///
     /// verify the existence of an edge
     ///
-    pub fn exists(src: Vec<u8>, label: String, dest: Vec<u8>, conn: &Connection) -> Result<bool> {
+    pub fn exists(src: Uid, label: String, dest: Uid, conn: &Connection) -> Result<bool> {
         let mut exists_stmt = conn.prepare_cached(
             "SELECT  1
             FROM _edge
@@ -350,7 +318,7 @@ impl Edge {
     /// retrieve all edges from a specific source and label
     ///
     pub fn get_edges(
-        src: &Vec<u8>,
+        src: &Uid,
         label: &str,
         conn: &Connection,
     ) -> std::result::Result<Vec<Edge>, rusqlite::Error> {
@@ -371,25 +339,12 @@ impl Edge {
     }
 }
 
-impl Default for Edge {
-    fn default() -> Self {
-        Self {
-            src: vec![],
-            src_entity: String::from(""),
-            label: String::from(""),
-            dest: vec![],
-            cdate: now(),
-            verifying_key: vec![],
-            signature: vec![],
-        }
-    }
-}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EdgeDeletionEntry {
-    pub room_id: Vec<u8>,
-    pub src: Vec<u8>,
+    pub room_id: Uid,
+    pub src: Uid,
     pub src_entity: String,
-    pub dest: Vec<u8>,
+    pub dest: Uid,
     pub label: String,
     pub cdate: i64,
     pub deletion_date: i64,
@@ -401,7 +356,7 @@ pub struct EdgeDeletionEntry {
 }
 impl EdgeDeletionEntry {
     pub fn build(
-        room_id: Vec<u8>,
+        room_id: Uid,
         edge: &Edge,
         deletion_date: i64,
         signing_key: &impl SigningKey,
@@ -459,7 +414,7 @@ impl EdgeDeletionEntry {
     }
 
     pub fn get_entries(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         del_date: i64,
         conn: &Connection,
     ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
@@ -593,8 +548,9 @@ impl Writeable for EdgeDeletionEntry {
 mod tests {
 
     use crate::{
-        database::sqlite_database::{prepare_connection, DB_ID_MAX_SIZE},
-        security::{new_id, random32, Ed25519SigningKey, SigningKey},
+        database::sqlite_database::prepare_connection,
+        date_utils::now,
+        security::{new_uid, Ed25519SigningKey, SigningKey},
     };
 
     use super::*;
@@ -602,8 +558,8 @@ mod tests {
     #[test]
     fn edge_signature() {
         let keypair = Ed25519SigningKey::new();
-        let from = new_id();
-        let to = new_id();
+        let from = new_uid();
+        let to = new_uid();
         let mut e = Edge {
             src: from.clone(),
             src_entity: "0".to_string(),
@@ -615,7 +571,7 @@ mod tests {
         e.sign(&keypair).unwrap();
         e.verify().unwrap();
 
-        let bad_id = new_id();
+        let bad_id = new_uid();
         e.src = bad_id.clone();
         e.verify()
             .expect_err("'from' has changed, verification must fail");
@@ -640,48 +596,9 @@ mod tests {
             .expect_err("'public key' has changed, verification must fail");
         e.sign(&keypair).unwrap();
 
-        e.signature = bad_id;
+        e.signature = bad_id.to_vec();
         e.verify()
             .expect_err("wrong signature, verification must fail");
-    }
-
-    #[test]
-    fn edge_limit() {
-        let keypair = Ed25519SigningKey::new();
-        let source = new_id();
-
-        let mut e = Edge {
-            src: source.clone(),
-            src_entity: "0".to_string(),
-            dest: source.clone(),
-            label: "0".to_string(),
-            ..Default::default()
-        };
-        e.sign(&keypair).unwrap();
-        e.verify().unwrap();
-
-        e.src = vec![];
-        e.verify().expect_err("'from' is too short");
-        e.sign(&keypair).expect_err("'from' is too short");
-
-        e.src = source.clone();
-        e.dest = vec![];
-        e.verify().expect_err("'to' is too short");
-        e.sign(&keypair).expect_err("'to' is too short");
-
-        e.dest = source.clone();
-        e.sign(&keypair).unwrap();
-        e.verify().unwrap();
-
-        let arr = [0 as u8; DB_ID_MAX_SIZE + 1];
-
-        e.src = arr.to_vec();
-        e.verify().expect_err("'from' is too long");
-        e.sign(&keypair).expect_err("'from' is too long");
-
-        e.dest = arr.to_vec();
-        e.verify().expect_err("'to' is too long");
-        e.sign(&keypair).expect_err("'to' is too long");
     }
 
     #[test]
@@ -690,8 +607,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let label = "pet";
-        let from = new_id();
-        let to = new_id();
+        let from = new_uid();
+        let to = new_uid();
         let mut e = Edge {
             src: from.clone(),
             src_entity: "0".to_string(),
@@ -712,7 +629,7 @@ mod tests {
         let edges = Edge::get_edges(&from, label, &conn).unwrap();
         assert_eq!(1, edges.len());
 
-        new_edge.dest = new_id();
+        new_edge.dest = new_uid();
         new_edge.sign(&signing_key).unwrap();
         new_edge.write(&conn).unwrap();
 
@@ -730,8 +647,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let label = "pet";
-        let from = new_id();
-        let to = new_id();
+        let from = new_uid();
+        let to = new_uid();
         let mut e = Edge {
             src: from.clone(),
             src_entity: "0".to_string(),
@@ -743,7 +660,7 @@ mod tests {
         e.sign(&signing_key).unwrap();
         e.write(&conn).unwrap();
         e.delete(&conn).unwrap();
-        let room_id = random32().to_vec();
+        let room_id = new_uid();
         let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
 
         log.write(&conn).unwrap();
@@ -765,8 +682,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let label = "pet";
-        let from = new_id();
-        let to = new_id();
+        let from = new_uid();
+        let to = new_uid();
         let mut e = Edge {
             src: from.clone(),
             src_entity: "0".to_string(),
@@ -777,7 +694,7 @@ mod tests {
         e.sign(&signing_key).unwrap();
         e.write(&conn).unwrap();
 
-        let room_id = random32().to_vec();
+        let room_id = new_uid();
         let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
         log.write(&conn).unwrap();
 

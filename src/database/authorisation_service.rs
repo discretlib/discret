@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use crate::{
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
-    security::{base64_decode, base64_encode, Ed25519SigningKey, SigningKey},
+    security::{base64_encode, uid_decode, Ed25519SigningKey, SigningKey, Uid},
     synchronisation::{
         node_full::FullNode,
         room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
@@ -35,20 +35,20 @@ pub enum AuthorisationMessage {
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
-    RoomForUser(Vec<u8>, i64, Sender<HashSet<Vec<u8>>>),
-    AddFullNode(Vec<FullNode>, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    RoomForUser(Vec<u8>, i64, Sender<HashSet<Uid>>),
+    AddFullNode(Vec<FullNode>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(
         Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
         Sender<Result<()>>,
     ),
     DeleteNodes(
-        HashMap<Vec<u8>, (NodeDeletionEntry, Option<Vec<u8>>)>,
+        HashMap<Uid, (NodeDeletionEntry, Option<Vec<u8>>)>,
         Sender<Result<()>>,
     ),
 }
 
 pub struct RoomMutationWriteQuery {
-    room_list: HashSet<Vec<u8>>,
+    room_list: HashSet<Uid>,
     mutation_query: MutationQuery,
     reply: Sender<super::Result<MutationQuery>>,
 }
@@ -168,7 +168,7 @@ impl AuthorisationService {
                             let _ = database_writer.send(query).await;
                         }
                         false => {
-                            let mut room_list: HashSet<Vec<u8>> = HashSet::new();
+                            let mut room_list: HashSet<Uid> = HashSet::new();
                             for room in rooms {
                                 room_list.insert(room.id);
                             }
@@ -320,7 +320,7 @@ impl AuthorisationService {
 
 pub struct RoomAuthorisations {
     pub signing_key: Ed25519SigningKey,
-    pub rooms: HashMap<Vec<u8>, Room>,
+    pub rooms: HashMap<Uid, Room>,
 }
 impl RoomAuthorisations {
     pub fn add_room(&mut self, room: Room) {
@@ -820,7 +820,7 @@ impl RoomAuthorisations {
         Ok((need_room_mutation, need_user_mutation))
     }
 
-    pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Vec<u8>> {
+    pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
         let mut result = HashSet::new();
         for room in &self.rooms {
             if room.1.is_user_valid_at(&verifying_key, date) {
@@ -877,7 +877,7 @@ impl RoomAuthorisations {
         for room_value in rooms {
             let room_map = room_value.as_object().unwrap();
 
-            let id = base64_decode(room_map.get(ID_FIELD).unwrap().as_str().unwrap().as_bytes())?;
+            let id = uid_decode(room_map.get(ID_FIELD).unwrap().as_str().unwrap())?;
             let mdate = room_map
                 .get(MODIFICATION_DATE_FIELD)
                 .unwrap()
@@ -1093,7 +1093,7 @@ impl RoomAuthorisations {
     ///
     fn validate_node_deletions(
         &self,
-        nodes: HashMap<Vec<u8>, (NodeDeletionEntry, Option<Vec<u8>>)>,
+        nodes: HashMap<Uid, (NodeDeletionEntry, Option<Vec<u8>>)>,
     ) -> Vec<NodeDeletionEntry> {
         let mut result = Vec::new();
         for entry in nodes {

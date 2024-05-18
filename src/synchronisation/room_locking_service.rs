@@ -2,14 +2,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use tokio::sync::mpsc;
 
+use crate::security::Uid;
+
 pub enum SyncLockMessage {
-    RequestLock(Vec<u8>, VecDeque<Vec<u8>>, mpsc::UnboundedSender<Vec<u8>>),
-    Unlock(Vec<u8>),
+    RequestLock(Vec<u8>, VecDeque<Uid>, mpsc::UnboundedSender<Uid>),
+    Unlock(Uid),
 }
 
 struct PeerLockRequest {
-    rooms: VecDeque<Vec<u8>>,
-    reply: mpsc::UnboundedSender<Vec<u8>>,
+    rooms: VecDeque<Uid>,
+    reply: mpsc::UnboundedSender<Uid>,
 }
 
 static LOCK_CHANNEL_SIZE: usize = 2;
@@ -27,7 +29,7 @@ impl RoomLockService {
         tokio::spawn(async move {
             let mut peer_lock_request: HashMap<Vec<u8>, PeerLockRequest> = HashMap::new();
             let mut peer_queue: VecDeque<Vec<u8>> = VecDeque::new();
-            let mut locked: HashSet<Vec<u8>> = HashSet::new();
+            let mut locked: HashSet<Uid> = HashSet::new();
             let mut avalaible = max_lock;
 
             while let Some(msg) = receiver.recv().await {
@@ -77,7 +79,7 @@ impl RoomLockService {
     async fn acquire_lock(
         peer_lock_request: &mut HashMap<Vec<u8>, PeerLockRequest>,
         peer_queue: &mut VecDeque<Vec<u8>>,
-        locked: &mut HashSet<Vec<u8>>,
+        locked: &mut HashSet<Uid>,
         avalaible: &mut usize,
     ) {
         for _ in 0..peer_queue.len().clone() {
@@ -114,8 +116,8 @@ impl RoomLockService {
     pub async fn request_locks(
         &self,
         peer_id: Vec<u8>,
-        rooms: VecDeque<Vec<u8>>,
-        reply: mpsc::UnboundedSender<Vec<u8>>,
+        rooms: VecDeque<Uid>,
+        reply: mpsc::UnboundedSender<Uid>,
     ) {
         let _ = self
             .sender
@@ -123,7 +125,7 @@ impl RoomLockService {
             .await;
     }
 
-    pub async fn unlock(&self, room: Vec<u8>) {
+    pub async fn unlock(&self, room: Uid) {
         let _ = self.sender.send(SyncLockMessage::Unlock(room)).await;
     }
 }
@@ -131,7 +133,7 @@ impl RoomLockService {
 mod tests {
 
     use super::*;
-    use crate::security::{base64_encode, random32};
+    use crate::security::{base64_encode, new_uid, random32};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn one_room_one_peer() {
@@ -139,8 +141,8 @@ mod tests {
 
         let peer_id = random32().to_vec();
 
-        let rooms: VecDeque<Vec<u8>> = vec![random32().to_vec()].into();
-        let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let rooms: VecDeque<Uid> = vec![new_uid()].into();
+        let (sender, mut receiver) = mpsc::unbounded_channel::<Uid>();
 
         lock_service
             .request_locks(peer_id.clone(), rooms.clone(), sender.clone())
@@ -165,7 +167,7 @@ mod tests {
         let mut rooms = VecDeque::new();
 
         for _ in 0..num_entries {
-            rooms.push_back(random32().to_vec());
+            rooms.push_back(new_uid());
         }
 
         let mut tasks = Vec::with_capacity(num_entries);
@@ -175,7 +177,7 @@ mod tests {
             let peer = random32().to_vec();
             tasks.push(tokio::spawn(async move {
                 //  println!("Peer {} started", peer_id);
-                let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+                let (sender, mut receiver) = mpsc::unbounded_channel::<Uid>();
                 service
                     .clone()
                     .request_locks(peer.clone(), local_rooms, sender.clone())

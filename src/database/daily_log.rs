@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::date_utils::{date, date_next_day};
+use crate::{
+    date_utils::{date, date_next_day},
+    security::Uid,
+};
 
 ///
 /// Stores the modified dates for each rooms during the batch insert.
@@ -14,7 +17,7 @@ use crate::date_utils::{date, date_next_day};
 ///
 #[derive(Default, Debug)]
 pub struct DailyMutations {
-    room_dates: HashMap<Vec<u8>, HashSet<i64>>,
+    room_dates: HashMap<Uid, HashSet<i64>>,
 }
 impl DailyMutations {
     pub fn new() -> Self {
@@ -23,7 +26,7 @@ impl DailyMutations {
         }
     }
 
-    pub fn set_need_update(&mut self, room: Vec<u8>, mut_date: i64) {
+    pub fn set_need_update(&mut self, room: Uid, mut_date: i64) {
         let entry = self.room_dates.entry(room).or_default();
         entry.insert(date(mut_date));
         //   println!("insert node daily");
@@ -55,7 +58,7 @@ impl DailyMutations {
 
 #[derive(Default, Debug, Clone)]
 pub struct DailyLogsUpdate {
-    pub room_dates: HashMap<Vec<u8>, HashSet<DailyLog>>,
+    pub room_dates: HashMap<Uid, HashSet<DailyLog>>,
 }
 impl DailyLogsUpdate {
     ///
@@ -145,12 +148,12 @@ impl DailyLogsUpdate {
 
         let mut rows = daily_log_stmt.query([])?;
 
-        let mut previous_room: Vec<u8> = Vec::new();
+        let mut previous_room: Uid = [0; 16];
         let mut previous_hash: Option<Vec<u8>> = None;
         let mut previous_history: Option<Vec<u8>> = None;
 
         while let Some(row) = rows.next()? {
-            let room: Vec<u8> = row.get(0)?;
+            let room: Uid = row.get(0)?;
             let date: i64 = row.get(1)?;
             let need_recompute: bool = row.get(2)?;
             let daily_hash: Option<Vec<u8>> = row.get(3)?;
@@ -244,7 +247,7 @@ impl DailyLogsUpdate {
 
 #[derive(Default, Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct DailyLog {
-    pub room_id: Vec<u8>,
+    pub room_id: Uid,
     pub date: i64,
     pub entry_number: u32,
     pub daily_hash: Option<Vec<u8>>,
@@ -310,10 +313,7 @@ impl DailyLog {
     ///
     /// Get the daily log for a room
     ///
-    pub fn get_room_log(
-        room_id: &Vec<u8>,
-        conn: &Connection,
-    ) -> Result<Vec<Self>, rusqlite::Error> {
+    pub fn get_room_log(room_id: &Uid, conn: &Connection) -> Result<Vec<Self>, rusqlite::Error> {
         let mut stmt = conn.prepare_cached(
             "SELECT 
                 room_id ,
@@ -343,7 +343,7 @@ impl DailyLog {
     }
 
     pub fn log_room_definition(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         mdate: i64,
         conn: &Connection,
     ) -> Result<(), rusqlite::Error> {
@@ -359,14 +359,14 @@ impl DailyLog {
     /// allows synchronisation to start with the most recently updated rooms
     ///
     pub fn sort_rooms(
-        room_ids: &HashSet<Vec<u8>>,
+        room_ids: &HashSet<Uid>,
         conn: &Connection,
-    ) -> Result<VecDeque<Vec<u8>>, rusqlite::Error> {
+    ) -> Result<VecDeque<Uid>, rusqlite::Error> {
         let it = &mut room_ids.iter().peekable();
-        let mut id_date_list: Vec<(Vec<u8>, i64)> = Vec::with_capacity(room_ids.len());
+        let mut id_date_list: Vec<(Uid, i64)> = Vec::with_capacity(room_ids.len());
         struct QueryParams<'a> {
             in_clause: String,
-            ids: Vec<&'a Vec<u8>>,
+            ids: Vec<&'a Uid>,
         }
         //limit the IN clause to a reasonable size, avoiding the 32766 parameter limit in sqlite
         let row_per_query = 500;
@@ -445,7 +445,7 @@ impl DailyLog {
 ///
 #[derive(Serialize, Deserialize)]
 pub struct RoomDefinitionLog {
-    pub room_id: Vec<u8>,
+    pub room_id: Uid,
     pub room_def_date: i64,
     pub last_data_date: Option<i64>,
     pub entry_number: Option<u32>,
@@ -454,7 +454,7 @@ pub struct RoomDefinitionLog {
 }
 impl RoomDefinitionLog {
     pub fn get(
-        room_id: &Vec<u8>,
+        room_id: &Uid,
         conn: &Connection,
     ) -> Result<Option<RoomDefinitionLog>, rusqlite::Error> {
         let query = "
@@ -510,7 +510,7 @@ mod tests {
         },
         date_utils::{date, now},
         event_service::EventService,
-        security::{base64_encode, random32},
+        security::{base64_encode, new_uid, random32},
     };
 
     use super::*;
@@ -601,7 +601,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
         let bin_room_id = &room_insert.node_to_mutate.id;
         let mutate_date = room_insert.node_to_mutate.date;
-        let room_id = base64_encode(&bin_room_id);
+        let room_id = base64_encode(bin_room_id);
 
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
@@ -647,7 +647,7 @@ mod tests {
     async fn room_log() {
         let conn = Connection::open_in_memory().unwrap();
         DailyLog::create_tables(&conn).unwrap();
-        let room_id = random32().to_vec();
+        let room_id = new_uid();
         DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
 
         let def = RoomDefinitionLog::get(&room_id, &conn).unwrap().unwrap();
@@ -697,7 +697,7 @@ mod tests {
         let mut num_room = 721;
         let mut room_ids = HashSet::new();
         for _ in 0..num_room {
-            let room_id = random32().to_vec();
+            let room_id = new_uid();
             let date: i64 = OsRng.gen();
             DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
             let daily_log = DailyLog {
@@ -713,7 +713,7 @@ mod tests {
             room_ids.insert(room_id);
         }
 
-        let empty_room_id = random32().to_vec();
+        let empty_room_id = new_uid();
         DailyLog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
         rooms.insert(empty_room_id.clone(), i64::MAX);
         room_ids.insert(empty_room_id.clone());

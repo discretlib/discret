@@ -1,4 +1,7 @@
-use crate::{date_utils::now, security::base64_decode};
+use crate::{
+    date_utils::now,
+    security::{uid_decode, Uid},
+};
 use std::sync::Arc;
 
 use super::{
@@ -20,7 +23,7 @@ pub struct NodeDelete {
 pub struct EdgeDelete {
     pub edge: Edge,
     pub src_name: String,
-    pub room_id: Option<Vec<u8>>,
+    pub room_id: Option<Uid>,
     pub date: i64,
 }
 #[derive(Debug)]
@@ -54,7 +57,7 @@ impl DeletionQuery {
                 .as_string()
                 .unwrap();
 
-            let src = base64_decode(src.as_bytes())?;
+            let src = uid_decode(src)?;
             let node = Node::get(&src, &del.short_name, conn)?;
             if let Some(node) = node {
                 if del.references.is_empty() {
@@ -73,7 +76,8 @@ impl DeletionQuery {
                             .as_string()
                             .unwrap();
 
-                        let dest = base64_decode(dest.as_bytes())?;
+                        let dest = uid_decode(dest)?;
+
                         let edge = Edge::get(&src, &edge_deletion.label, &dest, conn)?;
                         if let Some(edge) = edge {
                             deletion_query.edges.push(EdgeDelete {
