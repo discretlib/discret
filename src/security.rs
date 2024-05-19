@@ -327,12 +327,6 @@ pub fn uid_from(v: Vec<u8>) -> Result<Uid, Error> {
     Ok(uid)
 }
 
-/// id with the current time on the first four bytes to improve index locality
-///
-pub fn new_id() -> Vec<u8> {
-    new_uid().to_vec()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

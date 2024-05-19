@@ -63,29 +63,36 @@ impl GraphDatabaseService {
     ) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
 
-        let mut service =
-            GraphDatabase::open(name, key_material, data_folder, config, event_service)?;
-        service.update_data_model(model).await?;
-        service.initialise_authorisations().await?;
+        let mut db = GraphDatabase::open(name, key_material, data_folder, config, event_service)?;
+        db.update_data_model(model).await?;
+        db.initialise_authorisations().await?;
+        //ensure that the logs are properly computed during startup  because the application can be closed during a synchronisation
+        db.graph_database
+            .writer
+            .send(WriteMessage::ComputeDailyLog(
+                DailyLogsUpdate::default(),
+                db.event_service.sender.clone(),
+            ))
+            .await?;
 
-        let database_reader = service.graph_database.reader.clone();
+        let database_reader = db.graph_database.reader.clone();
 
-        let verifying_key = service.verifying_key.clone();
+        let verifying_key = db.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
                     Message::Sign(data, reply) => {
-                        let _ = service
+                        let _ = db
                             .auth_service
                             .send(AuthorisationMessage::Sign(data, reply))
                             .await;
                     }
                     Message::Query(query, parameters, reply) => {
-                        let q = service.get_cached_query(&query);
+                        let q = db.get_cached_query(&query);
                         match q {
                             Ok(cache) => {
                                 //     println!("{}", &cache.1.sql_queries[0].sql_query);
-                                service.query(cache.0, cache.1, parameters, reply).await;
+                                db.query(cache.0, cache.1, parameters, reply).await;
                             }
                             Err(err) => {
                                 let _ = reply.send(Err(err));
@@ -93,10 +100,10 @@ impl GraphDatabaseService {
                         }
                     }
                     Message::Mutate(mutation, parameters, reply) => {
-                        let mutation = service.get_cached_mutation(&mutation);
+                        let mutation = db.get_cached_mutation(&mutation);
                         match mutation {
                             Ok(cache) => {
-                                service.mutate(cache, parameters, reply).await;
+                                db.mutate(cache, parameters, reply).await;
                             }
                             Err(err) => {
                                 let _ = reply.send(Err(err));
@@ -104,10 +111,10 @@ impl GraphDatabaseService {
                         }
                     }
                     Message::Delete(deletion, parameters, reply) => {
-                        let deletion = service.get_cached_deletion(&deletion);
+                        let deletion = db.get_cached_deletion(&deletion);
                         match deletion {
                             Ok(cache) => {
-                                service.delete(cache, parameters, reply).await;
+                                db.delete(cache, parameters, reply).await;
                             }
                             Err(err) => {
                                 let _ = reply.send(Err(err));
@@ -116,15 +123,15 @@ impl GraphDatabaseService {
                     }
 
                     Message::RoomAdd(room_node, reply) => {
-                        service.add_room(room_node, reply).await;
+                        db.add_room(room_node, reply).await;
                     }
 
                     Message::FullNodeAdd(room_id, nodes, reply) => {
-                        service.add_full_nodes(room_id, nodes, reply).await;
+                        db.add_full_nodes(room_id, nodes, reply).await;
                     }
 
                     Message::UpdateModel(value, reply) => {
-                        match service.update_data_model(&value).await {
+                        match db.update_data_model(&value).await {
                             Ok(model) => {
                                 let _ = reply.send(Ok(model));
                             }
@@ -134,24 +141,24 @@ impl GraphDatabaseService {
                         }
                     }
                     Message::ComputeDailyLog() => {
-                        _ = service
+                        _ = db
                             .graph_database
                             .writer
                             .send(WriteMessage::ComputeDailyLog(
                                 DailyLogsUpdate::default(),
-                                service.event_service.sender.clone(),
+                                db.event_service.sender.clone(),
                             ))
                             .await;
                     }
 
                     Message::RoomForUser(verifying_key, reply) => {
-                        service.get_rooms_for_user(verifying_key, reply).await;
+                        db.get_rooms_for_user(verifying_key, reply).await;
                     }
                     Message::DeleteEdges(edges, reply) => {
-                        service.delete_edges(edges, reply).await;
+                        db.delete_edges(edges, reply).await;
                     }
                     Message::DeleteNodes(nodes, reply) => {
-                        service.delete_nodes(nodes, reply).await;
+                        db.delete_nodes(nodes, reply).await;
                     }
                 }
             }
@@ -552,6 +559,7 @@ impl GraphDatabase {
             deletion_cache,
             verifying_key,
         };
+
         Ok(database)
     }
 

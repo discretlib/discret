@@ -306,6 +306,8 @@ impl LocalPeerService {
                 }
                 Err(e) => {
                     log_service.error("synchronise_room".to_string(), e);
+
+                    //TODO should stop the peer???
                 }
             };
 
