@@ -551,7 +551,18 @@ mod tests {
         )
         .await
         .unwrap();
+        //receive daily_log event done during startup
+        while let Ok(e) = events.recv().await {
+            match e {
+                crate::event_service::Event::ComputedDailyLog(log) => {
+                    let s = log.unwrap();
+                    assert_eq!(0, s.room_dates.len());
 
+                    break;
+                }
+                _ => {}
+            }
+        }
         let user_id = base64_encode(app.verifying_key());
 
         let mut param = Parameters::default();

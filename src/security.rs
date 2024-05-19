@@ -4,6 +4,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::date_utils::now;
 
@@ -236,7 +237,7 @@ pub trait VerifyingKey {
 /// verification key using Ed25519 signature scheme
 ///
 pub struct Ed2519VerifyingKey {
-    veriying_key: ed25519_dalek::VerifyingKey,
+    pub veriying_key: ed25519_dalek::VerifyingKey,
 }
 impl VerifyingKey for Ed2519VerifyingKey {
     fn export(&self) -> Vec<u8> {
@@ -287,8 +288,53 @@ pub fn random32() -> [u8; 32] {
     random
 }
 
-pub type Uid = [u8; UID_SIZE];
+///
+/// Use Diffie Hellman to create an id to be used to announce yourself on the network to the other peers.
+/// The id is way too small to be secured, but it is big enougth to have a low collision rate
+/// this will allow peer to recognize themselves on the network
+/// The authentication is performed using a signature
+///
+/// The connection protocol is
+///     generate a self signed certificate
+///     for each allowed peer generate the diffie hellman id an put it in an array
+///     sign the cerificate and the array with the public_key used to insert data
+///     broadcast this data
+///     in one single packet you can announce yoursef to other peers
+///     upeon retrieval
+///         peer will check if there is an id corresponding
+///         this is will allow to retrieve the peer verifying key
+///         verify authenticity
+///         start connection
+///         
+pub struct MeetingSecret {
+    secret: StaticSecret,
+}
+impl MeetingSecret {
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Self {
+            secret: StaticSecret::from(bytes),
+        }
+    }
 
+    pub fn public_key(&self) -> PublicKey {
+        PublicKey::from(&self.secret)
+    }
+
+    pub fn announce_id(&self, their_public: &PublicKey) -> i64 {
+        //if both public key are the same, it is the same user and hash the private key instead of using diffie hellman
+        let hash = if their_public.eq(&self.public_key()) {
+            hash(self.secret.as_bytes())
+        } else {
+            let df = self.secret.diffie_hellman(their_public);
+            hash(df.as_bytes())
+        };
+        let mut bytes = [0; 8];
+        bytes.clone_from_slice(&hash[0..8]);
+        i64::from_le_bytes(bytes)
+    }
+}
+
+pub type Uid = [u8; UID_SIZE];
 const DEFAULT_UID: Uid = [0; UID_SIZE];
 ///
 /// generate a 16 byte uid with the time on the first 4 bytes to improve index locality
@@ -377,5 +423,23 @@ mod tests {
         let imp_pub = import_verifying_key(&exp_pub).unwrap();
 
         imp_pub.verify(msg, &signature).unwrap();
+    }
+
+    #[test]
+    pub fn meeting_secret() {
+        let peer1 = MeetingSecret::new(random32());
+        let peer1_public = peer1.public_key();
+        let peer1_public = bincode::serialize(&peer1_public).unwrap();
+
+        let peer2 = MeetingSecret::new(random32());
+        let peer2_public = peer2.public_key();
+        let peer2_public = bincode::serialize(&peer2_public).unwrap();
+
+        let peer1_public: PublicKey = bincode::deserialize(&peer1_public).unwrap();
+        let peer2_public: PublicKey = bincode::deserialize(&peer2_public).unwrap();
+
+        let id1 = peer2.announce_id(&peer1_public);
+        let id2 = peer1.announce_id(&peer2_public);
+        assert_eq!(id1, id2);
     }
 }
