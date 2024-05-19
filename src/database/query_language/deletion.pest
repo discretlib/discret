@@ -16,10 +16,11 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
-identifier = @{ (LETTER | NUMBER | "_")+ }
+identifier       = @{ (LETTER | NUMBER | "_")+ }
+namespace_entity = @{ (LETTER | NUMBER | "_" | ".")+ }
 
 variable      = @{ "$" ~ identifier }
-entity_name   =  { identifier ~ (":" ~ identifier)? }
+entity_name   =  { namespace_entity ~ (":" ~ namespace_entity)? }
 deletion      =  { SOI ~ deletion_name ~ "{" ~ entity+ ~ "}" ~ EOI }
 deletion_name =  { "deletion" ~ (identifier)? }
 entity        =  { entity_name ~ "{" ~ id_field ~ array_field* ~ "}" }

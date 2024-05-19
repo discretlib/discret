@@ -299,10 +299,9 @@ impl MutationParser {
                     let mut field_pairs = entity_pair.into_inner();
                     let name = field_pairs.next().unwrap().as_str().to_string();
 
-                    let field_model = data_model
-                        .get_entity(&entity.name)
-                        .unwrap()
-                        .get_field(&name)?;
+                    let entity_m = data_model.get_entity(&entity.name)?;
+
+                    let field_model = entity_m.get_field(&name)?;
                     if !field_model.mutable {
                         return Err(Error::InvalidQuery(format!(
                             "System Field '{}' is not mutable",
@@ -670,21 +669,21 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String ,
-                parents : [Person],
-                pet : Pet,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean 
-            }
+            {
+                Person {
+                    name : String ,
+                    surname : String ,
+                    parents : [Person],
+                    pet : Pet,
+                    age : Integer,
+                    weight : Float,
+                    is_human : Boolean 
+                }
 
-            Pet {
-                name : String ,
-            }
-        
-        ",
+                Pet {
+                    name : String ,
+                }
+            }",
             )
             .unwrap();
 
@@ -728,15 +727,15 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String nullable,
-                surname : String nullable,
-                age : Integer nullable,
-                weight : Float nullable,
-                is_human : Boolean nullable
-            }
-        
-        ",
+            {
+                Person {
+                    name : String nullable,
+                    surname : String nullable,
+                    age : Integer nullable,
+                    weight : Float nullable,
+                    is_human : Boolean nullable
+                }
+            }",
             )
             .unwrap();
 
@@ -847,16 +846,67 @@ mod tests {
     }
 
     #[test]
+    fn namespace() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String ,
+                }
+            }",
+            )
+            .unwrap();
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                ns.Person {
+                    name : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid entity");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+               Person: ns.Person {
+                    name : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect("valid entity");
+
+        let _mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : $name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .expect_err("namespace not found");
+    }
+
+    #[test]
     fn duplicated_field() {
         let mut data_model = DataModel::new();
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-            }
-        
-        ",
+            {
+                Person {
+                    name : String ,
+                }
+            }",
             )
             .unwrap();
 
@@ -880,10 +930,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
+            {
+                Person {
+                    name : String ,
+                }
             }
-        
         ",
             )
             .unwrap();
@@ -961,15 +1012,15 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String nullable,
-                is_human : Boolean default true,
-                some_person : Person ,
-                parents : [Person] 
-            }
-        
-        ",
+            {
+                Person {
+                    name : String ,
+                    surname : String nullable,
+                    is_human : Boolean default true,
+                    some_person : Person ,
+                    parents : [Person] 
+                }
+            }",
             )
             .unwrap();
 
@@ -1030,13 +1081,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name: String,
-                parents : [Person] ,
-                someone : Person ,
-            }
-        
-        ",
+            {
+                Person {
+                    name: String,
+                    parents : [Person] ,
+                    someone : Person ,
+                }
+            }",
             )
             .unwrap();
 
@@ -1078,13 +1129,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name: String,
-                parents : [Person] ,
-                someone : Person ,
-            }
-        
-        ",
+            {
+                Person {
+                    name: String,
+                    parents : [Person] ,
+                    someone : Person ,
+                }
+            }",
             )
             .unwrap();
 
@@ -1146,11 +1197,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name: Json,
-            }
-        
-        ",
+            {
+                Person {
+                    name: Json,
+                }
+            }",
             )
             .unwrap();
 
@@ -1197,11 +1248,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name: Base64,
-            }
-        
-        ",
+            {
+                Person {
+                    name: Base64,
+                }
+            }",
             )
             .unwrap();
 
@@ -1248,14 +1299,14 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String,
-                some_person : Person ,
-                parents : [Person] 
-            }
-        
-        ",
+            {
+                Person {
+                    name : String ,
+                    surname : String,
+                    some_person : Person ,
+                    parents : [Person] 
+                }
+            }",
             )
             .unwrap();
 
@@ -1291,13 +1342,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                age : Integer default 4,
-                parents : [Person] 
-            }
-        
-        ",
+            {
+                Person {
+                    name : String ,
+                    age : Integer default 4,
+                    parents : [Person] 
+                }
+            }",
             )
             .unwrap();
 
@@ -1345,11 +1396,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person(no_full_text_index){
-                name : String ,
-            }
-        
-        ",
+            {
+                Person(no_full_text_index){
+                    name : String ,
+                }
+            }",
             )
             .unwrap();
 

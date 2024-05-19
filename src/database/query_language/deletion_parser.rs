@@ -186,18 +186,18 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String ,
-                parent : [Person],
-                pet : [Pet]
-            }
+            {
+                Person {
+                    name : String ,
+                    surname : String ,
+                    parent : [Person],
+                    pet : [Pet]
+                }
 
-            Pet {
-                name : String ,
-            }
-        
-        ",
+                Pet {
+                    name : String ,
+                }
+            }",
             )
             .unwrap();
 
@@ -229,7 +229,7 @@ mod tests {
 
         let query = deletion.deletions.get(0).unwrap();
         assert_eq!("Person", query.name);
-        assert_eq!("32", query.short_name);
+        assert_eq!("0", query.short_name);
         let alias = query.alias.as_ref().unwrap();
         assert_eq!("del1", alias);
         assert_eq!("id", query.id_param);
@@ -249,7 +249,7 @@ mod tests {
 
         let query = deletion.deletions.get(1).unwrap();
         assert_eq!("Pet", query.name);
-        assert_eq!("33", query.short_name);
+        assert_eq!("1", query.short_name);
         assert_eq!(None, query.alias);
         assert_eq!("id3", query.id_param);
         assert_eq!(0, query.references.len());
@@ -258,22 +258,72 @@ mod tests {
     }
 
     #[test]
+    fn parse_namespace_datamodel() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String ,
+                    surname : String ,
+                    parent : [ns.Person],
+                    pet : [ns.Pet]
+                }
+
+                Pet {
+                    name : String,
+                }
+            }
+        ",
+            )
+            .unwrap();
+
+        let _ = DeletionParser::parse(
+            "
+            deletion  {
+                ns.Pet {
+                    $id3
+                }
+            }
+            
+          ",
+            &data_model,
+        )
+        .expect("'Pet' is corectly defined");
+
+        let _ = DeletionParser::parse(
+            "
+            deletion  {
+                pets : ns.Pet {
+                    $id3
+                }
+            }
+            
+          ",
+            &data_model,
+        )
+        .expect("'Pet' is corectly defined");
+    }
+
+    #[test]
     fn parse_invalid_datamodel() {
         let mut data_model = DataModel::new();
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String ,
-                parent : [Person],
-                pet : [Pet]
-            }
+            {
+                Person {
+                    name : String ,
+                    surname : String ,
+                    parent : [Person],
+                    pet : [Pet]
+                }
 
-            Pet {
-                name : String,
+                Pet {
+                    name : String,
+                }
             }
-        
         ",
             )
             .unwrap();
@@ -359,13 +409,14 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String ,
-                parent : [Person],
-                pet : [Person]
-            }        
-        ",
+            {
+                Person {
+                    name : String ,
+                    surname : String ,
+                    parent : [Person],
+                    pet : [Person]
+                }
+            }",
             )
             .unwrap();
 

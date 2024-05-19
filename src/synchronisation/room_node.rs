@@ -958,10 +958,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn export_room_from_database() {
         init_database_path();
-        let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
+        let data_model = "{
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }
         }   
         ";
 
@@ -986,7 +987,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1049,11 +1050,12 @@ mod tests {
     async fn parse_room_node_test() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
+        {
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }   
+        }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1076,7 +1078,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1118,11 +1120,12 @@ mod tests {
     async fn reinsert_room_node() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
+        {
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }
+        }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1145,7 +1148,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1181,7 +1184,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         name:"new"
@@ -1224,7 +1227,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
-            r#"mutation mut {
+            r#"mutation  {
             Person{
                 room_id: $room_id
                 name:"someone 2"
@@ -1258,11 +1261,12 @@ mod tests {
     async fn transfert_room() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
+        {
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }   
+        }";
 
         let path: PathBuf = DATA_PATH.into();
         let secret = random32();
@@ -1297,7 +1301,7 @@ mod tests {
         let room = first_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1380,7 +1384,7 @@ mod tests {
         first_app
             .mutate_raw(
                 r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -1404,7 +1408,7 @@ mod tests {
         second_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         id:$room_id
                         authorisations:[{
                             id:$auth_id
@@ -1455,18 +1459,17 @@ mod tests {
         first_app
             .mutate_raw(
                 r#"mutation mut {
-                        _Room{
-                            id:$room_id
-                            authorisations:[{
-                                id:$auth_id
-                                users: [{
-                                    verifying_key:$user_id
-                                    enabled: false
-                                }]
+                    sys.Room{
+                        id:$room_id
+                        authorisations:[{
+                            id:$auth_id
+                            users: [{
+                                verifying_key:$user_id
+                                enabled: false
                             }]
-                        }
-        
-                    }"#,
+                        }]
+                    }
+                }"#,
                 Some(param),
             )
             .await
@@ -1490,12 +1493,11 @@ mod tests {
         second_app
             .mutate_raw(
                 r#"mutation mut {
-            Person{
-                room_id: $room_id
-                name:"someone"
-            }
-
-        }"#,
+                Person{
+                    room_id: $room_id
+                    name:"someone"
+                }
+            }"#,
                 Some(param),
             )
             .await
@@ -1539,7 +1541,7 @@ mod tests {
         let room = first_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1572,7 +1574,7 @@ mod tests {
         first_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         id: $room_id
                         admin: [{
                             verifying_key:$second_user
@@ -1594,7 +1596,7 @@ mod tests {
         second_app
             .mutate_raw(
                 r#"mutation mut {
-                        _Room{
+                        sys.Room{
                             id: $room_id
                             admin: [{
                                 verifying_key:$second_user
@@ -1628,7 +1630,7 @@ mod tests {
         first_app
             .mutate_raw(
                 r#"mutation mut {
-                _Room{
+                sys.Room{
                     id: $room_id
                     admin: [{
                         verifying_key:$third_user
@@ -1652,7 +1654,7 @@ mod tests {
         second_app
             .mutate_raw(
                 r#"mutation mut {
-                _Room{
+                sys.Room{
                     id: $room_id
                     admin: [{
                         verifying_key:$third_user
@@ -1725,7 +1727,7 @@ mod tests {
         let room = first_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]

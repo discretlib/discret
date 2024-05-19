@@ -601,23 +601,25 @@ impl GraphDatabase {
                     "SELECT 1 FROM sqlite_master WHERE type= 'index' AND name = ? ",
                 )?;
                 let datamodel = &self.1;
-                for entity in datamodel.entities() {
-                    for to_delete in &entity.1.indexes_to_remove {
-                        let name = to_delete.0;
-                        let node: Option<i64> = index_exists_stmt
-                            .query_row([name], |row| row.get(0))
-                            .optional()?;
-                        if node.is_some() {
-                            conn.execute(&format!("DROP INDEX {}", name), [])?;
+                for ns in datamodel.namespaces() {
+                    for entity in ns.1 {
+                        for to_delete in &entity.1.indexes_to_remove {
+                            let name = to_delete.0;
+                            let node: Option<i64> = index_exists_stmt
+                                .query_row([name], |row| row.get(0))
+                                .optional()?;
+                            if node.is_some() {
+                                conn.execute(&format!("DROP INDEX {}", name), [])?;
+                            }
                         }
-                    }
-                    for to_insert in &entity.1.indexes {
-                        let name = to_insert.0;
-                        let node: Option<i64> = index_exists_stmt
-                            .query_row([name], |row| row.get(0))
-                            .optional()?;
-                        if node.is_none() {
-                            conn.execute(&to_insert.1.create_query(), [])?;
+                        for to_insert in &entity.1.indexes {
+                            let name = to_insert.0;
+                            let node: Option<i64> = index_exists_stmt
+                                .query_row([name], |row| row.get(0))
+                                .optional()?;
+                            if node.is_none() {
+                                conn.execute(&to_insert.1.create_query(), [])?;
+                            }
                         }
                     }
                 }
@@ -976,7 +978,7 @@ mod tests {
     async fn selection() {
         init_database_path();
 
-        let data_model = "Person{ name:String }";
+        let data_model = "{Person{ name:String }}";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1022,7 +1024,7 @@ mod tests {
     async fn delete() {
         init_database_path();
 
-        let data_model = "Person{ name:String }";
+        let data_model = "{Person{ name:String }}";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1079,9 +1081,11 @@ mod tests {
         //create a first instance
         {
             let data_model = "
-            Person{ 
-                name:String,
-                index(name)
+            ns {
+                Person{ 
+                    name:String,
+                    index(name)
+                }
             }";
             let path: PathBuf = DATA_PATH.into();
             GraphDatabaseService::start(
@@ -1098,9 +1102,11 @@ mod tests {
 
         {
             let data_model = "
-            Person{ 
-                surname: String,
-                name:String 
+            ns {
+                Person{ 
+                    surname: String,
+                    name:String 
+                }
             }";
             let path: PathBuf = DATA_PATH.into();
             let is_error = GraphDatabaseService::start(
@@ -1118,9 +1124,11 @@ mod tests {
 
         {
             let data_model = "
-            Person{ 
-                name:String ,
-                surname: String nullable,
+            ns {
+                Person{ 
+                    name:String ,
+                    surname: String nullable,
+                }
             }";
             let path: PathBuf = DATA_PATH.into();
             GraphDatabaseService::start(

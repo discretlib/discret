@@ -658,9 +658,11 @@ mod tests {
     async fn synchronize_full_node() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
+        {
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }
         }   
         ";
 
@@ -701,7 +703,7 @@ mod tests {
         let room = first_app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$first_user_id
                         }]
@@ -804,11 +806,11 @@ mod tests {
         let result = second_app
             .query(
                 "query q{
-            Person{
-                name
-                parents(order_by(name desc)){name}
-            }
-        }",
+                Person{
+                    name
+                    parents(order_by(name desc)){name}
+                }
+            }",
                 None,
             )
             .await

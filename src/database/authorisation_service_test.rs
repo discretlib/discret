@@ -242,7 +242,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn room_creation() {
         init_database_path();
-        let data_model = "Person{ name:String }";
+        let data_model = "{Person{ name:String }}";
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
@@ -264,7 +264,7 @@ mod tests {
         let _room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -292,7 +292,7 @@ mod tests {
         let result = app
             .query(
                 "query q{
-                    _Room{
+                    sys.Room{
                         admin{
                             enabled
                         }
@@ -316,7 +316,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected = "{\n\"_Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        let expected = "{\n\"sys.Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
         assert_eq!(result, expected);
         // println!("{:#?}", result);
     }
@@ -325,13 +325,15 @@ mod tests {
     async fn mutate_with_room_propagation() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            pets:[Pet]
-        }   
+        ns {
+            Person{ 
+                name:String, 
+                pets:[ns.Pet]
+            }   
 
-        Pet{
-            name:String,
+            Pet{
+                name:String,
+            }
         }
         ";
 
@@ -356,7 +358,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -366,7 +368,7 @@ mod tests {
                         authorisations:[{
                             name:"admin"
                             rights:[{
-                                entity:"Person"
+                                entity:"ns.Person"
                                 mutate_self:true
                                 mutate_all:true
                             }]
@@ -392,13 +394,12 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
 
         app.mutate_raw(
-            r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+            r#"mutation {
+                ns.Person{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -409,11 +410,11 @@ mod tests {
 
         app.mutate_raw(
             r#"mutation mut {
-                    Pet{
-                        room_id: $room_id
-                        name: "kiki"
-                    }
-                }"#,
+                ns.Pet{
+                    room_id: $room_id
+                    name: "kiki"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -423,13 +424,12 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "another me"
-                        pets:[{name:"kiki"}]
-                    }
-
-                }"#,
+                ns.Person{
+                    room_id: $room_id
+                    name: "another me"
+                    pets:[{name:"kiki"}]
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -439,8 +439,8 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
         let room = app
             .mutate_raw(
-                r#"mutation mut {
-                _Room{
+                r#"mutation {
+                sys.Room{
                     admin: [{
                         verifying_key:$user_id
                     }]
@@ -450,7 +450,7 @@ mod tests {
                     authorisations:[{
                         name:"admin"
                         rights:[{
-                            entity:"Pet"
+                            entity:"ns.Pet"
                             mutate_self:true
                             mutate_all:true
                         }]
@@ -473,11 +473,11 @@ mod tests {
         param.add("pet_room_id", pet_room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Pet{
-                        room_id: $pet_room_id
-                        name: "kiki"
-                    }
-                }"#,
+                ns.Pet{
+                    room_id: $pet_room_id
+                    name: "kiki"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -488,16 +488,15 @@ mod tests {
         param.add("pet_room_id", pet_room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "another me"
-                        pets:[{
-                            room_id: $pet_room_id
-                            name:"kiki"
-                        }]
-                    }
-
-                }"#,
+                ns.Person{
+                    room_id: $room_id
+                    name: "another me"
+                    pets:[{
+                        room_id: $pet_room_id
+                        name:"kiki"
+                    }]
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -506,7 +505,7 @@ mod tests {
         let result = app
             .query(
                 "query q{
-                    Person(order_by(name asc)){
+                    ns.Person(order_by(name asc)){
                         name
                         pets{
                             name
@@ -519,7 +518,7 @@ mod tests {
             .unwrap();
 
         let expected =
-            "{\n\"Person\":[{\"name\":\"another me\",\"pets\":[{\"name\":\"kiki\"}]}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"another me\",\"pets\":[{\"name\":\"kiki\"}]}]\n}";
         assert_eq!(result, expected);
         //println!("{:#?}", result);
         //println!("{}", result);
@@ -528,7 +527,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn authorisation_entities_error() {
         init_database_path();
-        let data_model = "Person{name:String,}";
+        let data_model = "{Person{name:String,}}";
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
         let app = GraphDatabaseService::start(
@@ -549,59 +548,61 @@ mod tests {
 
         app.mutate_raw(
             r#"mutation mut {
-                    _Authorisation{
-                        name:"admin" 
-                        rights:[{
-                            entity:"Person"
-                            mutate_self:true
-                            mutate_all:true
-                        }]
-                        users: [{
-                            verifying_key:$user_id
-                        }]
-                    }
-                }"#,
-            Some(param),
-        )
-        .await
-        .expect_err("_Authorisation cannot be mutated outside of a room context");
-
-        app.mutate_raw(
-            r#"mutation mut {
-                    _EntityRight {
+                sys.Authorisation{
+                    name:"admin" 
+                    rights:[{
                         entity:"Person"
                         mutate_self:true
                         mutate_all:true
-                    }
-                }"#,
-            None,
+                    }]
+                    users: [{
+                        verifying_key:$user_id
+                    }]
+                }
+            }"#,
+            Some(param),
         )
         .await
-        .expect_err("_EntityRight cannot be mutated outside of a room context");
+        .expect_err("sys.Authorisation cannot be mutated outside of a room context");
 
         app.mutate_raw(
             r#"mutation mut {
-                    _UserAuth {
-                        verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
-                    }
-                }"#,
+                sys.EntityRight {
+                    entity:"Person"
+                    mutate_self:true
+                    mutate_all:true
+                }
+            }"#,
             None,
         )
         .await
-        .expect_err("_UserAuth cannot be mutated outside of a room context");
+        .expect_err("sys.EntityRight cannot be mutated outside of a room context");
+
+        app.mutate_raw(
+            r#"mutation mut {
+                sys.UserAuth {
+                    verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
+                }
+            }"#,
+            None,
+        )
+        .await
+        .expect_err("sys.UserAuth cannot be mutated outside of a room context");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn room_update_rights() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            pets:[Pet]
-        }   
+        {
+            Person{ 
+                name:String, 
+                pets:[Pet]
+            }   
 
-        Pet{
-            name:String,
+            Pet{
+                name:String,
+            }
         }
         ";
 
@@ -626,7 +627,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -662,12 +663,11 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+                Person{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -678,7 +678,7 @@ mod tests {
         param.add("auth_id", auth_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -699,12 +699,11 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+                Person{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -713,7 +712,7 @@ mod tests {
         let result = app
             .query(
                 "query q{
-                    _Room{
+                    sys.Room{
                         authorisations{
                             name  
                             rights (order_by(mdate desc)){
@@ -728,14 +727,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected =  "{\n\"_Room\":[{\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}]}]}]\n}";
+        let expected =  "{\n\"sys.Room\":[{\"authorisations\":[{\"name\":\"admin\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":false,\"mutate_all\":false},{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn room_update_user() {
         init_database_path();
-        let data_model = "Person{ name:String } ";
+        let data_model = "{Person{ name:String }} ";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -758,7 +757,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -766,7 +765,6 @@ mod tests {
                             name:"admin"
                         }]
                     }
-
                 }"#,
                 Some(param),
             )
@@ -783,7 +781,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     admin: [{
                         verifying_key:$user_id
@@ -803,17 +801,16 @@ mod tests {
 
         app.mutate_raw(
             r#"mutation mut {
-                    _Room{
-                        id:$room_id
-                        authorisations:[{
-                            id: $auth_id
-                            users: [{
-                                verifying_key:$user_id
-                            }]
+                sys.Room{
+                    id:$room_id
+                    authorisations:[{
+                        id: $auth_id
+                        users: [{
+                            verifying_key:$user_id
                         }]
-                    }
-
-                }"#,
+                    }]
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -826,7 +823,7 @@ mod tests {
 
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     user_admin: [{
                         verifying_key:$user_id
@@ -849,7 +846,7 @@ mod tests {
         param.add("auth_id", auth_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -870,7 +867,7 @@ mod tests {
 
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -892,7 +889,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -913,7 +910,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     user_admin: [{
                         verifying_key:$user_id
@@ -931,7 +928,7 @@ mod tests {
         param.add("auth_id", auth_id.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$room_id
                     authorisations:[{
                         id:$auth_id
@@ -942,7 +939,6 @@ mod tests {
                         
                     }]
                 }
-
             }"#,
             Some(param),
         )
@@ -954,9 +950,10 @@ mod tests {
     async fn room_load() {
         init_database_path();
         let data_model = "
+        {
             Person{ name:String } 
             Pet{ name:String }
-            ";
+        }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -980,8 +977,9 @@ mod tests {
             param.add("user_id", user_id.clone()).unwrap();
             let room = app
                 .mutate_raw(
-                    r#"mutation mut {
-                    _Room{
+                    r#"
+                mutation {
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1000,7 +998,6 @@ mod tests {
                             }]
                         }]
                     }
-
                 }"#,
                     Some(param),
                 )
@@ -1014,8 +1011,9 @@ mod tests {
             param.add("user_id", user_id.clone()).unwrap();
             let room = app
                 .mutate_raw(
-                    r#"mutation mut {
-                    _Room{
+                    r#"
+                mutation mut {
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1076,12 +1074,11 @@ mod tests {
         param.add("room_id", ids.1.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Person{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+                Person{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -1091,12 +1088,11 @@ mod tests {
         param.add("room_id", ids.0.clone()).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                    Pet{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+                Pet{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -1105,13 +1101,12 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", ids.1.clone()).unwrap();
         app.mutate_raw(
-            r#"mutation mut {
-                    Pet{
-                        room_id: $room_id
-                        name: "me"
-                    }
-
-                }"#,
+            r#"mutation {
+                Pet{
+                    room_id: $room_id
+                    name: "me"
+                }
+            }"#,
             Some(param),
         )
         .await
@@ -1123,12 +1118,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn deletion_auth() {
         init_database_path();
-        let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
+        let data_model = "{
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }   
+        }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1151,7 +1146,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]
@@ -1278,7 +1273,7 @@ mod tests {
         param.add("auth_id", auth_id).unwrap();
         app.mutate_raw(
             r#"mutation mut {
-                _Room{
+                sys.Room{
                     id:$id
                     authorisations:[{
                         id:$auth_id
@@ -1347,11 +1342,12 @@ mod tests {
     async fn deletion_log() {
         init_database_path();
         let data_model = "
-        Person{ 
-            name:String, 
-            parents:[Person]
-        }   
-        ";
+        {
+            Person{ 
+                name:String, 
+                parents:[Person]
+            }   
+        }";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -1374,7 +1370,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]

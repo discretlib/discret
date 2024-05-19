@@ -153,10 +153,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-            }
-        ",
+            {
+                Person {
+                    name : String,
+                }
+            }",
             )
             .unwrap();
 
@@ -261,11 +262,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                parents : [Person]
-            }
-        ",
+            {
+                Person {
+                    name : String,
+                    parents : [Person]
+                }
+            }",
             )
             .unwrap();
 

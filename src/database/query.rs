@@ -104,13 +104,13 @@ pub fn get_entity_query(
     let mut q = String::new();
     tab(&mut q, t);
     q.push_str("SELECT \n");
-    let selection = get_fields(entity, prepared_query, &entity.aliased_name(), t);
+    let selection = get_fields(entity, prepared_query, &entity.sql_aliased_name(), t);
     tab(&mut q, t);
     q.push_str(&selection);
     q.push_str(" as value\n");
     tab(&mut q, t);
-    q.push_str(&format!("FROM _node {}", entity.aliased_name()));
-    let search = get_search_join(&entity.params, &entity.aliased_name(), t);
+    q.push_str(&format!("FROM _node {}", entity.sql_aliased_name()));
+    let search = get_search_join(&entity.params, &entity.sql_aliased_name(), t);
     q.push_str(&search);
 
     q.push('\n');
@@ -119,11 +119,11 @@ pub fn get_entity_query(
     tab(&mut q, t);
     q.push_str(&format!(
         "{}._entity='{}' ",
-        entity.aliased_name(),
+        entity.sql_aliased_name(),
         &entity.short_name
     ));
 
-    let exists = get_exists_query(entity, prepared_query, &entity.aliased_name(), t);
+    let exists = get_exists_query(entity, prepared_query, &entity.sql_aliased_name(), t);
     q.push_str(&exists);
 
     let end = get_end_select_query(entity, prepared_query, t);

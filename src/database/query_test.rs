@@ -24,14 +24,15 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean, 
-                some_nullable : String nullable,
-            }
-        ",
+            {
+                Person {
+                    name : String ,
+                    age : Integer,
+                    weight : Float,
+                    is_human : Boolean, 
+                    some_nullable : String nullable,
+                }
+            }",
             )
             .unwrap();
 
@@ -145,10 +146,11 @@ mod tests {
         let mut data_model = DataModel::new();
         data_model
             .update(
-                "
+                "{
             Person {
                 name : String
             }
+        }
         ",
             )
             .unwrap();
@@ -255,15 +257,17 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                parents : [Person] ,
-                pet: Pet ,
-                siblings : [Person] ,
-            }
+            {
+                Person {
+                    name : String ,
+                    parents : [Person] ,
+                    pet: Pet ,
+                    siblings : [Person] ,
+                }
 
-            Pet {
-                name : String
+                Pet {
+                    name : String
+                }
             }
         ",
             )
@@ -344,17 +348,22 @@ mod tests {
     }
 
     #[test]
-    fn order_by_first_next_paging() {
-        let conn = Connection::open_in_memory().unwrap();
-        prepare_connection(&conn).unwrap();
-
+    fn entity_namespace() {
         let mut data_model = DataModel::new();
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
+            ns{
+                Person {
+                    name : String ,
+                    parents : [ns.Person] ,
+                    pet: ns.Pet ,
+                    siblings : [ns.Person] ,
+                }
+
+                Pet {
+                    name : String
+                }
             }
         ",
             )
@@ -363,7 +372,101 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                Person {
+                ns.Person {
+                    name : $name
+                    parents:  [
+                        {name : $mother} 
+                        ,{
+                            name:$father
+                            pet:{ name:"kiki" }
+                        }
+                    ]
+                    pet: {name:$pet_name}
+                    siblings:[{name:"Wallis"},{ name : $sibling }]
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        param.add("name", String::from("John")).unwrap();
+        param.add("mother", String::from("Hello")).unwrap();
+        param.add("father", String::from("World")).unwrap();
+        param.add("pet_name", String::from("Truffle")).unwrap();
+        param.add("sibling", String::from("Futuna")).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                ns.Person (
+                        remps_pets != NULL, 
+                        id != "zSRIyMbf70V999wyC0KlhQ", 
+                        name = "John",
+                        order_by(name asc)
+                    ) {
+                    name
+                    parents (name="World") {
+                        name
+                    }
+                    pet {name}
+                    remps_pets : parents (pet != null) {
+                        name
+                        pet {name}
+                    }
+                }
+                
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+      //  println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
+        let result = sql.read(&conn).unwrap();
+        let expected = "{\n\"ns.Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"}],\"pet\":{\"name\":\"Truffle\"},\"remps_pets\":[{\"name\":\"World\",\"pet\":{\"name\":\"kiki\"}}]}]\n}";
+        assert_eq!(expected, result);
+    }
+
+
+
+    #[test]
+    fn order_by_first_next_paging() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "ns {
+            Person {
+                name : String,
+                age : Integer,
+            }
+        }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                ns.Person {
                     name : $name
                     age : $age
                 }
@@ -411,7 +514,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (
+                ns.Person (
                         order_by(age desc, name asc),
                         first 3,
                         skip 1
@@ -433,13 +536,13 @@ mod tests {
         };
 
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"John\",\"age\":42},{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Leonore\",\"age\":22}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"John\",\"age\":42},{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Leonore\",\"age\":22}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (
+                ns.Person (
                         order_by(age desc, name asc),
                         after(22)
                     ) {
@@ -460,13 +563,13 @@ mod tests {
         };
         println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"Sarah\",\"age\":12}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Sarah\",\"age\":12}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (
+                ns.Person (
                         order_by(age desc, name asc),
                         after (22,"Kevin")
                     ) {
@@ -488,13 +591,13 @@ mod tests {
 
         let result = sql.read(&conn).unwrap();
         let expected =
-            "{\n\"Person\":[{\"name\":\"Leonore\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Leonore\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (
+                ns.Person (
                         order_by(age desc, name desc),
                         after (22,"Leonore")
                     ) {
@@ -515,13 +618,13 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         let expected =
-            "{\n\"Person\":[{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Kevin\",\"age\":22},{\"name\":\"Sarah\",\"age\":12}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (
+                ns.Person (
                         order_by(age desc, name desc),
                         before (22,"Leonore")
                     ) {
@@ -544,7 +647,7 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         let expected =
-            "{\n\"Person\":[{\"name\":\"Silvie\",\"age\":46},{\"name\":\"John\",\"age\":42}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Silvie\",\"age\":46},{\"name\":\"John\",\"age\":42}]\n}";
         assert_eq!(expected, result);
 
         //println!("{:#?}", result.as_str().unwrap());
@@ -557,11 +660,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean, 
+            ns{
+                Person {
+                    name : String ,
+                    age : Integer,
+                    weight : Float,
+                    is_human : Boolean, 
+                }
             }
         ",
             )
@@ -570,19 +675,19 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                Person {
+                ns.Person {
                     name : "John"
                     age: 23
                     weight: 10
                     is_human : true
                 }
-                P1: Person {
+                P1: ns.Person {
                     name : "Doe"
                     age: 32
                     weight: 12
                     is_human : true
                 }
-                P2: Person {
+                P2: ns.Person {
                     name : "Jean"
                     age: 53
                     weight: 100
@@ -603,7 +708,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (name = "Jean", age < 100, weight >=100, is_human = false){
+                ns.Person (name = "Jean", age < 100, weight >=100, is_human = false){
                     name
                     age
                     weight
@@ -625,13 +730,13 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-            "{\n\"Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (name = $name, age < $age, weight >= $we, is_human = $hum){
+                ns.Person (name = $name, age < $age, weight >= $we, is_human = $hum){
                     name
                     age
                     weight
@@ -658,9 +763,9 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-            "{\n\"Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
         assert_eq!(expected, result);
-        println!("{:#?}", result);
+       // println!("{:#?}", result);
     }
 
     #[test]
@@ -670,11 +775,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                surname : String,
-                pseudo : String,
-                is_human : Boolean, 
+            ns {
+                Person {
+                    name : String ,
+                    surname : String,
+                    pseudo : String,
+                    is_human : Boolean, 
+                }
             }
         ",
             )
@@ -683,7 +790,7 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                Person {
+                ns.Person {
                     name : "John" 
                     surname : "John"
                     pseudo : "John"
@@ -704,7 +811,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (name = $name, surname = "John", surname = $name, is_human = true){
+                ns.Person (name = $name, surname = "John", surname = $name, is_human = true){
                     name 
                     surname
                     pseudo 
@@ -728,7 +835,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-             "{\n\"Person\":[{\"name\":\"John\",\"surname\":\"John\",\"pseudo\":\"John\",\"is_human\":true}]\n}";
+             "{\n\"ns.Person\":[{\"name\":\"John\",\"surname\":\"John\",\"pseudo\":\"John\",\"is_human\":true}]\n}";
         assert_eq!(expected, result);
 
         //println!("{:#?}", result.as_str().unwrap());
@@ -740,29 +847,31 @@ mod tests {
         data_model
             .update(
                 "
+        ns{
             Person {
                 age : Integer,
                 weight : Float,
                 nat: String, 
             }
+        }
         ",
             )
             .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
-                P1: Person { age:24 weight:45 nat:"us" }
-                P2: Person { age:12 weight:23 nat:"us" }
-                P3: Person { age:45 weight:86 nat:"fr" }
-                P4: Person { age:34 weight:43 nat:"fr" }
-                P5: Person { age:54 weight:70 nat:"sa" }
-                P6: Person { age:67 weight:85 nat:"sa" }
-                P7: Person { age:72 weight:65 nat:"sa" }
-                P8: Person { age:24 weight:95 nat:"en" }
-                P9: Person { age:1 weight:52 nat:"en" }
-                P10: Person { age:45 weight:65 nat:"en" }
-                P11: Person { age:24 weight:75 nat:"en" }
+            mutation  {
+                P1: ns.Person { age:24 weight:45 nat:"us" }
+                P2: ns.Person { age:12 weight:23 nat:"us" }
+                P3: ns.Person { age:45 weight:86 nat:"fr" }
+                P4: ns.Person { age:34 weight:43 nat:"fr" }
+                P5: ns.Person { age:54 weight:70 nat:"sa" }
+                P6: ns.Person { age:67 weight:85 nat:"sa" }
+                P7: ns.Person { age:72 weight:65 nat:"sa" }
+                P8: ns.Person { age:24 weight:95 nat:"en" }
+                P9: ns.Person { age:1 weight:52 nat:"en" }
+                P10: ns.Person { age:45 weight:65 nat:"en" }
+                P11: ns.Person { age:24 weight:75 nat:"en" }
             } "#,
             &data_model,
         )
@@ -778,7 +887,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (order_by(avg asc, count asc, max asc,min asc,sum asc)) {
+                ns.Person (order_by(avg asc, count asc, max asc,min asc,sum asc)) {
                     nat
                     avg: avg(weight)
                     count: count()
@@ -802,13 +911,13 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-        "{\n\"Person\":[{\"nat\":\"us\",\"avg\":34.0,\"count\":2,\"max\":45.0,\"min\":23.0,\"sum\":68.0},{\"nat\":\"fr\",\"avg\":64.5,\"count\":2,\"max\":86.0,\"min\":43.0,\"sum\":129.0},{\"nat\":\"en\",\"avg\":71.75,\"count\":4,\"max\":95.0,\"min\":52.0,\"sum\":287.0},{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
+        "{\n\"ns.Person\":[{\"nat\":\"us\",\"avg\":34.0,\"count\":2,\"max\":45.0,\"min\":23.0,\"sum\":68.0},{\"nat\":\"fr\",\"avg\":64.5,\"count\":2,\"max\":86.0,\"min\":43.0,\"sum\":129.0},{\"nat\":\"en\",\"avg\":71.75,\"count\":4,\"max\":95.0,\"min\":52.0,\"sum\":287.0},{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (order_by(avg asc, count asc, max asc,min asc,sum asc)) {
+                ns.Person (order_by(avg asc, count asc, max asc,min asc,sum asc)) {
                     nat
                     avg: avg(mdate)
                     count: count()
@@ -833,8 +942,8 @@ mod tests {
 
         let query_parser = QueryParser::parse(
             r#"
-            query sample{
-                Person (
+            query {
+                ns.Person (
                     order_by(nat asc, count desc),
                     count > 2,
                     after("en", 3)
@@ -862,7 +971,7 @@ mod tests {
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
 
-        let expected ="{\n\"Person\":[{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
+        let expected ="{\n\"ns.Person\":[{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
         assert_eq!(expected, result);
         // println!("{:#?}", _result.as_str().unwrap());
         //println!("{}", _result.as_str().unwrap());
@@ -874,9 +983,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                comment : String,
+            ns {
+                Person {
+                    name : String,
+                    comment : String,
+                }
             }
         ",
             )
@@ -885,9 +996,9 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P1: Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
-                P2: Person { name:"Alice" comment:"Lorem lorem ipsum " }
-                P3: Person { name:"Bob" comment:"A completely different comment" }
+                P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
+                P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
+                P3: ns.Person { name:"Bob" comment:"A completely different comment" }
             } "#,
             &data_model,
         )
@@ -903,7 +1014,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person(search("ames")) {
+                ns.Person(search("ames")) {
                     name
                     comment
                 }
@@ -924,7 +1035,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-            "{\n\"Person\":[{\"name\":\"John\",\"comment\":\"Lorem ipsum sit doler et ames\"}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"John\",\"comment\":\"Lorem ipsum sit doler et ames\"}]\n}";
         assert_eq!(expected, result);
         // println!("{:#?}", result.as_str().unwrap());
         //println!("{}", result.as_str().unwrap());
@@ -937,9 +1048,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person (no_full_text_index){
-                name : String,
-                comment : String,
+            ns {
+                Person (no_full_text_index){
+                    name : String,
+                    comment : String,
+                }
             }
         ",
             )
@@ -948,9 +1061,9 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P1: Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
-                P2: Person { name:"Alice" comment:"Lorem lorem ipsum " }
-                P3: Person { name:"Bob" comment:"A completely different comment" }
+                P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
+                P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
+                P3: ns.Person { name:"Bob" comment:"A completely different comment" }
             } "#,
             &data_model,
         )
@@ -966,7 +1079,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person(search("ames")) {
+                ns.Person(search("ames")) {
                     name
                     comment
                 }
@@ -986,7 +1099,7 @@ mod tests {
         //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
 
-        let expected = "{\n\"Person\":[]\n}";
+        let expected = "{\n\"ns.Person\":[]\n}";
         assert_eq!(expected, result);
         // println!("{:#?}", result.as_str().unwrap());
         //println!("{}", result.as_str().unwrap());
@@ -999,9 +1112,11 @@ mod tests {
         data_model
             .update(
                 r#"
-            Person {
-                name : String,
-                def : String default "Lorem ipsum", 
+            ns {
+                Person {
+                    name : String,
+                    def : String default "Lorem ipsum", 
+                }
             }
         "#,
             )
@@ -1010,8 +1125,8 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P2: Person { name:"Alice"  }
-                P3: Person { name:"Bob" def:"A completely different" }
+                P2: ns.Person { name:"Alice"  }
+                P3: ns.Person { name:"Bob" def:"A completely different" }
             } "#,
             &data_model,
         )
@@ -1027,7 +1142,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person(order_by(name Asc)) {
+                ns.Person(order_by(name Asc)) {
                     name
                     def
                 }
@@ -1047,16 +1162,18 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected =
-            "{\n\"Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\"},{\"name\":\"Bob\",\"def\":\"A completely different\"}]\n}";
+            "{\n\"ns.Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\"},{\"name\":\"Bob\",\"def\":\"A completely different\"}]\n}";
         assert_eq!(expected, result);
 
         data_model
             .update(
                 r#"
-            Person {
-                name : String,
-                def : String default "Lorem ipsum", 
-                newdef : String default "sit met", 
+            ns {
+                Person {
+                    name : String,
+                    def : String default "Lorem ipsum", 
+                    newdef : String default "sit met", 
+                }
             }
         "#,
             )
@@ -1066,7 +1183,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
                 query sample{
-                    Person(order_by(name asc)) {
+                    ns.Person(order_by(name asc)) {
                         name
                         def
                         newdef
@@ -1086,7 +1203,7 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         let expected =
-        "{\n\"Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\",\"newdef\":\"sit met\"},{\"name\":\"Bob\",\"def\":\"A completely different\",\"newdef\":\"sit met\"}]\n}";
+        "{\n\"ns.Person\":[{\"name\":\"Alice\",\"def\":\"Lorem ipsum\",\"newdef\":\"sit met\"},{\"name\":\"Bob\",\"def\":\"A completely different\",\"newdef\":\"sit met\"}]\n}";
         assert_eq!(expected, result);
     }
 
@@ -1097,19 +1214,20 @@ mod tests {
         data_model
             .update(
                 r#"
-            Person {
-                name : String,
-                data : Json, 
-            }
-        "#,
+            ns{
+                Person {
+                    name : String,
+                    data : Json, 
+                }
+            }"#,
             )
             .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P2: Person { name:"Alice" data:"{\"val\":\"hello json\"}" }
-                P3: Person { name:"Bob" data:"[1,2,3,4]" }
+                P2: ns.Person { name:"Alice" data:"{\"val\":\"hello json\"}" }
+                P3: ns.Person { name:"Bob" data:"[1,2,3,4]" }
             } "#,
             &data_model,
         )
@@ -1129,7 +1247,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             "
             query sample{
-                Person (order_by(name asc)){
+                ns.Person (order_by(name asc)){
                     name
                     data
                     array: data->$.val
@@ -1149,13 +1267,13 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         let expected = 
-        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":null}]\n}";
+        "{\n\"ns.Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":null}]\n}";
         assert_eq!(expected, result);
       
         let query_parser = QueryParser::parse(
             "
             query sample{
-                Person(order_by(name asc)) {
+                ns.Person(order_by(name asc)) {
                     name
                     data
                     array: data->1
@@ -1176,14 +1294,14 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected = 
-        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":null},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
+        "{\n\"ns.Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":null},{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
         assert_eq!(expected, result);
    
 
         let query_parser = QueryParser::parse(
             "
             query sample{
-                Person (data->1 = 2, order_by(array asc)) {
+                ns.Person (data->1 = 2, order_by(array asc)) {
                     name
                     data
                     array: data->1
@@ -1204,13 +1322,13 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected = 
-        "{\n\"Person\":[{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
+        "{\n\"ns.Person\":[{\"name\":\"Bob\",\"data\":[1,2,3,4],\"array\":2}]\n}";
         assert_eq!(expected, result);
 
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (data->$.val = "hello json", order_by(array asc)) {
+                ns.Person (data->$.val = "hello json", order_by(array asc)) {
                     name
                     data
                     array: data->$.val
@@ -1232,7 +1350,7 @@ mod tests {
         let result = sql.read(&conn).unwrap();
 
         let expected = 
-        "{\n\"Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"}]\n}";
+        "{\n\"ns.Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"}]\n}";
         assert_eq!(expected, result);
         // println!("{}", result);
         // println!("{:#?}", result);
@@ -1246,14 +1364,16 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                parents : [Person] ,
-                pet: Pet ,
-            }
+            ns {
+                Person {
+                    name : String ,
+                    parents : [ns.Person] ,
+                    pet: ns.Pet ,
+                }
 
-            Pet {
-                name : String
+                Pet {
+                    name : String
+                }
             }
         ",
             )
@@ -1262,12 +1382,12 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P1: Person {
+                P1: ns.Person {
                     name : "John"
                     parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
                     pet: { name:"Truffle"}
                 }
-                P2: Person {
+                P2: ns.Person {
                     name : "Ada"
                     parents:  [ {name : "Ada Mother" pet:{ name:"Lulu" }} ,{ name:"Ada Father" pet:{ name:"Waf" }}]
                 } 
@@ -1290,7 +1410,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (order_by(name asc)) {
+                ns.Person (order_by(name asc)) {
                     name
                     parents (order_by(name asc)){
                         name
@@ -1316,14 +1436,14 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"pet\":{\"name\":\"Truffle\"},\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"pet\":{\"name\":\"Truffle\"},\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
         assert_eq!(expected, result);
         
         
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (order_by(name asc)) {
+                ns.Person (order_by(name asc)) {
                     name
                     parents (order_by(name asc)){
                         name
@@ -1350,7 +1470,7 @@ mod tests {
         };
          //   println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}],\"parents_pets\":[{\"name\":\"Ada Father\",\"pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"pet\":{\"name\":\"Lulu\"}}]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}],\"parents_pets\":[{\"name\":\"Ada Father\",\"pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"pet\":{\"name\":\"Lulu\"}}]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
         assert_eq!(expected, result);
 
         // println!("{:#?}", result);
@@ -1365,28 +1485,29 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                parents : [Person] nullable,
-                pet: Pet ,
-            }
+            ns {
+                Person {
+                    name : String ,
+                    parents : [ns.Person] nullable,
+                    pet: ns.Pet ,
+                }
 
-            Pet {
-                name : String
-            }
-        ",
+                Pet {
+                    name : String
+                }
+            }",
             )
             .unwrap();
 
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                P1: Person {
+                P1: ns.Person {
                     name : "John"
                     parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
                     pet: { name:"Truffle"}
                 }
-                P2: Person {
+                P2: ns.Person {
                     name : "Ada"
                     parents:  [ {name : "Ada Mother" pet:{ name:"Lulu" }} ,{ name:"Ada Father" pet:{ name:"Waf" }}]
                 } 
@@ -1409,7 +1530,7 @@ mod tests {
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                Person (order_by(name asc)) {
+                ns.Person (order_by(name asc)) {
                     name
                     parents (order_by(name asc)) {name}
                 }
@@ -1428,14 +1549,14 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}]},{\"name\":\"Ada Father\",\"parents\":[]},{\"name\":\"Ada Mother\",\"parents\":[]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}]},{\"name\":\"John Father\",\"parents\":[]},{\"name\":\"John Mother\",\"parents\":[]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}]},{\"name\":\"Ada Father\",\"parents\":[]},{\"name\":\"Ada Mother\",\"parents\":[]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}]},{\"name\":\"John Father\",\"parents\":[]},{\"name\":\"John Mother\",\"parents\":[]}]\n}";
         assert_eq!(expected, result);
         
         
         let query_parser = QueryParser::parse(
             r#"
-            query sample{
-                Person (order_by(name asc), nullable(has_pet) ) {
+            query {
+                ns.Person (order_by(name asc), nullable(has_pet) ) {
                     name
                     has_pet: pet {name}
                 }
@@ -1454,7 +1575,7 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        let expected = "{\n\"Person\":[{\"name\":\"Ada\",\"has_pet\":null},{\"name\":\"Ada Father\",\"has_pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"has_pet\":{\"name\":\"Lulu\"}},{\"name\":\"John\",\"has_pet\":{\"name\":\"Truffle\"}},{\"name\":\"John Father\",\"has_pet\":{\"name\":\"Kiki\"}},{\"name\":\"John Mother\",\"has_pet\":null}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"has_pet\":null},{\"name\":\"Ada Father\",\"has_pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"has_pet\":{\"name\":\"Lulu\"}},{\"name\":\"John\",\"has_pet\":{\"name\":\"Truffle\"}},{\"name\":\"John Father\",\"has_pet\":{\"name\":\"Kiki\"}},{\"name\":\"John Mother\",\"has_pet\":null}]\n}";
         assert_eq!(expected, result);
 
 

@@ -619,13 +619,15 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean, 
-                some_nullable : String nullable,
-                some_default : Integer default 2 
+            ns {
+                Person {
+                    name : String ,
+                    age : Integer,
+                    weight : Float,
+                    is_human : Boolean, 
+                    some_nullable : String nullable,
+                    some_default : Integer default 2 
+                }
             }
         ",
             )
@@ -634,7 +636,7 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                Person {
+                ns.Person {
                     name : $name
                     age: $age
                     weight: $weight
@@ -669,10 +671,11 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-            }
-        ",
+            {
+                Person {
+                    name : String ,
+                }
+            }",
             )
             .unwrap();
 
@@ -709,22 +712,69 @@ mod tests {
     }
 
     #[test]
+    fn prepare_double_mutation_namespace() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String ,
+                }
+            }",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                ns.Person {
+                    name : $name
+                }
+                second : ns.Person {
+                    name : $name
+                }
+
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        param.add("name", String::from("John")).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+
+        let _js = mutation_query.to_json().unwrap();
+        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
+        assert_eq!(2, mutation_query.mutate_entities.len());
+        // let insert_ent = mutation_query.insert_enties[0];
+
+        //println!("{:#?}", mutation_query);
+    }
+
+    #[test]
     fn prepare_sub_entities() {
         let mut data_model = DataModel::new();
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                parents : [Person] ,
-                pet: Pet ,
-                siblings : [Person] 
-            }
+            {
+                Person {
+                    name : String ,
+                    parents : [Person] ,
+                    pet: Pet ,
+                    siblings : [Person] 
+                }
 
-            Pet {
-                name : String
-            }
-        ",
+                Pet {
+                    name : String
+                }
+            }",
             )
             .unwrap();
 
@@ -775,16 +825,17 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                pet: [Pet] ,
-            }
+            {
+                Person {
+                    name : String ,
+                    pet: [Pet] ,
+                }
 
-            Pet {
-                name : String,
-                age: Integer
-            }
-        ",
+                Pet {
+                    name : String,
+                    age: Integer
+                }
+            }",
             )
             .unwrap();
 
@@ -885,20 +936,22 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String ,
-                pet: [Pet] ,
-            }
+            {
+                Person {
+                    name : String ,
+                    pet: [Pet] ,
+                }
 
-            Pet {
-                name : String,
-                age: Integer,
-                shelter : Shelter,
-                previous: [Shelter]
-            }
+                Pet {
+                    name : String,
+                    age: Integer,
+                    shelter : Shelter,
+                    previous: [Shelter]
+                }
 
-            Shelter{
-                name : String,
+                Shelter{
+                    name : String,
+                }
             }
         ",
             )

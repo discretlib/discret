@@ -2,7 +2,7 @@ use crate::{
     database::configuration::{
         AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
         ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, ROOM_ID_FIELD,
-        SIGNATURE_FIELD, SYSTEM_NAMESPACE,
+        SIGNATURE_FIELD,
     },
     security::base64_decode,
 };
@@ -177,9 +177,8 @@ pub const RESERVED_SHORT_NAMES: usize = 32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataModel {
     model: String,
-    namespace_ids: HashMap<String, usize>,
-    namespaces: HashMap<String, HashMap<String, Entity>>,
-    entities_short: HashMap<String, (String, String)>,
+    entities: HashMap<String, Entity>,
+    entities_short: HashMap<String, String>,
 }
 impl Default for DataModel {
     fn default() -> Self {
@@ -189,174 +188,120 @@ impl Default for DataModel {
 impl DataModel {
     pub fn new() -> Self {
         Self {
-            model: String::new(),
-            namespace_ids: HashMap::new(),
-            namespaces: HashMap::new(),
+            model: String::from(""),
+            entities: HashMap::new(),
             entities_short: HashMap::new(),
         }
     }
 
-    pub fn namespaces(&self) -> &HashMap<String, HashMap<String, Entity>> {
-        &self.namespaces
+    pub fn add_entity(&mut self, entity: Entity, system: bool) -> Result<(), Error> {
+        if self.entities.contains_key(&entity.name) {
+            return Err(Error::DuplicatedEntity(entity.name.clone()));
+        }
+        if system {
+            self.insert(entity.name.clone(), entity, 0)?;
+        } else {
+            self.insert(entity.name.clone(), entity, RESERVED_SHORT_NAMES)?;
+        }
+        Ok(())
+    }
+
+    pub fn entities(&self) -> &HashMap<String, Entity> {
+        &self.entities
+    }
+
+    fn insert(&mut self, name: String, mut entity: Entity, name_decal: usize) -> Result<(), Error> {
+        entity.short_name = (name_decal + self.entities.len()).to_string();
+        let old = self.entities.insert(name, entity);
+        if old.is_some() {
+            panic!("Cannot insert an existing entity in the datamodel")
+        }
+        Ok(())
     }
 
     pub fn get_entity(&self, name: &str) -> Result<&Entity, Error> {
-        let split: Vec<&str> = name.split('.').collect();
-        let (namespace, name) = if split.len() == 2 {
-            let namespace = split[0].to_lowercase();
-            (namespace.clone(), format!("{}.{}", namespace, split[1]))
+        if let Some(entity) = self.entities.get(name) {
+            Ok(entity)
         } else {
-            ("".to_string(), name.to_string())
-        };
-
-        let namespace = self
-            .namespaces
-            .get(&namespace)
-            .ok_or(Error::NamespaceNotFound(namespace.to_string()))?;
-
-        let entity = namespace
-            .get(&name)
-            .ok_or(Error::EntityNotFound(name.to_string()))?;
-        Ok(entity)
+            Err(Error::InvalidQuery(format!(
+                "Entity '{}' not found in the data model",
+                name
+            )))
+        }
     }
 
-    fn insert(&mut self, name_space: &str, mut entity: Entity, decal: usize) -> Result<(), Error> {
-        let namespace_short = match self.namespaces.contains_key(name_space) {
-            true => *self.namespace_ids.get(name_space).unwrap(),
-            false => {
-                let ns_id = self.namespace_ids.len() + decal;
-                self.namespace_ids.insert(name_space.to_string(), ns_id);
-                self.namespaces
-                    .insert(name_space.to_string(), HashMap::new());
-                ns_id
+    pub fn add_index(&mut self, entity: &str, index: Index) -> Result<(), Error> {
+        let ent_option = self.entities.get_mut(entity);
+        match ent_option {
+            Some(ent) => {
+                if ent.indexes.get(&index.name()).is_some() {
+                    return Err(Error::InvalidQuery(format!(
+                        "Index '{}' allready exists in entity '{}'",
+                        index.name(),
+                        entity
+                    )));
+                }
+
+                ent.indexes.insert(index.name(), index);
             }
-        };
-
-        let entities = self.namespaces.get_mut(name_space).unwrap();
-
-        if entities.contains_key(&entity.name) {
-            return Err(Error::DuplicatedEntity(entity.name.clone()));
+            None => {
+                return Err(Error::InvalidQuery(format!(
+                    "Entity '{}' not found in the data model",
+                    entity
+                )));
+            }
         }
-        if name_space.is_empty() {
-            entity.short_name = format!("{}", entities.len());
-        } else {
-            entity.short_name = format!("{}.{}", namespace_short, entities.len());
-        }
-
-        self.entities_short.insert(
-            entity.short_name.clone(),
-            (name_space.to_string(), entity.name.clone()),
-        );
-        entities.insert(entity.name.clone(), entity);
-        Ok(())
-    }
-
-    fn add_index(&mut self, name_space: &str, entity: &str, index: Index) -> Result<(), Error> {
-        let namespace = self
-            .namespaces
-            .get_mut(name_space)
-            .ok_or(Error::NamespaceNotFound(name_space.to_string()))?;
-
-        let ent = namespace
-            .get_mut(entity)
-            .ok_or(Error::EntityNotFound(entity.to_string()))?;
-
-        if ent.indexes.get(&index.name()).is_some() {
-            return Err(Error::IndexAllreadyExists(
-                index.name(),
-                name_space.to_string(),
-                entity.to_string(),
-            ));
-        }
-        ent.indexes.insert(index.name(), index);
-
-        Ok(())
-    }
-
-    pub fn update_system(&mut self, model: &str) -> Result<(), Error> {
-        let new_data_model = Self::parse_internal(model, 0)?;
-        self.update_with(new_data_model, true)?;
         Ok(())
     }
 
     pub fn update(&mut self, model: &str) -> Result<(), Error> {
-        let new_data_model = Self::parse_internal(model, 1)?; //decal namespace id by one to reserce the first id to the sys namespace
+        let new_data_model = Self::parse_internal(model, false)?;
         self.update_with(new_data_model, false)?;
         Ok(())
     }
 
+    pub fn update_system(&mut self, model: &str) -> Result<(), Error> {
+        let new_data_model = Self::parse_internal(model, true)?;
+        self.update_with(new_data_model, true)?;
+        Ok(())
+    }
+
     pub fn update_with(&mut self, mut new_data_model: Self, system: bool) -> Result<(), Error> {
-        for namespace in &new_data_model.namespace_ids {
-            if system && !SYSTEM_NAMESPACE.eq(namespace.0) {
-                return Err(Error::NamespaceUpdate(format!(
-                    "DataModel System update can only contains the {} namespace",
-                    SYSTEM_NAMESPACE
-                )));
-            }
-            if !system && SYSTEM_NAMESPACE.eq(namespace.0) {
-                return Err(Error::NamespaceUpdate(format!(
-                    "{} is a reserved namespace",
-                    SYSTEM_NAMESPACE
-                )));
-            }
-        }
+        for entity in &mut self.entities {
+            if (system && entity.1.name.starts_with('_'))
+                || (!system && !entity.1.name.starts_with('_'))
+            {
+                let new_entity_op = new_data_model.entities.remove(entity.0);
+                match new_entity_op {
+                    Some(new_entity) => {
+                        let old_entity = entity.1;
+                        if !old_entity.short_name.eq(&new_entity.short_name) {
+                            let mut new_pos: usize = new_entity.short_name.parse()?;
+                            new_pos -= RESERVED_SHORT_NAMES;
+                            let mut previous_pos: usize = old_entity.short_name.parse()?;
+                            previous_pos -= RESERVED_SHORT_NAMES;
 
-        for ns in &mut self.namespaces {
-            match new_data_model.namespaces.remove(ns.0) {
-                Some(mut new_entity) => {
-                    let new_ns_id = new_data_model.namespace_ids.remove(ns.0).unwrap();
-                    let old_ns_id = *self.namespace_ids.get(ns.0).unwrap();
-                    if new_ns_id != old_ns_id {
-                        return Err(Error::InvalidNamespaceOrdering(
-                            ns.0.to_string(),
-                            new_ns_id,
-                            old_ns_id,
-                        ));
-                    }
-
-                    for entity in ns.1.iter_mut() {
-                        let new_entity_op = new_entity.remove(entity.0);
-                        match new_entity_op {
-                            Some(new_entity) => {
-                                let old_entity = entity.1;
-                                if !old_entity.short_name.eq(&new_entity.short_name) {
-                                    return Err(Error::InvalidEntityOrdering(
-                                        String::from(&old_entity.name),
-                                        old_entity.short_name.to_string(),
-                                        new_entity.short_name.to_string(),
-                                    ));
-                                }
-                                old_entity.update(new_entity)?
-                            }
-                            None => return Err(Error::MissingEntity(String::from(entity.0))),
+                            return Err(Error::InvalidEntityOrdering(
+                                String::from(&old_entity.name),
+                                new_pos,
+                                previous_pos,
+                            ));
                         }
+                        old_entity.update(new_entity)?
                     }
-
-                    for entity in new_entity {
-                        self.entities_short.insert(
-                            entity.1.short_name.clone(),
-                            (ns.0.clone(), entity.1.name.clone()),
-                        );
-                        ns.1.insert(entity.0, entity.1);
-                    }
-                }
-                None => {
-                    if !system && !SYSTEM_NAMESPACE.eq(ns.0) {
-                        return Err(Error::MissingNamespace(ns.0.to_string()));
-                    }
+                    None => return Err(Error::MissingEntity(String::from(entity.0))),
                 }
             }
         }
-        for ns in new_data_model.namespaces {
-            let ns_id = *new_data_model.namespace_ids.get(&ns.0).unwrap();
-            self.namespace_ids.insert(ns.0.clone(), ns_id);
-            for entity in &ns.1 {
-                self.entities_short.insert(
-                    entity.1.short_name.clone(),
-                    (ns.0.clone(), entity.1.name.clone()),
-                );
+        for entity in new_data_model.entities {
+            if (system && entity.1.name.starts_with('_'))
+                || (!system && !entity.1.name.starts_with('_'))
+            {
+                self.entities_short
+                    .insert(entity.1.short_name.clone(), entity.1.name.clone());
+
+                self.entities.insert(entity.0, entity.1);
             }
-            self.namespaces.insert(ns.0, ns.1);
         }
         self.model = new_data_model.model;
         Ok(())
@@ -364,15 +309,15 @@ impl DataModel {
 
     pub fn name_for(&self, short_name: &str) -> Option<String> {
         match self.entities_short.get(short_name) {
-            Some(v) => Some(v.1.to_string()),
-
+            Some(v) => Some(v.clone()),
             None => None,
         }
     }
 
-    fn parse_internal(model: &str, decal: usize) -> Result<DataModel, Error> {
+    fn parse_internal(model: &str, system: bool) -> Result<DataModel, Error> {
         let mut data_model = DataModel::new();
         data_model.model = String::from(model);
+
         let parse = match PestParser::parse(Rule::datamodel, model) {
             Err(e) => {
                 let message = format!("{}", e);
@@ -392,17 +337,13 @@ impl DataModel {
                         match pair.as_rule() {
                             Rule::identifier => {
                                 name_space = pair.as_str().to_lowercase();
+                                println!("{}", name_space);
                             }
                             Rule::entity => {
-                                let entry = Self::parse_entity(pair)?;
-                                let mut entity = entry.0;
-                                if !name_space.is_empty() {
-                                    entity.name = format!("{}.{}", name_space, entity.name);
-                                }
-                                let name = entity.name.clone();
-                                data_model.insert(&name_space, entity, decal)?;
-
-                                for index_vec in entry.1 {
+                                let entity = Self::parse_entity(pair, system)?;
+                                let name = entity.0.name.clone();
+                                data_model.add_entity(entity.0, system)?;
+                                for index_vec in entity.1 {
                                     let ent = data_model.get_entity(&name)?;
                                     let mut index =
                                         Index::new(name.clone(), ent.short_name.clone());
@@ -410,7 +351,7 @@ impl DataModel {
                                         let field = ent.get_field(field_name)?;
                                         index.add_field(field.clone())?;
                                     }
-                                    data_model.add_index(&name_space, &name, index)?;
+                                    data_model.add_index(&name, index)?;
                                 }
                             }
                             Rule::EOI => {}
@@ -425,7 +366,10 @@ impl DataModel {
         Ok(data_model)
     }
 
-    fn parse_entity(pair: Pair<'_, Rule>) -> Result<(Entity, Vec<Vec<String>>), Error> {
+    fn parse_entity(
+        pair: Pair<'_, Rule>,
+        system: bool,
+    ) -> Result<(Entity, Vec<Vec<String>>), Error> {
         let mut entity = Entity::new();
         let mut parsed_index = Vec::new();
         for entity_pair in pair.into_inner() {
@@ -436,6 +380,11 @@ impl DataModel {
                             Rule::deprecated => entity.deprecated = true,
                             Rule::identifier => {
                                 let name = i.as_str();
+                                if (name.starts_with('_') && !system)
+                                    || (!name.starts_with('_') && system)
+                                {
+                                    return Err(Error::InvalidName(name.to_string()));
+                                }
                                 if Self::is_reserved(name) {
                                     return Err(Error::ReservedKeyword(name.to_string()));
                                 }
@@ -681,30 +630,28 @@ impl DataModel {
     }
 
     fn check_consistency(&self) -> Result<(), Error> {
-        for namespace in &self.namespaces {
-            for entry in namespace.1 {
-                let entity = entry.1;
-                for field_entry in &entity.fields {
-                    let field = field_entry.1;
-                    match &field.field_type {
-                        FieldType::Array(e) => {
-                            if self.get_entity(e).is_err() {
-                                return Err(Error::Parser(format!(
-                                    "entity {} does not exist. Please check the definition of the {}.{}:[{}] field",
-                                    e, entity.name, field.name, e
-                                )));
-                            }
+        for entry in &self.entities {
+            let entity = entry.1;
+            for field_entry in &entity.fields {
+                let field = field_entry.1;
+                match &field.field_type {
+                    FieldType::Array(e) => {
+                        if !self.entities.contains_key(e) {
+                            return Err(Error::Parser(format!(
+                            "entity {} does not exist. Please check the definition of the {}.{}:[{}] field",
+                            e, entity.name, field.name, e
+                        )));
                         }
-                        FieldType::Entity(e) => {
-                            if self.get_entity(e).is_err() {
-                                return Err(Error::Parser(format!(
-                                    "entity {} does not exist. Please check the definition of the {}.{}:{} field",
-                                    e, entity.name, field.name, e
-                                )));
-                            }
-                        }
-                        _ => {}
                     }
+                    FieldType::Entity(e) => {
+                        if !self.entities.contains_key(e) {
+                            return Err(Error::Parser(format!(
+                        "entity {} does not exist. Please check the definition of the {}.{}:{} field",
+                        e, entity.name, field.name, e
+                    )));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -755,7 +702,7 @@ impl Index {
     pub fn name(&self) -> String {
         let mut name = String::new();
         name.push_str("idx$");
-        name.push_str(&self.entity_name.replace(".", "$"));
+        name.push_str(&self.entity_name);
         for i in &self.fields {
             name.push('$');
             name.push_str(&i.name);

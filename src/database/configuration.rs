@@ -83,20 +83,21 @@ pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+pub const SYSTEM_NAMESPACE: &str = "sys";
 //name of the system entities
-pub const ROOM_ENT: &str = "_Room";
-pub const ROOM_ENT_SHORT: &str = "0";
+pub const ROOM_ENT: &str = "sys.Room";
+pub const ROOM_ENT_SHORT: &str = "0.0";
 
-pub const AUTHORISATION_ENT: &str = "_Authorisation";
-pub const AUTHORISATION_ENT_SHORT: &str = "1";
+pub const AUTHORISATION_ENT: &str = "sys.Authorisation";
+pub const AUTHORISATION_ENT_SHORT: &str = "0.1";
 
-pub const USER_AUTH_ENT: &str = "_UserAuth";
-pub const USER_AUTH_ENT_SHORT: &str = "2";
+pub const USER_AUTH_ENT: &str = "sys.UserAuth";
+pub const USER_AUTH_ENT_SHORT: &str = "0.2";
 
-pub const ENTITY_RIGHT_ENT: &str = "_EntityRight";
-pub const ENTITY_RIGHT_ENT_SHORT: &str = "3";
+pub const ENTITY_RIGHT_ENT: &str = "sys.EntityRight";
+pub const ENTITY_RIGHT_ENT_SHORT: &str = "0.3";
 
-pub const AUTHOR_ENT: &str = "_User";
+pub const AUTHOR_ENT: &str = "sys.User";
 
 //name of the system fields
 pub const ID_FIELD: &str = "id";
@@ -134,26 +135,28 @@ pub const RIGHT_ENTITY_SHORT: &str = "32";
 pub const RIGHT_MUTATE_SELF_SHORT: &str = "33";
 pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
-pub const SYSTEM_DATA_MODEL: &str = "    
-    _Room {
-        admin: [_UserAuth],
-        user_admin: [_UserAuth],
-        authorisations:[_Authorisation]
+pub const SYSTEM_DATA_MODEL: &str = "
+sys{
+    Room {
+        admin: [sys.UserAuth],
+        user_admin: [sys.UserAuth],
+        authorisations:[sys.Authorisation]
     }
     
-    _Authorisation {
+    Authorisation {
         name: String,
-        rights:[_EntityRight] ,
-        users:[_UserAuth],
+        rights:[sys.EntityRight] ,
+        users:[sys.UserAuth],
     }
     
-    _UserAuth{
+    UserAuth{
         verifying_key: Base64,
         enabled: Boolean default true,
     }
     
-    _EntityRight {
+    EntityRight {
         entity: String,
         mutate_self: Boolean,
         mutate_all: Boolean,
-    }";
+    }
+}";

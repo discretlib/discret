@@ -180,12 +180,15 @@ impl EntityQuery {
         Ok(())
     }
 
+    pub fn sql_aliased_name(&self) -> String{
+        self.alias.clone()
+            .unwrap_or(self.name.clone())
+            .replace(".", "$")
+    }
+
+
     pub fn aliased_name(&self) -> String{
-        if self.alias.is_some(){
-            self.alias.clone().unwrap()
-        } else{
-            self.name.clone()
-        }
+        self.alias.clone().unwrap_or(self.name.clone())
     }
 
     pub fn finalize(&self, variables: &mut Variables) -> Result<(), Error>{

@@ -832,7 +832,7 @@ impl RoomAuthorisations {
 
     pub const LOAD_QUERY: &'static str = "
         query LOAD_ROOMS{
-            _Room{
+            sys.Room{
                 id
                 mdate
                 room_id

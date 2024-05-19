@@ -14,15 +14,17 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
-identifier = @{ (LETTER | NUMBER | "_")+ }
-variable   = @{ "$" ~ identifier }
-comma      =  { "," }
+identifier       = @{ (LETTER | NUMBER | "_")+ }
+namespace_entity = @{ (LETTER | NUMBER | "_" | ".")+ }
+
+variable = @{ "$" ~ identifier }
+comma    =  { "," }
 
 mutation      = { SOI ~ mutation_name ~ "{" ~ entity+ ~ "}" ~ EOI }
 mutation_name = { "mutation" ~ (identifier)? }
 
 entity      = { entity_name ~ "{" ~ field+ ~ "}" }
-entity_name = { identifier ~ (":" ~ identifier)? }
+entity_name = { namespace_entity ~ (":" ~ namespace_entity)? }
 
 field = { identifier ~ ":" ~ value }
 

@@ -16,31 +16,32 @@ mod tests {
         datamodel
             .update(
                 r#"
+            Ns{
                 @deprecated Person {
                     name : String ,
                     surname : String nullable,
-                    child : [Person] ,
-                    mother : Person ,
-                    father : Person , 
+                    child : [Ns.Person] ,
+                    mother : ns.Person ,
+                    father : ns.Person , 
                     index(name, surname),
-                     
                 }
 
                 Pet {
                     name : String default "John",
                     surname : String NULLABLE,
-                    owners : [Person],
+                    owners : [ns.Person],
                     @deprecated  age : Float NULLABLE,
                     weight : Integer NULLABLE,
                     is_vaccinated: Boolean NULLABLE,
                     INDEX(weight)
                 }
+            }
           "#,
             )
             .unwrap();
 
-        let pet = datamodel.get_entity("Pet").unwrap();
-        assert_eq!("Pet", pet.name);
+        let pet = datamodel.get_entity("Ns.Pet").unwrap();
+        assert_eq!("ns.Pet", pet.name);
 
         let age = pet.fields.get("age").unwrap();
         assert_eq!(FieldType::Float.type_id(), age.field_type.type_id());
@@ -59,7 +60,7 @@ mod tests {
 
         let owner = pet.fields.get("owners").unwrap();
         match &owner.field_type {
-            FieldType::Array(e) => assert_eq!("Person", e),
+            FieldType::Array(e) => assert_eq!("ns.Person", e),
             _ => unreachable!(),
         }
         assert_eq!(false, owner.nullable);
@@ -81,8 +82,8 @@ mod tests {
         );
         assert_eq!(true, is_vaccinated.nullable);
 
-        let person = datamodel.get_entity("Person").unwrap();
-        assert_eq!("Person", person.name);
+        let person = datamodel.get_entity("NS.Person").unwrap();
+        assert_eq!("ns.Person", person.name);
         let name = person.fields.get("name").unwrap();
         assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
         assert_eq!(false, name.nullable);
@@ -93,21 +94,21 @@ mod tests {
 
         let child = person.fields.get("child").unwrap();
         match &child.field_type {
-            FieldType::Array(e) => assert_eq!("Person", e),
+            FieldType::Array(e) => assert_eq!("Ns.Person", e),
             _ => unreachable!(),
         }
         assert_eq!(false, child.nullable);
 
         let mother = person.fields.get("mother").unwrap();
         match &mother.field_type {
-            FieldType::Entity(e) => assert_eq!("Person", e),
+            FieldType::Entity(e) => assert_eq!("ns.Person", e),
             _ => unreachable!(),
         }
         assert_eq!(false, mother.nullable);
 
         let father = person.fields.get("father").unwrap();
         match &father.field_type {
-            FieldType::Entity(e) => assert_eq!("Person", e),
+            FieldType::Entity(e) => assert_eq!("ns.Person", e),
             _ => unreachable!(),
         }
         assert_eq!(false, father.nullable);
@@ -121,11 +122,12 @@ mod tests {
         datamodel
             .update(
                 "
-                //acomment
+            {//acomment
                 Person {
                     //comment
                     child : String,
-                }",
+                }
+            }",
             )
             .expect("Comments ");
     }
@@ -137,7 +139,19 @@ mod tests {
             .update(
                 "
                 Person {
-                    child : [InvalidEntity],
+                    name : String,
+                }",
+            )
+            .expect_err("missing openning brackets ");
+
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+                {
+                    Person {
+                        child : [InvalidEntity],
+                    }
                 }",
             )
             .expect_err("InvalidEntity is not defined in the datamodel");
@@ -146,8 +160,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [Boolean],
+                {
+                    Person {
+                        child : [Boolean],
+                    }
                 }",
             )
             .expect_err("Cannot reference scalar field");
@@ -156,8 +172,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [integer],
+                {
+                    Person {
+                        child : [integer],
+                    }
                 }",
             )
             .expect_err("Cannot reference scalar field");
@@ -166,8 +184,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [float],
+                {
+                    Person {
+                        child : [float],
+                    }
                 }",
             )
             .expect_err("Cannot reference scalar field");
@@ -176,8 +196,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [json],
+                {
+                    Person {
+                        child : [json],
+                    }
                 }",
             )
             .expect_err("Cannot reference scalar field");
@@ -186,8 +208,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [base64],
+                {
+                    Person {
+                        child : [base64],
+                    }
                 }",
             )
             .expect_err("Cannot reference scalar field");
@@ -196,8 +220,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    child : [Person],
+                {
+                    Person {
+                        child : [Person],
+                    }
                 }",
             )
             .expect("Person a valid entity");
@@ -206,8 +232,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    mother : InvalidEntity,
+                {
+                    Person {
+                        mother : InvalidEntity,
+                    }
                 }",
             )
             .expect_err("InvalidEntity is not defined in the datamodel");
@@ -216,8 +244,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    mother : Person,
+                {
+                    Person {
+                        mother : Person,
+                    }
                 }",
             )
             .expect("Person is a valid entity");
@@ -229,18 +259,22 @@ mod tests {
         datamodel
             .update(
                 "
-                _Person {
-                    name : String,
+                {
+                    _Person {
+                        name : String,
+                    }
                 }",
             )
-            .expect_err("entity name cannot start with a _");
+            .expect("entity name can start with a _");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update(
                 "
-                Person {
-                    _name : String,
+                {
+                    Person {
+                        _name : String,
+                    }
                 }",
             )
             .expect_err("entity field name cannot start with a _");
@@ -249,8 +283,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Per_son_ {
-                    na_me_ : String,
+                {
+                    Per_son_ {
+                        na_me_ : String,
+                    }
                 }",
             )
             .expect("entity and field name can contain _");
@@ -259,8 +295,10 @@ mod tests {
         datamodel
             .update(
                 "
-                Person {
-                    String : String,
+                {
+                    Person {
+                        String : String,
+                    }
                 }",
             )
             .expect_err("scalar field names are reserved");
@@ -269,8 +307,10 @@ mod tests {
         datamodel
             .update(
                 "
-                json {
-                    name : String,
+                {
+                    json {
+                        name : String,
+                    }
                 }",
             )
             .expect_err("scalar field names are reserved");
@@ -278,8 +318,10 @@ mod tests {
         datamodel
             .update(
                 "
-            baSe64 {
-                name : String,
+            {   
+                baSe64 {
+                    name : String,
+                }
             }",
             )
             .expect_err("scalar field names are reserved");
@@ -287,27 +329,33 @@ mod tests {
         datamodel
             .update(
                 "
-        String {
-            name : String,
-        }",
+            {   
+                String {
+                    name : String,
+                }
+            }",
             )
             .expect_err("scalar field names are reserved");
         let mut datamodel = DataModel::new();
         datamodel
             .update(
                 "
-        floAt {
-            name : String,
-        }",
+            {
+                floAt {
+                    name : String,
+                }
+            }",
             )
             .expect_err("scalar field names are reserved");
         let mut datamodel = DataModel::new();
         datamodel
             .update(
                 "
-        INTEGer {
-            name : String,
-        }",
+            {
+                INTEGer {
+                    name : String,
+                }
+            }",
             )
             .expect_err("scalar field names are reserved");
     }
@@ -318,13 +366,15 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     child : [Person],
                 }
 
                 Person {
                     name : String,
-                }",
+                }
+            }",
             )
             .expect_err("Person is duplicated");
 
@@ -332,9 +382,11 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     child : [Person],
-                }",
+                }
+            }",
             )
             .expect("Person is not duplicated anymore");
 
@@ -342,10 +394,12 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     child : String,
                     child : [Person],
-                } ",
+                } 
+            }",
             )
             .expect_err("child is duplicated");
 
@@ -353,10 +407,12 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
-                }",
+                }
+            }",
             )
             .expect("child is not duplicated anymore");
     }
@@ -367,10 +423,12 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     child : [Person],
                     name: String
-                }",
+                }
+            }",
             )
             .expect("missing [ before person");
 
@@ -378,9 +436,11 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person @deprecated {
                     mother : Person,
-                }",
+                }
+            }",
             )
             .expect_err("@deprecated must be before the entity name");
 
@@ -388,9 +448,11 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 @deprecated Person  {
                     mother : Person,
-                }",
+                }
+            }",
             )
             .expect("@deprecated must be before the entity name");
     }
@@ -401,9 +463,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     is_vaccinated : Boolean default "true" ,
-                }"#,
+                }
+            }"#,
             )
             .expect_err("default must be a boolean not a string");
 
@@ -411,9 +475,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     is_vaccinated : Boolean default false ,
-                }"#,
+                }
+            }"#,
             )
             .expect("default is a boolean");
 
@@ -421,9 +487,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     weight : Float default true ,
-                }"#,
+                }
+            }"#,
             )
             .expect_err("default must be a Float not a boolean");
 
@@ -431,9 +499,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     weight : Float default 12 ,
-                }"#,
+                }
+            }"#,
             )
             .expect("default is an Integer which will be parsed to a Float");
 
@@ -441,9 +511,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     weight : Float default 12.5 ,
-                }"#,
+                }
+            }"#,
             )
             .expect("default is an Float");
 
@@ -451,9 +523,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     age : Integer default 12.5 ,
-                }"#,
+                }
+            }"#,
             )
             .expect_err("default must be a Integer not a Float");
 
@@ -461,9 +535,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     age : Integer default 12 ,
-                }"#,
+                }
+            }"#,
             )
             .expect("default is an Integer");
 
@@ -471,9 +547,11 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String default 12.2 ,
-                }",
+                }
+            }",
             )
             .expect_err("default must be a string not a float");
 
@@ -481,9 +559,11 @@ mod tests {
         datamodel
             .update(
                 r#"
+            {
                 Person {
                     name : String default "test" ,
-                }"#,
+                }
+            }"#,
             )
             .expect("default is a string");
     }
@@ -559,12 +639,14 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(invalid_field)
-                }",
+                }
+            }",
             )
             .expect_err("index has an invalid field name");
 
@@ -572,12 +654,14 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(child)
-                }",
+                }
+            }",
             )
             .expect_err("child cannot be indexed because it is not a scalar type");
 
@@ -585,12 +669,14 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(father)
-                }",
+                }
+            }",
             )
             .expect_err("father cannot be indexed because it is not a scalar type");
 
@@ -598,12 +684,14 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(name, name)
-                }",
+                }
+            }",
             )
             .expect_err("name is repeated twice");
 
@@ -611,13 +699,15 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(name),
                     index(name)
-                }",
+                }
+            }",
             )
             .expect_err("index(name) is defined twice");
 
@@ -625,12 +715,14 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     child : [Person],
                     father: Person,
                     index(name)
-                }",
+                }
+            }",
             )
             .expect("index is valid");
     }
@@ -641,11 +733,13 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     parent: [Person] nullable,
                     other: Person nullable,
-                }",
+                }
+            }",
             )
             .unwrap();
 
@@ -667,11 +761,13 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
                     parent: [Person],
                     other: Person ,
-                }",
+                }
+            }",
             )
             .unwrap();
 
@@ -696,47 +792,54 @@ mod tests {
         datamodel
             .update(
                 "
+            {
                 Person {
                     name : String,
-                }",
+                }
+            }",
             )
             .unwrap();
 
         let person = datamodel.get_entity("Person").unwrap();
-        assert_eq!(RESERVED_SHORT_NAMES.to_string(), person.short_name);
+        assert_eq!(0.to_string(), person.short_name);
 
         datamodel
             .update(
                 "
+            {
                 Pesssssrson {
                     name : String,
-                }",
+                }
+            }",
             )
             .expect_err("missing Person");
 
         datamodel
             .update(
                 "
+            {
                 @deprecated Pet {
                     name : String,
                 }
 
                 Person {
                     name : String,
-                } ",
+                }
+            }",
             )
             .expect_err("updates must preserve entity ordering");
 
         datamodel
             .update(
                 "
-            @deprecated Person {
-                name : String,
-            } 
-            Pet {
-                name : String,
+            {
+                @deprecated Person {
+                    name : String,
+                } 
+                Pet {
+                    name : String,
+                }
             }
-
            ",
             )
             .unwrap();
@@ -752,9 +855,12 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : String,
-                }",
+                }
+            }",
             )
             .unwrap();
 
@@ -764,32 +870,44 @@ mod tests {
 
         datamodel
             .update(
-                "Person {
-                name : Integer,
+                "
+            {
+                Person {
+                    name : Integer,
+                }
             }",
             )
             .expect_err("Cannot change a field type");
 
         datamodel
             .update(
-                "Person {
-                name : String nullable,
+                "
+            {
+                Person {
+                    name : String nullable,
+                }
             }",
             )
             .expect("Field can be changed to nullable");
 
         datamodel
             .update(
-                "Person {
-                name : String,
+                "
+            {
+                Person {
+                    name : String,
+                }
             }",
             )
             .expect_err("Field cannot be changed to not nullable without a default value");
 
         datamodel
             .update(
-                r#"Person {
-                name : String default "",
+                r#"
+            {
+                Person {
+                    name : String default "",
+                }
             }"#,
             )
             .expect(
@@ -798,27 +916,36 @@ mod tests {
 
         datamodel
             .update(
-                r#"Person {
-                name : String default "",
-                age : Integer
+                r#"
+            {
+                Person {
+                    name : String default "",
+                    age : Integer
+                }
             }"#,
             )
             .expect_err("New Field that are not nullable must have a default value");
 
         datamodel
             .update(
-                r#"Person {
-                age : Integer default 0,
-                name : String default "",
+                r#"
+            {
+                Person {
+                    age : Integer default 0,
+                    name : String default "",
+                }
             }"#,
             )
             .expect_err("Field Ordering must be respected");
 
         datamodel
             .update(
-                r#"Person {
-                name : String default "",
-                age : Integer default 0,
+                r#"
+            {
+                Person {
+                    name : String default "",
+                    age : Integer default 0,
+                }
             }"#,
             )
             .expect("Field Ordering is respected");
@@ -831,11 +958,14 @@ mod tests {
 
         datamodel
             .update(
-                r#"Person {
-            name : String default "",
-            age : Integer default 0,
-            other: Person
-        }"#,
+                r#"
+            {
+                Person {
+                    name : String default "",
+                    age : Integer default 0,
+                    other: Person
+                }
+            }"#,
             )
             .expect("Entity Field don't need default value");
     }
@@ -845,27 +975,36 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : String,
                     index(name)
-                }",
+                }
+            }",
             )
             .unwrap();
 
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : String,
                     index(name)
-                }",
+                }
+            }",
             )
             .unwrap();
 
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : String,
-                }",
+                }
+            }",
             )
             .unwrap();
         let person = datamodel.get_entity("Person").unwrap();
@@ -878,27 +1017,36 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : Base64,
-                }",
+                }
+            }",
             )
             .expect("valid");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                r#"Person {
-                        name : Base64 default "?%&JVBQS0pP",
-                    }"#,
+                r#"
+            {
+                Person {
+                    name : Base64 default "?%&JVBQS0pP",
+                }
+            }"#,
             )
             .expect_err("invalid default value");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                r#"Person {
-                            name : Base64 default "JVBQS0pP",
-                        }"#,
+                r#"
+            {
+                Person {
+                    name : Base64 default "JVBQS0pP",
+                }
+            }"#,
             )
             .expect("valid default value");
     }
@@ -908,27 +1056,36 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : Json,
-                }",
+                }
+            }",
             )
             .expect("valid Json");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                r#"Person {
-                        name : Json default "qsd",
-                    }"#,
+                r#"
+            {
+                Person {
+                    name : Json default "qsd",
+                }
+            }"#,
             )
             .expect_err("invalid default value");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                r#"Person {
-                            name : Json default "[1,2,3]",
-                        }"#,
+                r#"
+            {
+                Person {
+                    name : Json default "[1,2,3]",
+                }
+            }"#,
             )
             .expect("valid default value");
     }
@@ -937,30 +1094,27 @@ mod tests {
     fn system() {
         let mut datamodel = DataModel::new();
         datamodel
-            .update(
-                "_Person {
+            .update_system(
+                "
+            {
+                Person {
                     name : String,
-                }",
+                }
+            }",
             )
-            .expect_err("invalid entity name");
+            .expect_err("DataModel System update can only contains the sys namespace");
 
         let mut datamodel = DataModel::new();
         datamodel
             .update_system(
-                "_Person {
-                        name : String,
-                    }",
+                "
+            sys {
+                Person {
+                    name : String,
+                }
+            }",
             )
             .expect("valid system entity name");
-
-        let mut datamodel = DataModel::new();
-        datamodel
-            .update_system(
-                "Person {
-                            name : String,
-                        }",
-            )
-            .expect_err("invalid system entity name");
     }
 
     #[test]
@@ -968,21 +1122,57 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person {
+                "
+            {
+                Person {
                     name : String,
                 }
                 Pet {
                     name: String
                 }
-                ",
+            }",
             )
             .unwrap();
 
-        let name = datamodel.name_for("32").unwrap();
+        let name = datamodel.name_for("0").unwrap();
         assert_eq!("Person", name);
 
-        let name = datamodel.name_for("33").unwrap();
+        let name = datamodel.name_for("1").unwrap();
         assert_eq!("Pet", name);
+
+        datamodel
+            .update(
+                "
+                {
+                    Person {
+                        name : String,
+                    }
+                    Pet {
+                        name: String
+                    }
+                }
+                ns {
+                    Person {
+                        name : String,
+                    }
+                    Pet {
+                        name: String
+                    }
+                }",
+            )
+            .unwrap();
+
+        let name = datamodel.name_for("0").unwrap();
+        assert_eq!("Person", name);
+
+        let name = datamodel.name_for("1").unwrap();
+        assert_eq!("Pet", name);
+
+        let name = datamodel.name_for("2.0").unwrap();
+        assert_eq!("ns.Person", name);
+
+        let name = datamodel.name_for("2.1").unwrap();
+        assert_eq!("ns.Pet", name);
     }
 
     #[test]
@@ -990,14 +1180,76 @@ mod tests {
         let mut datamodel = DataModel::new();
         datamodel
             .update(
-                "Person( no_full_text_index) {
+                "
+            {
+                Person( no_full_text_index) {
                     name : String,
                 }
-                ",
+            }",
             )
             .unwrap();
 
         let person = datamodel.get_entity("Person").unwrap();
         assert!(!person.enable_full_text);
+    }
+
+    #[test]
+    fn namespace_update() {
+        let mut datamodel = DataModel::new();
+        datamodel
+            .update(
+                "
+            ns1 {
+                Person {
+                    name : String,
+                }
+            }",
+            )
+            .unwrap();
+
+        datamodel
+            .update(
+                "
+            ns2 {
+                Person {
+                    name : String,
+                }
+            }",
+            )
+            .expect_err("MissingNamespace(ns1)");
+
+        datamodel
+            .update(
+                "
+            ns2 {
+                Person {
+                    name : String,
+                }
+            }
+            ns1 {
+                Person {
+                    name : String,
+                }
+            }
+            ",
+            )
+            .expect_err("InvalidNamespaceOrdering");
+
+        datamodel
+            .update(
+                "
+            ns1 {
+                Person {
+                    name : String,
+                }
+            }
+            ns2 {
+                Person {
+                    name : String,
+                }
+            }
+            ",
+            )
+            .expect("all good");
     }
 }

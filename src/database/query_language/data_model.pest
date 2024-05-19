@@ -6,13 +6,16 @@ COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 identifier = @{ (LETTER | NUMBER | "_")+ }
 
+namespace_entity = @{ (LETTER | NUMBER | "_" | ".")+ }
+
 deprecated = @{ ^"@deprecated" }
 comma      =  { "," }
 
 deprecable_identifier = { deprecated? ~ identifier }
 
-datamodel = { SOI ~ entity* ~ EOI }
+datamodel = { SOI ~ namespace* ~ EOI }
 entity    = { deprecable_identifier ~ entity_param? ~ "{" ~ entry ~ (comma ~ entry)* ~ comma? ~ "}" }
+namespace = { identifier? ~ "{" ~ entity* ~ "}" }
 
 entity_param    = {
     "(" ~ ")"
@@ -27,8 +30,8 @@ default       = { ^"default" ~ default_value }
 default_value = { float | integer | boolean | string }
 scalar_type   = { ^"Integer" | ^"Float" | ^"Boolean" | ^"String" | ^"Base64" | ^"Json" }
 scalar_field  = { scalar_type ~ (nullable | default)? }
-entity_array  = { "[" ~ identifier ~ "]" ~ (nullable)? }
-entity_field  = { identifier ~ (nullable)? }
+entity_array  = { "[" ~ namespace_entity ~ "]" ~ (nullable)? }
+entity_field  = { namespace_entity ~ (nullable)? }
 field         = { deprecable_identifier ~ ":" ~ (entity_array | scalar_field | entity_field) }
 
 index = { ^"index" ~ "(" ~ identifier ~ (comma ~ identifier)* ~ comma? ~ ")" }

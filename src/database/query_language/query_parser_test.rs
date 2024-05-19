@@ -10,22 +10,22 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                surname : String,
-                parents : [Person],
-                pet : Pet,
-                age : Integer,
-                weight : Float,
-                is_human : Boolean
-            }
+            {
+                Person {
+                    name : String,
+                    surname : String,
+                    parents : [Person],
+                    pet : Pet,
+                    age : Integer,
+                    weight : Float,
+                    is_human : Boolean
+                }
 
-            Pet {
-                name : String ,
-                age : Integer
-            }
-        
-        ",
+                Pet {
+                    name : String ,
+                    age : Integer
+                }
+            }",
             )
             .unwrap();
 
@@ -112,11 +112,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                parents : [Person],
-            }        
-        ",
+            {
+                Person {
+                    name : String,
+                    parents : [Person],
+                }        
+            }",
             )
             .unwrap();
 
@@ -176,11 +177,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                parents : [Person],
-            }        
-        ",
+            {
+                Person {
+                    name : String,
+                    parents : [Person],
+                }        
+            }",
             )
             .unwrap();
 
@@ -234,17 +236,68 @@ mod tests {
     }
 
     #[test]
+    fn namespace() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String,
+                    age : Integer,
+                    parents : [ns.Person],
+                }        
+            }",
+            )
+            .unwrap();
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                ns.Person {
+                    name 
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("Valid");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person: ns.Person {
+                    name 
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("Valid");
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                 Person {
+                    name 
+                }
+            } "#,
+            &data_model,
+        )
+        .expect_err("invalid entity");
+    }
+
+    #[test]
     fn duplicated_field() {
         let mut data_model = DataModel::new();
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-            }        
-        ",
+            {
+                Person {
+                    name : String,
+                    age : Integer,
+                    parents : [Person],
+                }        
+            }",
             )
             .unwrap();
 
@@ -319,12 +372,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-            }        
-        ",
+            {
+                Person {
+                    name : String,
+                    age : Integer,
+                    parents : [Person],
+                }        
+            }",
             )
             .unwrap();
 
@@ -470,18 +524,19 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
+            {
+                Person {
+                    name : String,
+                    age : Integer,
+                    parents : [Person],
+                    pets : [Pet],
+                    someone : Person
+                } 
 
-            Pet {
-                name: String
-            }
-        ",
+                Pet {
+                    name: String
+                }
+            }",
             )
             .unwrap();
 
@@ -540,18 +595,19 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
-                parents : [Person],
-                pets : [Pet],
-                someone : Person
-            } 
+            {
+                Person {
+                    name : String,
+                    age : Integer,
+                    parents : [Person],
+                    pets : [Pet],
+                    someone : Person
+                } 
 
-            Pet {
-                name: String
-            }
-        ",
+                Pet {
+                    name: String
+                }
+            }",
             )
             .unwrap();
 
@@ -615,12 +671,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                parents : [Person],
-                someone : Person
-            } 
-
-        ",
+            {
+                Person {
+                    parents : [Person],
+                    someone : Person
+                } 
+            }",
             )
             .unwrap();
 
@@ -665,15 +721,15 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age : Integer,
-                weight : Float,
-                parents : [Person] ,
-                someone : Person
-            } 
-
-        ",
+            {
+                Person {
+                    name : String,
+                    age : Integer,
+                    weight : Float,
+                    parents : [Person] ,
+                    someone : Person
+                } 
+            }",
             )
             .unwrap();
 
@@ -772,12 +828,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age: Integer
-            } 
-
-        ",
+            {
+                Person {
+                    name : String,
+                    age: Integer
+                } 
+            }",
             )
             .unwrap();
 
@@ -877,12 +933,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                age: Integer
-            } 
-
-        ",
+            {
+                Person {
+                    name : String,
+                    age: Integer
+                } 
+            }",
             )
             .unwrap();
 
@@ -948,12 +1004,12 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                data: Json
-            } 
-
-        ",
+            {
+                Person {
+                    name : String,
+                    data: Json
+                } 
+            }",
             )
             .unwrap();
 
@@ -1032,13 +1088,13 @@ mod tests {
         data_model
             .update(
                 "
-            Person {
-                name : String,
-                parent: [Person],
-                someone: Person,
-            } 
-
-        ",
+            {
+                Person {
+                    name : String,
+                    parent: [Person],
+                    someone: Person,
+                } 
+            }",
             )
             .unwrap();
 

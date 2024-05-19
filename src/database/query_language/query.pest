@@ -2,14 +2,16 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 comma      =  { "," }
 
-identifier = @{ (LETTER | NUMBER | "_")+ }
-variable   = @{ "$" ~ identifier }
+identifier       = @{ (LETTER | NUMBER | "_")+ }
+namespace_entity = @{ (LETTER | NUMBER | "_" | ".")+ }
+
+variable = @{ "$" ~ identifier }
 
 query      = { SOI ~ query_name ~ "{" ~ entity+ ~ "}" ~ EOI }
 query_name = { "query" ~ (identifier)? }
 
 entity      = { entity_name ~ entity_param? ~ "{" ~ field+ ~ "}" }
-entity_name = { identifier ~ (":" ~ identifier)? }
+entity_name = { namespace_entity ~ (":" ~ namespace_entity)? }
 
 named_field = { identifier ~ (":" ~ identifier)? }
 field       = { entity | json_field | function | named_field }

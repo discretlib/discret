@@ -167,6 +167,18 @@ pub enum Error {
     #[error("{0}")]
     InvalidQuery(String),
 
+    #[error("Namespace: '{0}' does not exists")]
+    NamespaceNotFound(String),
+
+    #[error("{0}")]
+    NamespaceUpdate(String),
+
+    #[error("Entity: '{0}' does not exists")]
+    EntityNotFound(String),
+
+    #[error("Index '{0}' allready exists in entity {1}.{2}")]
+    IndexAllreadyExists(String, String, String),
+
     #[error("'{0}' is allready defined as a '{1}' and is conflicting with a field that requires an '{2}' ")]
     ConflictingVariableType(String, String, String),
 
@@ -188,6 +200,9 @@ pub enum Error {
     #[error("field {0} is conflicting with a system field, you have to change its name")]
     SystemFieldConflict(String),
 
+    #[error("Namespace: '{0}' does not exists")]
+    MissingNamespace(String),
+
     #[error("Entity {0} is missing in the new data model")]
     MissingEntity(String),
 
@@ -203,8 +218,11 @@ pub enum Error {
     #[error("Field {0}.{1} is in postion {2} and was expected in position '{3}'")]
     InvalidFieldOrdering(String, String, usize, usize),
 
+    #[error("Namespace {0} is in postion {1} and was expected in position '{2}'")]
+    InvalidNamespaceOrdering(String, usize, usize),
+
     #[error("Entity {0} is in postion {1} and was expected in position '{2}'")]
-    InvalidEntityOrdering(String, usize, usize),
+    InvalidEntityOrdering(String, String, String),
 
     #[error(transparent)]
     BoolParsing(#[from] std::str::ParseBoolError),

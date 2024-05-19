@@ -399,7 +399,7 @@ mod tests {
     async fn connect() {
         init_database_path();
         let path: PathBuf = DATA_PATH.into();
-        let model = "Person{name:String,}";
+        let model = "{Person{name:String,}}";
 
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;

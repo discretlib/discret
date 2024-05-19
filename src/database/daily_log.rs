@@ -534,7 +534,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn daily_log() {
         init_database_path();
-        let data_model = "Person{ name:String, parents:[Person] nullable }";
+        let data_model = "{Person{ name:String, parents:[Person] nullable }}";
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
@@ -560,7 +560,7 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    _Room{
+                    sys.Room{
                         admin: [{
                             verifying_key:$user_id
                         }]

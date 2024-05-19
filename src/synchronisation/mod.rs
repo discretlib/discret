@@ -149,7 +149,7 @@ mod tests {
     async fn synchronise_room() {
         init_database_path();
         let path: PathBuf = DATA_PATH.into();
-        let model = "Person{name:String,}";
+        let model = "{Person{name:String,}}";
 
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;
@@ -165,7 +165,7 @@ mod tests {
             .db
             .mutate_raw(
                 r#"mutation mut {
-                _Room{
+                sys.Room{
                     admin: [{
                         verifying_key:$first_id
                     }]
@@ -236,7 +236,7 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        let room_query = "query{ _Room{ id mdate }}";
+        let room_query = "query{ sys.Room{ id mdate }}";
         let first_res = first_peer.db.query(room_query, None).await.unwrap();
         let second_res = second_peer.db.query(room_query, None).await.unwrap();
 
@@ -267,7 +267,7 @@ mod tests {
     async fn synchronise_data() {
         init_database_path();
         let path: PathBuf = DATA_PATH.into();
-        let model = "Person{name:String,}";
+        let model = "{Person{name:String,}}";
 
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;
@@ -283,7 +283,7 @@ mod tests {
             .db
             .mutate_raw(
                 r#"mutation mut {
-                _Room{
+                sys.Room{
                     admin: [{
                         verifying_key:$first_id
                     }]
