@@ -510,11 +510,22 @@ impl LocalPeerService {
         let max_nodes = 128;
 
         //put in a block to remove the reply:Sender<> at the top that would
-        //prevent the loop in the next tokio::spawn to end when all messages are processed
-        let mut receiver = {
-            let (reply, receiver) =
+        //prevent the loop in the process_handle to end when all messages are processed
+        let process_handle = {
+            let (reply, mut receiver) =
                 mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
 
+            let db: GraphDatabaseService = db.clone();
+            let room_id = room_id.clone();
+            let process_handle = tokio::spawn(async move {
+                while let Some(nodes) =
+                    timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
+                {
+                    let nodes = nodes?;
+                    db.add_full_nodes(room_id.clone(), nodes).await?;
+                }
+                Ok::<(), crate::Error>(())
+            });
             let mut current_list = Vec::with_capacity(max_nodes);
 
             for node_identifier in filtered {
@@ -538,21 +549,10 @@ impl LocalPeerService {
                 )
                 .await?;
             }
-            receiver
+            process_handle
         };
 
-        let db: GraphDatabaseService = db.clone();
-        let room_id = room_id.clone();
-        tokio::spawn(async move {
-            while let Some(nodes) =
-                timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
-            {
-                let nodes = nodes?;
-                db.add_full_nodes(room_id.clone(), nodes).await?;
-            }
-            Ok::<(), crate::Error>(())
-        })
-        .await??;
+        process_handle.await??;
 
         Ok(has_changes)
     }
