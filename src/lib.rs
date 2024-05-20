@@ -6,6 +6,7 @@ mod event_service;
 mod log_service;
 mod message;
 mod network;
+mod peer_connection_service;
 mod security;
 mod synchronisation;
 

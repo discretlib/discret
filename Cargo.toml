@@ -8,11 +8,10 @@ edition = "2021"
 
 
 [dependencies]
-## database  3.39.4
+## database 
 rusqlite = { version = "0.31.0", features = ["bundled-sqlcipher-vendored-openssl","backup","vtab","url" ,"blob","chrono","serde_json","hooks", "window"] }
 #rusqlite = { version = "0.31.0", features = ["bundled","backup","vtab","url" ,"blob","chrono","serde_json","hooks", "window"] }
 
-zstd = "0.13.0"
 
 ## Serialisation
 serde = { version = "1.0.152", features = ["derive"] }
@@ -52,6 +51,7 @@ lazy_static = "1.4.0"
 fallible-iterator = "0.3.0"
 chrono = "0.4.23"
 lru ="0.12.3"
+sysinfo = "0.30.12"
 
 
 

@@ -137,6 +137,7 @@ pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
 pub const SYSTEM_DATA_MODEL: &str = "
 sys{
+    // Entities for the authorisation model
     Room {
         admin: [sys.UserAuth],
         user_admin: [sys.UserAuth],
@@ -159,4 +160,47 @@ sys{
         mutate_self: Boolean,
         mutate_all: Boolean,
     }
+
+    //Entities for the peer connection
+
+    AllowedPeer{
+        verifying_key: Base64,
+        meeting_pub_key: Base64,
+        banned_until: Integer,
+        beacons: [sys.Beacon],
+        enabled: Boolean,
+    }
+
+    AllowedHardware{
+        fingerprint: Base64,
+        name: String,
+    }
+
+    InboundInvitation{
+        public_key: Base64,
+        static_adress: String,
+        beacon: String,
+        signature: Base64,
+    }
+
+    ProposedInvitation{
+        beacon: [sys.Beacon],
+        remaining_use: Integer,
+        room: Base64,
+        authorisation: Base64,
+    }
+
+    Beacon{
+        address : String,
+    }
 }";
+
+pub fn sys_tables() -> Vec<String> {
+    vec![
+        "sys.AllowedPeer".to_string(),
+        "sys.AllowedHardware".to_string(),
+        "sys.InboundInvitation".to_string(),
+        "sys.ProposedInvitation".to_string(),
+        "sys.Beacon".to_string(),
+    ]
+}

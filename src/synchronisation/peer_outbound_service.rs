@@ -10,13 +10,11 @@ use tokio::sync::{
 };
 
 use crate::{
-    database::graph_database::GraphDatabaseService, log_service::LogService, security::Uid,
+    database::graph_database::GraphDatabaseService, log_service::LogService,
+    peer_connection_service::PeerConnectionService, security::Uid,
 };
 
-use super::{
-    peer_connection_service::PeerConnectionService, Answer, Error, ProveAnswer, Query,
-    QueryProtocol,
-};
+use super::{Answer, Error, ProveAnswer, Query, QueryProtocol};
 
 ///
 /// handle all inbound queries

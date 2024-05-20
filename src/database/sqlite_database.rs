@@ -177,7 +177,7 @@ pub struct Database {
     pub writer: BufferedDatabaseWriter,
 }
 impl Database {
-    pub fn new(
+    pub fn start(
         path: &PathBuf,
         secret: &[u8; 32],
         read_cache_size_in_kb: u32,
@@ -186,7 +186,7 @@ impl Database {
         write_buffer_size: usize,
         enable_memory_security: bool,
     ) -> Result<Self> {
-        let reader = DatabaseReader::new(
+        let reader = DatabaseReader::start(
             path,
             secret,
             read_cache_size_in_kb,
@@ -194,7 +194,7 @@ impl Database {
             enable_memory_security,
         )?;
 
-        let writer = BufferedDatabaseWriter::new(
+        let writer = BufferedDatabaseWriter::start(
             write_buffer_size,
             path,
             secret,
@@ -219,7 +219,7 @@ pub struct DatabaseReader {
     pub sender: flume::Sender<QueryFn>,
 }
 impl DatabaseReader {
-    pub fn new(
+    pub fn start(
         path: &PathBuf,
         secret: &[u8; 32],
         cache_size_in_kb: u32,
@@ -364,7 +364,7 @@ pub struct BufferedDatabaseWriter {
     sender: mpsc::Sender<WriteMessage>,
 }
 impl BufferedDatabaseWriter {
-    pub fn new(
+    pub fn start(
         buffer_size: usize,
         path: &PathBuf,
         secret: &[u8; 32],
@@ -798,7 +798,7 @@ mod tests {
         )
         .unwrap();
 
-        let writer = BufferedDatabaseWriter::new(10, &path, &secret, 1024, false).unwrap();
+        let writer = BufferedDatabaseWriter::start(10, &path, &secret, 1024, false).unwrap();
 
         writer
             .write(Box::new(InsertPerson {
@@ -808,7 +808,7 @@ mod tests {
             .await
             .unwrap();
 
-        let reader = DatabaseReader::new(&path, &secret, 8192, 2, false).unwrap();
+        let reader = DatabaseReader::start(&path, &secret, 8192, 2, false).unwrap();
         let res = reader
             .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
             .await
@@ -833,7 +833,7 @@ mod tests {
         )
         .unwrap();
 
-        let writer = BufferedDatabaseWriter::new(1, &path, &secret, 1024, false).unwrap();
+        let writer = BufferedDatabaseWriter::start(1, &path, &secret, 1024, false).unwrap();
 
         let loop_number = 10;
         let _start = Instant::now();
@@ -854,7 +854,7 @@ mod tests {
         }
         let _ = reply_list.pop().unwrap().await.unwrap().unwrap();
 
-        let reader = DatabaseReader::new(&path, &secret, 8192, 2, false).unwrap();
+        let reader = DatabaseReader::start(&path, &secret, 8192, 2, false).unwrap();
         let res = reader
             .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
             .await
@@ -879,7 +879,7 @@ mod tests {
         )
         .unwrap();
 
-        let writer = BufferedDatabaseWriter::new(10, &path, &secret, 1024, false).unwrap();
+        let writer = BufferedDatabaseWriter::start(10, &path, &secret, 1024, false).unwrap();
 
         let loop_number = 32;
         let _start = Instant::now();
@@ -900,7 +900,7 @@ mod tests {
         }
         reply_list.pop().unwrap().await.unwrap().unwrap();
 
-        let reader = DatabaseReader::new(&path, &secret, 8192, 2, false).unwrap();
+        let reader = DatabaseReader::start(&path, &secret, 8192, 2, false).unwrap();
         let res = reader
             .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
             .await
@@ -924,7 +924,7 @@ mod tests {
         )
         .unwrap();
 
-        let writer = BufferedDatabaseWriter::new(10, &path, &secret, 1024, false).unwrap();
+        let writer = BufferedDatabaseWriter::start(10, &path, &secret, 1024, false).unwrap();
         writer
             .write(Box::new(InsertPerson {
                 name: "Steven".to_string(),
@@ -933,7 +933,7 @@ mod tests {
             .await
             .unwrap();
 
-        let reader = DatabaseReader::new(&path, &secret, 8192, 2, false).unwrap();
+        let reader = DatabaseReader::start(&path, &secret, 8192, 2, false).unwrap();
 
         let insert_query = "INSERT INTO person (name, surname) VALUES ('bad', 'one')".to_string();
         let _res = reader

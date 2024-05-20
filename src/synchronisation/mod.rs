@@ -6,11 +6,9 @@ use crate::{
 };
 use thiserror::Error;
 pub mod node_full;
-pub mod peer_connection_service;
 pub mod peer_inbound_service;
 pub mod peer_outbound_service;
-mod room_locking_service;
-pub mod room_node;
+pub mod room_locking_service;
 
 /// Queries have 10 seconds to returns before closing connection
 pub static NETWORK_TIMEOUT_SEC: u64 = 10;
@@ -90,8 +88,6 @@ impl ProveAnswer {
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use tests::peer_connection_service::{connect_peers, listen_for_event, EventFn, Log, LogFn};
-
     use crate::{
         database::{
             configuration::Configuration,
@@ -101,12 +97,11 @@ mod tests {
         },
         event_service::{Event, EventService},
         log_service::LogService,
-        security::base64_encode,
+        peer_connection_service::{
+            connect_peers, listen_for_event, EventFn, Log, LogFn, PeerConnectionService,
+        },
+        security::{base64_encode, random32, MeetingSecret},
     };
-
-    use self::{peer_connection_service::PeerConnectionService, security::random32};
-
-    use super::*;
 
     const DATA_PATH: &str = "test_data/synchronisation/peer_service/";
     fn init_database_path() {
@@ -134,8 +129,14 @@ mod tests {
             .await
             .unwrap();
             let log = LogService::start();
-            let peer_service =
-                PeerConnectionService::start(db.clone(), event.clone(), log.clone(), 10);
+
+            let peer_service = PeerConnectionService::start(
+                MeetingSecret::new(random32()),
+                db.clone(),
+                event.clone(),
+                log.clone(),
+                10,
+            );
             Self {
                 event,
                 log,

@@ -10,13 +10,13 @@ use crate::{
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
-};
-
-use super::{
-    peer_inbound_service::{LocalPeerService, QueryService},
-    peer_outbound_service::{InboundQueryService, RemotePeerHandle},
-    room_locking_service::RoomLockService,
-    Answer, LocalEvent, QueryProtocol, RemoteEvent,
+    security::MeetingSecret,
+    synchronisation::{
+        peer_inbound_service::{LocalPeerService, QueryService},
+        peer_outbound_service::{InboundQueryService, RemotePeerHandle},
+        room_locking_service::RoomLockService,
+        Answer, LocalEvent, QueryProtocol, RemoteEvent,
+    },
 };
 
 pub enum PeerConnectionMessage {
@@ -44,6 +44,7 @@ pub struct PeerConnectionService {
 }
 impl PeerConnectionService {
     pub fn start(
+        meeting_secret: MeetingSecret,
         local_db: GraphDatabaseService,
         event_service: EventService,
         log_service: LogService,
@@ -234,6 +235,14 @@ impl PeerConnectionService {
     }
 }
 
+// struct AllowedPeer {
+//     verifying_key: Vec<u8>,
+//     meeting_pub_key: Vec<u8>,
+//     disabled_until: Integer,
+//     beacons: [sys.Beacon],
+//     allowed_hardware: [sys.Hardware],
+// }
+
 #[cfg(test)]
 pub use crate::{log_service::Log, security::random32};
 
@@ -384,8 +393,13 @@ mod tests {
             .await
             .unwrap();
             let log = LogService::start();
-            let peer_service =
-                PeerConnectionService::start(db.clone(), event.clone(), log.clone(), 10);
+            let peer_service = PeerConnectionService::start(
+                MeetingSecret::new(random32()),
+                db.clone(),
+                event.clone(),
+                log.clone(),
+                10,
+            );
             Self {
                 event,
                 log,

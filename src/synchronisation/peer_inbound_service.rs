@@ -22,17 +22,18 @@ use crate::{
         edge::EdgeDeletionEntry,
         graph_database::GraphDatabaseService,
         node::{NodeDeletionEntry, NodeIdentifier},
+        room_node::RoomNode,
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
+    peer_connection_service::PeerConnectionService,
     security::{base64_encode, random32, Uid},
 };
 
 use super::{
-    node_full::FullNode, peer_connection_service::PeerConnectionService,
-    peer_outbound_service::InboundQueryService, room_locking_service::RoomLockService,
-    room_node::RoomNode, Answer, Error, LocalEvent, ProveAnswer, Query, QueryProtocol, RemoteEvent,
-    NETWORK_TIMEOUT_SEC,
+    node_full::FullNode, peer_outbound_service::InboundQueryService,
+    room_locking_service::RoomLockService, Answer, Error, LocalEvent, ProveAnswer, Query,
+    QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
 static QUERY_SEND_BUFFER: usize = 10;

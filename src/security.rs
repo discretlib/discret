@@ -1,12 +1,14 @@
+use std::env;
+
 use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 
+use crate::date_utils::now;
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
+use sysinfo::{Networks, System};
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
-
-use crate::date_utils::now;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -32,64 +34,11 @@ pub enum Error {
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 /// used by the quic protocol
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
-
 ///
-/// Derive a password using argon2id
-///  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-/// - 20480 KB of memory
-/// - an iteration count of 2
-/// - parallelism count of 2
-/// - the login is used as a salt
+/// when exporting a key the first byte is a flag indicating the public key algorithm used
+/// currenlty useless but might become usefull in the future to implement new key algorithms
 ///
-pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
-    let password = pass_phrase.as_bytes();
-    let salt = hash(login.as_bytes());
-
-    let config = Config::<'_> {
-        mem_cost: 20480,
-        time_cost: 2,
-        variant: Variant::Argon2id,
-        lanes: 2,
-        version: Version::Version13,
-        ..Default::default()
-    };
-
-    let hashed = argon2::hash_encoded(password, &salt, &config).unwrap();
-    let matches = argon2::verify_encoded(&hashed, password).unwrap();
-    assert!(matches);
-    hash(hashed.as_bytes())
-}
-
-const UID_SIZE: usize = 16;
-
-///
-/// hash a byte array using the Blake3 hash function
-///
-pub fn hash(bytes: &[u8]) -> [u8; 32] {
-    blake3::hash(bytes).as_bytes().to_owned()
-}
-
-///
-/// derive a ket from a string context and a secret
-/// provided by the Blake3 hash function  
-///
-pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
-    blake3::derive_key(context, key_material)
-}
-
-///
-/// encode bytes into a base 64 String
-///
-pub fn base64_encode(data: &[u8]) -> String {
-    enc64.encode(data)
-}
-
-///
-/// decode a base 64 String into bytes
-///
-pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
-    enc64.decode(data).map_err(Error::from)
-}
+const KEY_TYPE_ED_2519: u8 = 1;
 
 ///
 /// import a existing signing key, using the first byte flag to detect the signature scheme
@@ -132,11 +81,6 @@ pub fn import_verifying_key(veriying_key: &[u8]) -> Result<Box<dyn VerifyingKey>
     let veriying_key = ed25519_dalek::VerifyingKey::from_bytes(&ke)?;
     Ok(Box::new(Ed2519VerifyingKey { veriying_key }))
 }
-///
-/// when exporting a key the first byte is a flag indicating the public key algorithm used
-/// currenlty useless but might become usefull in the future to implement new key algorithms
-///
-const KEY_TYPE_ED_2519: u8 = 1;
 
 ///
 /// Signing key using Ed25519 signature scheme
@@ -320,7 +264,7 @@ impl MeetingSecret {
         PublicKey::from(&self.secret)
     }
 
-    pub fn announce_id(&self, their_public: &PublicKey) -> i64 {
+    pub fn meeting_id(&self, their_public: &PublicKey) -> i64 {
         //if both public key are the same, it is the same user and hash the private key instead of using diffie hellman
         let hash = if their_public.eq(&self.public_key()) {
             hash(self.secret.as_bytes())
@@ -329,11 +273,78 @@ impl MeetingSecret {
             hash(df.as_bytes())
         };
         let mut bytes = [0; 8];
-        bytes.clone_from_slice(&hash[0..8]);
+        bytes.copy_from_slice(&hash[0..8]);
         i64::from_le_bytes(bytes)
     }
 }
 
+///
+/// Derive a password using argon2id
+///  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+/// - 20480 KB of memory
+/// - an iteration count of 2
+/// - parallelism count of 2
+/// - the login is used as a salt
+///
+pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
+    let password = pass_phrase.as_bytes();
+    let salt = hash(login.as_bytes());
+
+    let config = Config::<'_> {
+        mem_cost: 20480,
+        time_cost: 2,
+        variant: Variant::Argon2id,
+        lanes: 2,
+        version: Version::Version13,
+        ..Default::default()
+    };
+
+    let hashed = argon2::hash_encoded(password, &salt, &config).unwrap();
+    let matches = argon2::verify_encoded(&hashed, password).unwrap();
+    assert!(matches);
+    hash(hashed.as_bytes())
+}
+
+///
+/// hash a byte array using the Blake3 hash function
+///
+pub fn hash(bytes: &[u8]) -> [u8; 32] {
+    blake3::hash(bytes).as_bytes().to_owned()
+}
+
+///
+/// derive a ket from a string context and a secret
+/// provided by the Blake3 hash function  
+///
+pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
+    blake3::derive_key(context, key_material)
+}
+
+/// derive a ket from a string context and a secret
+/// provided by the Blake3 hash function  
+///
+pub fn derive_uid(context: &str, key_material: &[u8]) -> Uid {
+    let hash = blake3::derive_key(context, key_material);
+    let mut uid = default_uid();
+    uid.copy_from_slice(&hash[0..UID_SIZE]);
+    uid
+}
+
+///
+/// encode bytes into a base 64 String
+///
+pub fn base64_encode(data: &[u8]) -> String {
+    enc64.encode(data)
+}
+
+///
+/// decode a base 64 String into bytes
+///
+pub fn base64_decode(data: &[u8]) -> Result<Vec<u8>, Error> {
+    enc64.decode(data).map_err(Error::from)
+}
+
+pub const UID_SIZE: usize = 16;
 pub type Uid = [u8; UID_SIZE];
 const DEFAULT_UID: Uid = [0; UID_SIZE];
 ///
@@ -355,7 +366,7 @@ pub fn new_uid() -> Uid {
 }
 
 pub fn default_uid() -> Uid {
-    DEFAULT_UID
+    DEFAULT_UID.clone()
 }
 
 pub fn uid_decode(base64: &str) -> Result<Uid, Error> {
@@ -371,6 +382,42 @@ pub fn uid_encode(uid: &Uid) -> String {
 pub fn uid_from(v: Vec<u8>) -> Result<Uid, Error> {
     let uid: Uid = v.try_into().map_err(|_| Error::Uid())?;
     Ok(uid)
+}
+
+///
+/// try to get a unique identifier from the underlying hardware
+/// returns a unique identifier and  the machine name
+///
+/// if the platform is not supported by sysinfo, return a random number and an empty string
+///
+///
+pub fn hardware_fingerprint() -> ([u8; 32], String) {
+    let mut hasher = blake3::Hasher::new();
+
+    //add the current path to give different key for different installation
+    let path = if let Ok(path) = env::current_dir() {
+        path.display().to_string()
+    } else {
+        "".to_string()
+    };
+    hasher.update(path.as_bytes());
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let host_name = System::host_name().unwrap_or_default();
+    let name = System::name().unwrap_or_default();
+    let name = format!("{} {}", host_name, name);
+    hasher.update(name.as_bytes());
+    let networks = Networks::new_with_refreshed_list();
+    let mut macs = Vec::new();
+    for (_, network) in &networks {
+        macs.push(network.mac_address().to_string());
+    }
+    macs.sort();
+    for mac in macs {
+        hasher.update(mac.as_bytes());
+    }
+    (hasher.finalize().into(), name)
 }
 
 #[cfg(test)]
@@ -438,8 +485,15 @@ mod tests {
         let peer1_public: PublicKey = bincode::deserialize(&peer1_public).unwrap();
         let peer2_public: PublicKey = bincode::deserialize(&peer2_public).unwrap();
 
-        let id1 = peer2.announce_id(&peer1_public);
-        let id2 = peer1.announce_id(&peer2_public);
+        let id1 = peer2.meeting_id(&peer1_public);
+        let id2 = peer1.meeting_id(&peer2_public);
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    pub fn hardware_print() {
+        let info = hardware_fingerprint();
+        let info2 = hardware_fingerprint();
+        assert_eq!(info, info2);
     }
 }

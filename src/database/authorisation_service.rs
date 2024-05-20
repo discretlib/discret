@@ -5,11 +5,8 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use crate::{
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
-    security::{base64_encode, uid_decode, Ed25519SigningKey, SigningKey, Uid},
-    synchronisation::{
-        node_full::FullNode,
-        room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
-    },
+    security::{base64_encode, derive_uid, uid_decode, Ed25519SigningKey, SigningKey, Uid},
+    synchronisation::node_full::FullNode,
 };
 
 use super::{
@@ -17,12 +14,13 @@ use super::{
         self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
         ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_USER_ADMIN_FIELD,
     },
-    daily_log::{DailyLog, DailyMutations},
+    daily_log::{DailyMutations, RoomChangelog},
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
     room::*,
+    room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     Error, Result,
 };
@@ -56,7 +54,7 @@ impl Writeable for RoomMutationWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.mutation_query.write(conn)?;
         for room_id in &self.room_list {
-            DailyLog::log_room_definition(room_id, self.mutation_query.date, conn)?;
+            RoomChangelog::log_room_definition(room_id, self.mutation_query.date, conn)?;
         }
         Ok(())
     }
@@ -79,7 +77,7 @@ impl Writeable for RoomNodeWriteQuery {
     fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
         self.room.write(conn)?;
 
-        DailyLog::log_room_definition(&self.room.node.id, self.room.last_modified, conn)?;
+        RoomChangelog::log_room_definition(&self.room.node.id, self.room.last_modified, conn)?;
 
         Ok(())
     }
@@ -98,7 +96,7 @@ impl AuthorisationService {
         let (sender, mut receiver) = mpsc::channel::<AuthorisationMessage>(100);
 
         //special channel to receive RoomMutationQuery from the database writer
-        //separated to avoid potentail deadlock when inserting a lot of room at teh same time
+        //separated to avoid potentail deadlock when inserting a lot of room at the same time
         let (room_mutation_sender, mut room_mutation_receiver) =
             mpsc::channel::<AuthorisationMessage>(100);
 
@@ -573,6 +571,48 @@ impl RoomAuthorisations {
             }
         }
         Ok(rooms)
+    }
+
+    // create the system room associated the user
+    // this rooms only leaves in memory and is never written
+    // an entry is put in the room log to ensure proper data synchronisation
+    pub async fn create_system_room(
+        &mut self,
+        room_id: Uid,
+        sys_tables: Vec<String>,
+        database_writer: &BufferedDatabaseWriter,
+    ) -> Result<()> {
+        let mut room = Room {
+            id: room_id,
+            mdate: 0,
+            admins: HashMap::new(),
+            user_admins: HashMap::new(),
+            authorisations: HashMap::new(),
+        };
+
+        let mut auth = Authorisation {
+            id: derive_uid("auth", &room_id),
+            mdate: 0,
+            users: HashMap::new(),
+            rights: HashMap::new(),
+        };
+        let vkey = self.signing_key.export_verifying_key();
+        auth.add_user(User {
+            verifying_key: vkey,
+            date: 0,
+            enabled: true,
+        })?;
+
+        for sys_table in sys_tables {
+            auth.add_right(EntityRight::new(0, sys_table, true, false))?;
+        }
+
+        room.authorisations.insert(auth.id, auth);
+
+        let change_log = RoomChangelog { room_id, mdate: 0 };
+        database_writer.write(Box::new(change_log)).await?;
+        self.add_room(room);
+        Ok(())
     }
 
     pub fn validate_room_mutation(

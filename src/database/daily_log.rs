@@ -8,6 +8,8 @@ use crate::{
     security::Uid,
 };
 
+use super::sqlite_database::Writeable;
+
 ///
 /// Stores the modified dates for each rooms during the batch insert.
 ///
@@ -342,18 +344,6 @@ impl DailyLog {
         Ok(res)
     }
 
-    pub fn log_room_definition(
-        room_id: &Uid,
-        mdate: i64,
-        conn: &Connection,
-    ) -> Result<(), rusqlite::Error> {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)",
-        )?;
-        stmt.execute((room_id, mdate))?;
-        Ok(())
-    }
-
     ///
     /// get room list sorted by modification date
     /// allows synchronisation to start with the most recently updated rooms
@@ -435,6 +425,42 @@ impl DailyLog {
         id_date_list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         Ok(id_date_list.into_iter().map(|a| a.0).collect())
+    }
+}
+
+pub fn log_room_definition(
+    room_id: &Uid,
+    mdate: i64,
+    conn: &Connection,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt =
+        conn.prepare_cached("INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)")?;
+    stmt.execute((room_id, mdate))?;
+    Ok(())
+}
+
+const ROOM_LOG_INSERT: &str = "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)";
+
+pub struct RoomChangelog {
+    pub room_id: Uid,
+    pub mdate: i64,
+}
+impl RoomChangelog {
+    pub fn log_room_definition(
+        room_id: &Uid,
+        mdate: i64,
+        conn: &Connection,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(ROOM_LOG_INSERT)?;
+        stmt.execute((room_id, mdate))?;
+        Ok(())
+    }
+}
+impl Writeable for RoomChangelog {
+    fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(ROOM_LOG_INSERT)?;
+        stmt.execute((self.room_id, self.mdate))?;
+        Ok(())
     }
 }
 
@@ -659,7 +685,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         DailyLog::create_tables(&conn).unwrap();
         let room_id = new_uid();
-        DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
+        RoomChangelog::log_room_definition(&room_id, 100, &conn).unwrap();
 
         let def = RoomDefinitionLog::get(&room_id, &conn).unwrap().unwrap();
         assert_eq!(def.room_id, room_id);
@@ -710,7 +736,7 @@ mod tests {
         for _ in 0..num_room {
             let room_id = new_uid();
             let date: i64 = OsRng.gen();
-            DailyLog::log_room_definition(&room_id, 100, &conn).unwrap();
+            RoomChangelog::log_room_definition(&room_id, 100, &conn).unwrap();
             let daily_log = DailyLog {
                 room_id: room_id.clone(),
                 date,
@@ -725,7 +751,7 @@ mod tests {
         }
 
         let empty_room_id = new_uid();
-        DailyLog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
+        RoomChangelog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
         rooms.insert(empty_room_id.clone(), i64::MAX);
         room_ids.insert(empty_room_id.clone());
         num_room += 1;

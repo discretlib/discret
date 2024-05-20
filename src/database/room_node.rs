@@ -946,8 +946,9 @@ mod tests {
         date_utils::now,
         event_service::EventService,
         security::{base64_encode, new_uid, random32, Ed25519SigningKey},
-        synchronisation::room_node::*,
     };
+
+    use super::*;
     use std::{fs, path::PathBuf};
     const DATA_PATH: &str = "test_data/database/authorisation_synch_test/";
     fn init_database_path() {

@@ -4,28 +4,32 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::daily_log::{DailyLog, RoomDefinitionLog};
-use super::edge::EdgeDeletionEntry;
-use super::node::{Node, NodeDeletionEntry, NodeIdentifier};
+use super::configuration;
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     configuration::{Configuration, SYSTEM_DATA_MODEL},
     daily_log::DailyLogsUpdate,
+    daily_log::{DailyLog, RoomDefinitionLog},
     deletion::DeletionQuery,
+    edge::EdgeDeletionEntry,
     mutation_query::MutationQuery,
+    node::{Node, NodeDeletionEntry, NodeIdentifier},
     query::{PreparedQueries, Query},
     query_language::{
         data_model_parser::DataModel, deletion_parser::DeletionParser,
         mutation_parser::MutationParser, parameter::Parameters, query_parser::QueryParser,
     },
+    room_node::RoomNode,
     sqlite_database::{Database, DatabaseReader, RowMappingFn, WriteMessage, Writeable},
     Error, Result,
 };
-use crate::date_utils::now;
-use crate::event_service::EventService;
-use crate::security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey, Uid};
-use crate::synchronisation::node_full::FullNode;
-use crate::synchronisation::room_node::RoomNode;
+use crate::security::derive_uid;
+use crate::{
+    date_utils::now,
+    event_service::EventService,
+    security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey, Uid},
+    synchronisation::node_full::FullNode,
+};
 
 const LRU_SIZE: usize = 128;
 
@@ -51,6 +55,7 @@ pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
     database_reader: DatabaseReader,
     verifying_key: Vec<u8>,
+    system_room_id: Uid,
 }
 impl GraphDatabaseService {
     pub async fn start(
@@ -62,18 +67,18 @@ impl GraphDatabaseService {
         event_service: EventService,
     ) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
+        let system_room_id = derive_uid(&format!("{}{}", name, "SYSTEM_ROOM"), key_material);
 
-        let mut db = GraphDatabase::open(name, key_material, data_folder, config, event_service)?;
-        db.update_data_model(model).await?;
-        db.initialise_authorisations().await?;
-        //ensure that the logs are properly computed during startup  because the application can be closed during a synchronisation
-        db.graph_database
-            .writer
-            .send(WriteMessage::ComputeDailyLog(
-                DailyLogsUpdate::default(),
-                db.event_service.sender.clone(),
-            ))
-            .await?;
+        let mut db = GraphDatabase::start(
+            system_room_id,
+            model,
+            name,
+            key_material,
+            data_folder,
+            config,
+            event_service,
+        )
+        .await?;
 
         let database_reader = db.graph_database.reader.clone();
 
@@ -168,6 +173,7 @@ impl GraphDatabaseService {
             sender,
             database_reader,
             verifying_key,
+            system_room_id,
         })
     }
 
@@ -177,6 +183,14 @@ impl GraphDatabaseService {
     ///
     pub fn verifying_key(&self) -> &Vec<u8> {
         &self.verifying_key
+    }
+
+    ///
+    /// Get the verifying key derived from the key material
+    /// The assiociated signing key is used internaly to sign every change
+    ///
+    pub fn system_room_id(&self) -> &Uid {
+        &self.system_room_id
     }
 
     ///
@@ -507,14 +521,16 @@ struct GraphDatabase {
     verifying_key: Vec<u8>,
 }
 impl GraphDatabase {
-    pub fn open(
+    pub async fn start(
+        system_room_id: Uid,
+        model: &str,
         name: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
         config: Configuration,
         event_service: EventService,
     ) -> Result<Self> {
-        let database_secret = derive_key(&base64_encode(name.as_bytes()), key_material);
+        let database_secret = derive_key(&name, key_material);
 
         let database_name = derive_key("DATABASE_NAME", &database_secret);
 
@@ -524,7 +540,7 @@ impl GraphDatabase {
         let verifying_key = signing_key.export_verifying_key();
         let database_path = build_path(data_folder, &base64_encode(&database_name))?;
 
-        let graph_database = Database::new(
+        let graph_database = Database::start(
             &database_path,
             &database_secret,
             config.read_cache_size_in_kb,
@@ -540,15 +556,23 @@ impl GraphDatabase {
 
         let data_model = DataModel::new();
 
-        let auth = RoomAuthorisations {
+        let mut auth = RoomAuthorisations {
             signing_key,
             rooms: HashMap::new(),
         };
 
+        // create the system room associated the user
+        auth.create_system_room(
+            system_room_id,
+            configuration::sys_tables(),
+            &graph_database.writer,
+        )
+        .await?;
+
         let auth_service =
             AuthorisationService::start(auth, graph_database.writer.clone(), event_service.clone());
 
-        let database = Self {
+        let mut database = Self {
             data_model,
             auth_service,
             graph_database,
@@ -559,6 +583,18 @@ impl GraphDatabase {
             deletion_cache,
             verifying_key,
         };
+
+        database.update_data_model(model).await?;
+        database.initialise_authorisations().await?;
+        //ensure that the logs are properly computed during startup  because the application can be closed during a synchronisation
+        database
+            .graph_database
+            .writer
+            .send(WriteMessage::ComputeDailyLog(
+                DailyLogsUpdate::default(),
+                database.event_service.sender.clone(),
+            ))
+            .await?;
 
         Ok(database)
     }
@@ -979,7 +1015,10 @@ mod tests {
         // }
     }
 
-    use crate::{database::query_language::parameter::ParametersAdd, security::random32};
+    use crate::{
+        database::query_language::parameter::ParametersAdd,
+        security::{random32, uid_encode},
+    };
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
@@ -1150,5 +1189,159 @@ mod tests {
             .await
             .unwrap();
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn init_room_id() {
+        init_database_path();
+        let secret = random32();
+
+        let uid1 = {
+            let data_model = "
+                ns {
+                    Person{ 
+                        name:String,
+                        index(name)
+                    }
+                }";
+            let path: PathBuf = DATA_PATH.into();
+            let app = GraphDatabaseService::start(
+                "app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+            app.system_room_id
+        };
+
+        let uid2 = {
+            let data_model = "
+                ns {
+                    Person{ 
+                        name:String,
+                        index(name)
+                    }
+                }";
+            let path: PathBuf = DATA_PATH.into();
+            let app = GraphDatabaseService::start(
+                "app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+            app.system_room_id
+        };
+        assert_eq!(uid1, uid2);
+
+        let uid3 = {
+            let data_model = "
+                ns {
+                    Person{ 
+                        name:String,
+                        index(name)
+                    }
+                }";
+            let path: PathBuf = DATA_PATH.into();
+            let app = GraphDatabaseService::start(
+                "another app",
+                &data_model,
+                &secret,
+                path,
+                Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+            app.system_room_id
+        };
+
+        //the system_room_id depends on the name
+        assert_ne!(uid1, uid3);
+        let uid4 = {
+            let data_model = "
+                ns {
+                    Person{ 
+                        name:String,
+                        index(name)
+                    }
+                }";
+            let path: PathBuf = DATA_PATH.into();
+            let app = GraphDatabaseService::start(
+                "another app",
+                &data_model,
+                &random32(),
+                path,
+                Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+            app.system_room_id
+        };
+
+        //the system_room_id depends on the key_material
+        assert_ne!(uid3, uid4);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn insert_system_room() {
+        init_database_path();
+        let secret = random32();
+
+        let data_model = "
+                ns {
+                    Person{ 
+                        name:String,
+                        index(name)
+                    }
+                }";
+        let path: PathBuf = DATA_PATH.into();
+        let app = GraphDatabaseService::start(
+            "app",
+            &data_model,
+            &secret,
+            path,
+            Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+        let room_id = app.system_room_id;
+        let mut param = Parameters::new();
+        param.add("room_id", uid_encode(&room_id)).unwrap();
+
+        app.mutate(
+            r#"mutation{
+                ns.Person{
+                    room_id : $room_id
+                    name : "test"
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .expect_err("AuthorisationRejected");
+
+        let mut param = Parameters::new();
+        param.add("room_id", uid_encode(&room_id)).unwrap();
+        app.mutate(
+            r#"mutation{
+                sys.Beacon{
+                        room_id : $room_id
+                        address : "test"
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .expect("sys.Beacon can be inserted");
     }
 }
