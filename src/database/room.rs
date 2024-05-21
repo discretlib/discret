@@ -1,9 +1,12 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use crate::security::{base64_decode, uid_decode, Uid};
 
 use super::{
-    configuration::{self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD},
+    system_entities::{self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD},
     Error, Result,
 };
 
@@ -142,6 +145,24 @@ impl Room {
         }
         false
     }
+
+    pub fn users(&self) -> HashSet<Vec<u8>> {
+        let mut user_set = HashSet::new();
+        for users in &self.admins {
+            for user in users.1 {
+                user_set.insert(user.verifying_key.clone());
+            }
+        }
+        for users in &self.user_admins {
+            for user in users.1 {
+                user_set.insert(user.verifying_key.clone());
+            }
+        }
+        for entry in &self.authorisations {
+            entry.1.get_users(&mut user_set);
+        }
+        user_set
+    }
 }
 
 ///
@@ -213,6 +234,14 @@ impl Authorisation {
                 RightType::MutateAll => entity_right.mutate_all,
             },
             None => false,
+        }
+    }
+
+    pub fn get_users(&self, user_set: &mut HashSet<Vec<u8>>) {
+        for entry in &self.users {
+            for user in entry.1 {
+                user_set.insert(user.verifying_key.clone());
+            }
         }
     }
 }
@@ -356,14 +385,14 @@ pub fn user_from_json(json: &str, date: i64) -> Result<User> {
         .ok_or(Error::InvalidJsonObject("User".to_string()))?;
 
     let verifying_key = map
-        .get(configuration::USER_VERIFYING_KEY_SHORT)
+        .get(system_entities::USER_VERIFYING_KEY_SHORT)
         .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
     let verifying_key = verifying_key
         .as_str()
         .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
     let verifying_key = base64_decode(verifying_key.as_bytes())?;
 
-    let enabled = match map.get(configuration::USER_ENABLED_SHORT) {
+    let enabled = match map.get(system_entities::USER_ENABLED_SHORT) {
         Some(value) => value.as_bool().unwrap_or(true),
         None => true,
     };
@@ -383,14 +412,14 @@ pub fn entity_right_from_json(valid_from: i64, json: &str) -> Result<EntityRight
         .ok_or(Error::InvalidJsonObject("EntityRight".to_string()))?;
 
     let entity = map
-        .get(configuration::RIGHT_ENTITY_SHORT)
+        .get(system_entities::RIGHT_ENTITY_SHORT)
         .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
     let entity = entity
         .as_str()
         .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
 
     let mutate_self =
-        map.get(configuration::RIGHT_MUTATE_SELF_SHORT)
+        map.get(system_entities::RIGHT_MUTATE_SELF_SHORT)
             .ok_or(Error::MissingJsonField(
                 "EntityRight.mutate_self".to_string(),
             ))?;
@@ -399,7 +428,7 @@ pub fn entity_right_from_json(valid_from: i64, json: &str) -> Result<EntityRight
     ))?;
 
     let mutate_all =
-        map.get(configuration::RIGHT_MUTATE_ALL_SHORT)
+        map.get(system_entities::RIGHT_MUTATE_ALL_SHORT)
             .ok_or(Error::MissingJsonField(
                 "EntityRight.mutate_self".to_string(),
             ))?;

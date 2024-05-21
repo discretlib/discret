@@ -452,8 +452,8 @@ mod tests {
     use std::{collections::HashSet, fs, path::PathBuf};
 
     use crate::{
+        configuration::Configuration,
         database::{
-            configuration::Configuration,
             graph_database::GraphDatabaseService,
             node::NodeIdentifier,
             query_language::parameter::{Parameters, ParametersAdd},

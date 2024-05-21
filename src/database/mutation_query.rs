@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::{
-    configuration::{ID_FIELD, ROOM_ID_FIELD},
+    system_entities::{ID_FIELD, ROOM_ID_FIELD},
     daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
     node::{extract_json, Node},

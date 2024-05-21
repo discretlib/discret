@@ -89,8 +89,8 @@ mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
     use crate::{
+        configuration::Configuration,
         database::{
-            configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
             sqlite_database::RowMappingFn,

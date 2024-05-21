@@ -4,10 +4,9 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::configuration;
+use super::system_entities;
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
-    configuration::{Configuration, SYSTEM_DATA_MODEL},
     daily_log::DailyLogsUpdate,
     daily_log::{DailyLog, RoomDefinitionLog},
     deletion::DeletionQuery,
@@ -21,13 +20,15 @@ use super::{
     },
     room_node::RoomNode,
     sqlite_database::{Database, DatabaseReader, RowMappingFn, WriteMessage, Writeable},
+    system_entities::SYSTEM_DATA_MODEL,
     Error, Result,
 };
-use crate::security::derive_uid;
+
 use crate::{
+    configuration::Configuration,
     date_utils::now,
     event_service::EventService,
-    security::{base64_encode, derive_key, Ed25519SigningKey, SigningKey, Uid},
+    security::{base64_encode, derive_key, derive_uid, Ed25519SigningKey, SigningKey, Uid},
     synchronisation::node_full::FullNode,
 };
 
@@ -564,7 +565,7 @@ impl GraphDatabase {
         // create the system room associated the user
         auth.create_system_room(
             system_room_id,
-            configuration::sys_tables(),
+            system_entities::sys_room_entities(),
             &graph_database.writer,
         )
         .await?;

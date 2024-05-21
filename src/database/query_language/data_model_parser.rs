@@ -1,8 +1,8 @@
 use crate::{
-    database::configuration::{
-        AUTHOR_ENT, AUTHOR_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD,
-        JSON_FIELD, MODIFICATION_DATE_FIELD, ROOM_ENT, ROOM_FIELD, ROOM_ID_FIELD, SIGNATURE_FIELD,
-        SYSTEM_NAMESPACE, VERIFYING_KEY_FIELD,
+    database::system_entities::{
+        BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
+        MODIFICATION_DATE_FIELD, PEER_ENT, PEER_FIELD, ROOM_ENT, ROOM_FIELD, ROOM_ID_FIELD,
+        SIGNATURE_FIELD, SYSTEM_NAMESPACE, VERIFYING_KEY_FIELD,
     },
     security::base64_decode,
 };
@@ -81,11 +81,11 @@ lazy_static::lazy_static! {
         );
 
         fields.insert(
-            AUTHOR_FIELD.to_string(),
+            PEER_FIELD.to_string(),
             Field {
-                name: AUTHOR_FIELD.to_string(),
-                short_name: AUTHOR_FIELD.to_string(),
-                field_type: FieldType::Entity(AUTHOR_ENT.to_string()),
+                name: PEER_FIELD.to_string(),
+                short_name: PEER_FIELD.to_string(),
+                field_type: FieldType::Entity(PEER_ENT.to_string()),
                 default_value: None,
                 nullable: false,
                 deprecated: false,

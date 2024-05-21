@@ -244,42 +244,6 @@ impl AllowedConnection {
     pub async fn add_invite() {}
 }
 
-pub struct AllowedPeer {
-    id: String,
-    verifying_key: String,
-    meeting_pub_key: String,
-    banned_until: i64,
-    beacons: Vec<Beacon>,
-    static_adress: Option<String>,
-}
-
-pub struct AllowedHardware {
-    id: String,
-    fingerprint: String,
-    name: String,
-}
-
-pub struct InboundInvitation {
-    id: String,
-    invite_id: String,
-    beacons: Vec<Beacon>,
-    static_adress: Option<String>,
-    signature: String,
-}
-
-pub struct ProposedInvitation {
-    id: String,
-    beacons: Vec<Beacon>,
-    remaining_use: i64,
-    room: String,
-    authorisation: String,
-}
-
-pub struct Beacon {
-    id: String,
-    address: String,
-}
-
 #[cfg(test)]
 pub use crate::{log_service::Log, security::random32};
 
@@ -400,7 +364,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use crate::database::configuration::Configuration;
+    use crate::configuration::Configuration;
 
     use super::*;
 

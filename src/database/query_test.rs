@@ -5,7 +5,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::database::configuration::SYSTEM_DATA_MODEL;
+    use crate::database::system_entities::SYSTEM_DATA_MODEL;
     use crate::security::{uid_encode, Ed25519SigningKey};
     use crate::database::sqlite_database::Writeable;
     use crate::database::mutation_query::MutationQuery;
@@ -1610,8 +1610,7 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                auth: sys.User {
-                    name : "author and me"
+                auth: sys.Peer {
                     meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
 
@@ -1645,13 +1644,13 @@ mod tests {
             query sample{
                 ns.Person (order_by(name asc)) {
                     name
-                    author{
-                        name
+                    sys_peer{
+                        meeting_pub_key
                     }
                     parents (order_by(name asc)) {
                         name  
-                        author{
-                            name
+                        sys_peer{
+                            meeting_pub_key
                         }
                     }
                 }
@@ -1673,22 +1672,22 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         //println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"author\":{\"name\":\"author and me\"},\"parents\":[{\"name\":\"Ada Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"Ada Mother\",\"author\":{\"name\":\"author and me\"}}]},{\"name\":\"John\",\"author\":{\"name\":\"author and me\"},\"parents\":[{\"name\":\"John Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"John Mother\",\"author\":{\"name\":\"author and me\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
         
       
         let query_parser = QueryParser::parse(
             r#"
             query sample{
-                ns.Person (order_by(name asc),  nullable(author)) {
+                ns.Person (order_by(name asc),  nullable(sys_peer)) {
                     name
-                    author (name="me",){
-                        name
+                    sys_peer (meeting_pub_key="cXNkcXNkcXM",){
+                        meeting_pub_key
                     }
                     parents (order_by(name asc)) {
                         name  
-                        author{
-                            name
+                        sys_peer{
+                            meeting_pub_key
                         }
                     }
                 }
@@ -1710,46 +1709,12 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
        // println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"author\":null,\"parents\":[{\"name\":\"Ada Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"Ada Mother\",\"author\":{\"name\":\"author and me\"}}]},{\"name\":\"John\",\"author\":null,\"parents\":[{\"name\":\"John Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"John Mother\",\"author\":{\"name\":\"author and me\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":null,\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":null,\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
          
 
               
-        let query_parser = QueryParser::parse(
-            r#"
-            query sample{
-                ns.Person (order_by(name asc)) {
-                    name
-                    author (search("thor")){
-                        name
-                    }
-                    parents (order_by(name asc)) {
-                        name  
-                        author{
-                            name
-                        }
-                    }
-                }
-            }
-        "#,
-            &data_model,
-        )
-        .unwrap();
-
-        
-        let query = PreparedQueries::build(&query_parser).unwrap();
-        // println!("{}", &query.sql_queries[0].sql_query);
-        let param = Parameters::new();
-        let sql = Query {
-            parameters: param,
-            parser: Arc::new(query_parser),
-            sql_queries: Arc::new(query),
-        };
-        let result = sql.read(&conn).unwrap();
-        println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"author\":{\"name\":\"author and me\"},\"parents\":[{\"name\":\"Ada Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"Ada Mother\",\"author\":{\"name\":\"author and me\"}}]},{\"name\":\"John\",\"author\":{\"name\":\"author and me\"},\"parents\":[{\"name\":\"John Father\",\"author\":{\"name\":\"author and me\"}},{\"name\":\"John Mother\",\"author\":{\"name\":\"author and me\"}}]}]\n}";
-        assert_eq!(expected, result);
-         
+      
       //  let res:serde_json::Value = serde_json::from_str(&result).unwrap();
         // println!("{}", serde_json::to_string_pretty(&res).unwrap());
         
@@ -1782,8 +1747,7 @@ mod tests {
         let mutation = MutationParser::parse(
             r#"
             mutation mutmut {
-                auth: sys.User {
-                    name : "me and me"
+                auth: sys.Peer {
                     meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
             } "#,
@@ -1848,25 +1812,19 @@ mod tests {
             r#"
             query sample{
                 ns.Person (order_by(name asc)) {
-                    room {
+                    sys_room {
                         authorisations{
                             name
                         }
                     }
                     name
-                    author{
-                        name
-                    }
                     parents (order_by(name asc)) {
-                        room {
+                        sys_room {
                             authorisations{
                                 name
                             }
                         }
-                        name  
-                        author{
-                            name
-                        }
+                        name
                     }
                 }
             }
@@ -1887,7 +1845,7 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         //println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada\",\"author\":{\"name\":\"me and me\"},\"parents\":[{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Father\",\"author\":{\"name\":\"me and me\"}},{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Mother\",\"author\":{\"name\":\"me and me\"}}]},{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John\",\"author\":{\"name\":\"me and me\"},\"parents\":[{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Father\",\"author\":{\"name\":\"me and me\"}},{\"room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Mother\",\"author\":{\"name\":\"me and me\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada\",\"parents\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Father\"},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Mother\"}]},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John\",\"parents\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Father\"},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Mother\"}]}]\n}";
         assert_eq!(expected, result);
         
       
@@ -1895,25 +1853,19 @@ mod tests {
             r#"
             query sample{
                 ns.Person (order_by(name asc)) {
-                    room {
+                    sys_room {
                         authorisations (name="not"){
                             name
                         }
                     }
                     name
-                    author{
-                        name
-                    }
                     parents (order_by(name asc)) {
-                        room {
+                        sys_room {
                             authorisations{
                                 name
                             }
                         }
                         name  
-                        author{
-                            name
-                        }
                     }
                 }
             }

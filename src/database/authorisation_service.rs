@@ -10,10 +10,6 @@ use crate::{
 };
 
 use super::{
-    configuration::{
-        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_USER_ADMIN_FIELD,
-    },
     daily_log::{DailyMutations, RoomChangelog},
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
@@ -22,6 +18,10 @@ use super::{
     room::*,
     room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
+    system_entities::{
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
+        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_USER_ADMIN_FIELD,
+    },
     Error, Result,
 };
 
@@ -330,10 +330,10 @@ impl RoomAuthorisations {
         let verifying_key = self.signing_key.export_verifying_key();
         for node in &deletion_query.nodes {
             match node.name.as_str() {
-                configuration::ROOM_ENT
-                | configuration::AUTHORISATION_ENT
-                | configuration::ENTITY_RIGHT_ENT
-                | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
+                system_entities::ROOM_ENT
+                | system_entities::AUTHORISATION_ENT
+                | system_entities::ENTITY_RIGHT_ENT
+                | system_entities::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
                 _ => {
                     if let Some(room_id) = &node.node.room_id {
                         match self.rooms.get(room_id) {
@@ -376,10 +376,10 @@ impl RoomAuthorisations {
 
         for edge in &deletion_query.edges {
             match edge.edge.src_entity.as_str() {
-                configuration::ROOM_ENT
-                | configuration::AUTHORISATION_ENT
-                | configuration::ENTITY_RIGHT_ENT
-                | configuration::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
+                system_entities::ROOM_ENT
+                | system_entities::AUTHORISATION_ENT
+                | system_entities::ENTITY_RIGHT_ENT
+                | system_entities::USER_AUTH_ENT => return Err(Error::DeleteNotAllowed()),
                 _ => {
                     if let Some(room_id) = &edge.room_id {
                         match self.rooms.get(room_id) {
@@ -445,15 +445,15 @@ impl RoomAuthorisations {
         let mut rooms = Vec::new();
         let now = now();
         match to_insert.entity.as_str() {
-            configuration::ROOM_ENT => {
+            system_entities::ROOM_ENT => {
                 let room = self.validate_room_mutation(entity_to_mutate, verifying_key)?;
                 if let Some(room) = room {
                     rooms.push(room);
                 }
             }
-            configuration::AUTHORISATION_ENT
-            | configuration::ENTITY_RIGHT_ENT
-            | configuration::USER_AUTH_ENT => {
+            system_entities::AUTHORISATION_ENT
+            | system_entities::ENTITY_RIGHT_ENT
+            | system_entities::USER_AUTH_ENT => {
                 return Err(Error::InvalidAuthorisationMutation(
                     to_insert.entity.clone(),
                 ))

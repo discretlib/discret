@@ -487,7 +487,7 @@ impl RoomDefinitionLog {
         let query = "
             SELECT 
                 rcl.room_id as room_id,  
-                rcl.mdate as room_defintion_date, 
+                rcl.mdate as room_def_date, 
                 dl.date as last_data,
                 dl.entry_number,
                 dl.daily_hash,
@@ -530,8 +530,8 @@ mod tests {
     use rusqlite::Connection;
 
     use crate::{
+        configuration::Configuration,
         database::{
-            configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
         },

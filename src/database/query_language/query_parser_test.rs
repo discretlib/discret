@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::database::{
-        configuration,
+        system_entities,
         query_language::{data_model_parser::DataModel, query_parser::QueryParser},
     };
 
@@ -1160,7 +1160,7 @@ mod tests {
     fn author() {
         let mut data_model = DataModel::new();
         data_model
-            .update_system(configuration::SYSTEM_DATA_MODEL)
+            .update_system(system_entities::SYSTEM_DATA_MODEL)
             .unwrap();
         data_model
             .update(

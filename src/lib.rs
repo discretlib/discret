@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod configuration;
 mod database;
 mod date_utils;
 mod event_service;

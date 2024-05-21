@@ -325,14 +325,21 @@ impl LocalPeerService {
         query_service: &QueryService,
     ) -> Result<(), crate::Error> {
         let remote_room_def: Option<RoomDefinitionLog> =
-            Self::query(query_service, Query::RoomDefinition(room_id.clone())).await?;
-        let local_room_def = db.get_room_definition(room_id.clone()).await?;
+            Self::query(query_service, Query::RoomDefinition(room_id)).await?;
+        let local_room_def = db.get_room_definition(room_id).await?;
 
         if remote_room_def.is_none() {
             return Err(crate::Error::RoomUnknow(base64_encode(&room_id)));
         }
         let remote_room = remote_room_def.unwrap();
         Self::synchronise_room_definition(&remote_room, &local_room_def, db, query_service).await?;
+
+        // let missing_users: Vec<Vec<u8>> = db.get_missing_users(room_id).await?;
+        //
+        //ask for let users:Vec<Node> = Self::query(query_service, Query::Users(room_id, Vec<Vec<u8>>)).await?;  user get_users(room.id, Vec<verifying_key>)
+        //db.add_users(Vec<Node>)
+        //write user
+
         if Self::synchronise_room_data(&remote_room, &local_room_def, db, query_service).await? {
             db.compute_daily_log().await;
         }
@@ -358,7 +365,7 @@ impl LocalPeerService {
 
         if load_room {
             let node: Option<RoomNode> =
-                Self::query(query_service, Query::RoomNode(remote_room.room_id.clone())).await?;
+                Self::query(query_service, Query::RoomNode(remote_room.room_id)).await?;
             match node {
                 Some(node) => db.add_room_node(node).await?,
                 None => {
@@ -392,20 +399,19 @@ impl LocalPeerService {
             None => true,
         };
         if sync_history {
-            Self::synchronise_history(&remote_room.room_id, db, query_service).await
+            Self::synchronise_history(remote_room.room_id, db, query_service).await
         } else {
             Self::synchronise_last_day(remote_room, local_room_def, db, query_service).await
         }
     }
 
     async fn synchronise_history(
-        room_id: &Uid,
+        room_id: Uid,
         db: &GraphDatabaseService,
         query_service: &QueryService,
     ) -> Result<bool, crate::Error> {
-        let remote_log: Vec<DailyLog> =
-            Self::query(query_service, Query::RoomLog(room_id.clone())).await?;
-        let local_log = db.get_room_log(room_id.clone()).await?;
+        let remote_log: Vec<DailyLog> = Self::query(query_service, Query::RoomLog(room_id)).await?;
+        let local_log = db.get_room_log(room_id).await?;
 
         let mut local_map = HashMap::with_capacity(local_log.len());
         for log in local_log {
@@ -454,7 +460,7 @@ impl LocalPeerService {
 
         if sync_day {
             Self::synchronise_day(
-                &remote_room.room_id,
+                remote_room.room_id,
                 remote_room.last_data_date.unwrap(), //checked by sync_day
                 db,
                 query_service,
@@ -466,7 +472,7 @@ impl LocalPeerService {
     }
 
     async fn synchronise_day(
-        room_id: &Uid,
+        room_id: Uid,
         date: i64,
         db: &GraphDatabaseService,
         query_service: &QueryService,
@@ -475,7 +481,7 @@ impl LocalPeerService {
 
         //edge deletion
         let edge_deletion: Vec<EdgeDeletionEntry> =
-            Self::query(query_service, Query::EdgeDeletionLog(room_id.clone(), date)).await?;
+            Self::query(query_service, Query::EdgeDeletionLog(room_id, date)).await?;
         if !edge_deletion.is_empty() {
             has_changes = true;
         }
@@ -483,7 +489,7 @@ impl LocalPeerService {
 
         //node deletion
         let node_deletion: Vec<NodeDeletionEntry> =
-            Self::query(query_service, Query::NodeDeletionLog(room_id.clone(), date)).await?;
+            Self::query(query_service, Query::NodeDeletionLog(room_id, date)).await?;
         if !node_deletion.is_empty() {
             has_changes = true;
         }
@@ -502,7 +508,7 @@ impl LocalPeerService {
 
         //node insertion
         let remote_nodes: HashSet<NodeIdentifier> =
-            Self::query(query_service, Query::RoomDailyNodes(room_id.clone(), date)).await?;
+            Self::query(query_service, Query::RoomDailyNodes(room_id, date)).await?;
 
         let filtered = db.filter_existing_node(remote_nodes, date).await?;
         if !filtered.is_empty() {
@@ -519,13 +525,13 @@ impl LocalPeerService {
                 mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
 
             let db: GraphDatabaseService = db.clone();
-            let room_id = room_id.clone();
+            let room_id = room_id;
             let process_handle = tokio::spawn(async move {
                 while let Some(nodes) =
                     timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
                 {
                     let nodes = nodes?;
-                    db.add_full_nodes(room_id.clone(), nodes).await?;
+                    db.add_full_nodes(room_id, nodes).await?;
                 }
                 Ok::<(), crate::Error>(())
             });
@@ -536,7 +542,7 @@ impl LocalPeerService {
                 if current_list.len() == max_nodes {
                     Self::query_mpsc(
                         query_service,
-                        Query::FullNodes(room_id.clone(), current_list),
+                        Query::FullNodes(room_id, current_list),
                         reply.clone(),
                     )
                     .await?;
@@ -547,7 +553,7 @@ impl LocalPeerService {
             if !current_list.is_empty() {
                 Self::query_mpsc(
                     query_service,
-                    Query::FullNodes(room_id.clone(), current_list),
+                    Query::FullNodes(room_id, current_list),
                     reply.clone(),
                 )
                 .await?;

@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 use crate::security::{base64_decode, Uid};
 
 use crate::database::{
-    configuration::{
+    edge::Edge,
+    node::Node,
+    room::{Authorisation, EntityRight, Room, User},
+    system_entities::{
         AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
         ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_ALL_SHORT,
         RIGHT_MUTATE_SELF_SHORT, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT,
         ROOM_ENT_SHORT, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT,
         USER_VERIFYING_KEY_SHORT,
     },
-    edge::Edge,
-    node::Node,
-    room::{Authorisation, EntityRight, Room, User},
     Error, Result,
 };
 
@@ -937,11 +937,12 @@ fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<Entity
 mod tests {
 
     use crate::{
+        configuration::Configuration,
         database::{
-            configuration::{Configuration, ROOM_AUTHORISATION_FIELD},
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
             room::RightType,
+            system_entities::ROOM_AUTHORISATION_FIELD,
         },
         date_utils::now,
         event_service::EventService,

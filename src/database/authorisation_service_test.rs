@@ -4,9 +4,9 @@ mod tests {
     use std::{collections::HashMap, fs, path::PathBuf};
 
     use crate::{
+        configuration::Configuration,
         database::{
             authorisation_service::*,
-            configuration::Configuration,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
             room::{Authorisation, EntityRight, RightType, Room, User},

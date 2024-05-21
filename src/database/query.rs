@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
 
-use super::configuration::{
-    AUTHOR_FIELD, ID_FIELD, ROOM_FIELD, ROOM_ID_FIELD, VERIFYING_KEY_FIELD,
-};
 use super::query_language::query_parser::{
     Direction, EntityParams, EntityQuery, Function, QueryField, QueryFieldType,
 };
 use super::query_language::{parameter::Parameters, query_parser::QueryParser};
 use super::query_language::{FieldType, FieldValue, Value};
+use super::system_entities::{
+    ID_FIELD, PEER_FIELD, ROOM_FIELD, ROOM_ID_FIELD, VERIFYING_KEY_FIELD,
+};
 use super::Error;
 use super::Result;
 pub struct QueryVariable {}
@@ -334,7 +334,7 @@ pub fn get_sub_system_entity_query(
     tab(&mut q, t);
 
     match field_system_name {
-        AUTHOR_FIELD => {
+        PEER_FIELD => {
             q.push_str(&format!(
                 "{}.{}={}.{} ",
                 field_name, VERIFYING_KEY_FIELD, &parent_table, VERIFYING_KEY_FIELD

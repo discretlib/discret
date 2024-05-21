@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    database::configuration::{ID_FIELD, ROOM_ID_FIELD},
+    database::system_entities::{ID_FIELD, ROOM_ID_FIELD},
     security::base64_decode,
 };
 

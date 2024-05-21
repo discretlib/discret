@@ -1,6 +1,5 @@
 pub mod authorisation_service;
 pub mod authorisation_service_test;
-pub mod configuration;
 pub mod daily_log;
 pub mod deletion;
 pub mod edge;
@@ -13,6 +12,7 @@ pub mod query_test;
 pub mod room;
 pub mod room_node;
 pub mod sqlite_database;
+pub mod system_entities;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
