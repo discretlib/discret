@@ -4,7 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::sqlite_database::{BufferedDatabaseWriter, WriteStmt};
+use super::sqlite_database::WriteStmt;
 use super::system_entities::{self, Peer, PeerNodes};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
@@ -40,12 +40,7 @@ enum Message {
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     UpdateModel(String, Sender<Result<String>>),
-    Sign(Vec<u8>, Sender<(Vec<u8>, Vec<u8>)>),
-    RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Uid, Vec<FullNode>, Sender<Result<Vec<Uid>>>),
-    RoomForUser(Vec<u8>, Sender<Result<VecDeque<Uid>>>),
-    UserForRoom(Uid, Sender<Result<HashSet<Vec<u8>>>>),
-    PeerNodes(Uid, Vec<Vec<u8>>, Sender<Result<Vec<Node>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
@@ -57,8 +52,8 @@ enum Message {
 #[derive(Clone)]
 pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
-    database_reader: DatabaseReader,
-    database_writer: BufferedDatabaseWriter,
+    auth: AuthorisationService,
+    db: Database,
     verifying_key: Vec<u8>,
     system_room_id: Uid,
 }
@@ -85,18 +80,12 @@ impl GraphDatabaseService {
         )
         .await?;
 
-        let database_reader = db.graph_database.reader.clone();
-        let database_writer = db.graph_database.writer.clone();
+        let database = db.graph_database.clone();
+        let auth = db.auth_service.clone();
         let verifying_key = db.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
-                    Message::Sign(data, reply) => {
-                        let _ = db
-                            .auth_service
-                            .send(AuthorisationMessage::Sign(data, reply))
-                            .await;
-                    }
                     Message::Query(query, parameters, reply) => {
                         let q = db.get_cached_query(&query);
                         match q {
@@ -132,10 +121,6 @@ impl GraphDatabaseService {
                         }
                     }
 
-                    Message::RoomAdd(room_node, reply) => {
-                        db.add_room(room_node, reply).await;
-                    }
-
                     Message::FullNodeAdd(room_id, nodes, reply) => {
                         db.add_full_nodes(room_id, nodes, reply).await;
                     }
@@ -161,20 +146,11 @@ impl GraphDatabaseService {
                             .await;
                     }
 
-                    Message::RoomForUser(verifying_key, reply) => {
-                        db.rooms_for_user(verifying_key, reply).await;
-                    }
                     Message::DeleteEdges(edges, reply) => {
                         db.delete_edges(edges, reply).await;
                     }
                     Message::DeleteNodes(nodes, reply) => {
                         db.delete_nodes(nodes, reply).await;
-                    }
-                    Message::UserForRoom(room_id, reply) => {
-                        db.users_for_room(room_id, reply).await;
-                    }
-                    Message::PeerNodes(room_id, keys, reply) => {
-                        db.users_nodes(room_id, keys, reply).await;
                     }
                 }
             }
@@ -182,8 +158,8 @@ impl GraphDatabaseService {
 
         Ok(GraphDatabaseService {
             sender,
-            database_reader,
-            database_writer,
+            auth,
+            db: database,
             verifying_key,
             system_room_id,
         })
@@ -214,14 +190,10 @@ impl GraphDatabaseService {
         param_opt: Option<Parameters>,
     ) -> Result<DeletionQuery> {
         let (send, recieve) = oneshot::channel::<Result<DeletionQuery>>();
-
         let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), send);
         let _ = self.sender.send(msg).await;
-
         let result = recieve.await?;
-
         let _ = self.sender.send(Message::ComputeDailyLog()).await;
-
         result
     }
 
@@ -284,7 +256,8 @@ impl GraphDatabaseService {
     ) -> Result<Vec<T>> {
         let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
 
-        self.database_reader
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let result =
                     DatabaseReader::select(&query, &params, &mapping, conn).map_err(Error::from);
@@ -298,10 +271,21 @@ impl GraphDatabaseService {
     /// Update the existing data model definition with a new one  
     ///
     pub async fn update_data_model(&self, query: &str) -> Result<String> {
-        let (send, recieve) = oneshot::channel::<Result<String>>();
-        let msg = Message::UpdateModel(query.to_string(), send);
+        let (reply, receive) = oneshot::channel::<Result<String>>();
+        let msg = Message::UpdateModel(query.to_string(), reply);
         let _ = self.sender.send(msg).await;
-        recieve.await?
+        receive.await?
+    }
+
+    ///
+    /// insert the full node list
+    /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
+    ///
+    pub async fn add_full_nodes(&self, room_id: Uid, nodes: Vec<FullNode>) -> Result<Vec<Uid>> {
+        let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
+        let msg = Message::FullNodeAdd(room_id, nodes, reply);
+        let _ = self.sender.send(msg).await;
+        receive.await?
     }
 
     ///
@@ -318,24 +302,28 @@ impl GraphDatabaseService {
     /// returns  
     ///
     pub async fn sign(&self, data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
-        let (send_response, receive_response) = oneshot::channel::<(Vec<u8>, Vec<u8>)>();
-        let _ = self.sender.send(Message::Sign(data, send_response)).await;
-        receive_response.await.unwrap()
+        let (reply, receive) = oneshot::channel::<(Vec<u8>, Vec<u8>)>();
+        let _ = self
+            .auth
+            .send(AuthorisationMessage::Sign(data, reply))
+            .await;
+        receive.await.unwrap()
     }
 
     ///
     /// get a full database definition of a room
     ///
     pub async fn get_room_node(&self, room_id: Uid) -> Result<Option<RoomNode>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Option<RoomNode>>>();
+        let (reply, receive) = oneshot::channel::<Result<Option<RoomNode>>>();
 
-        self.database_reader
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_node = RoomNode::read(conn, &room_id).map_err(Error::from);
-                let _ = send_response.send(room_node);
+                let _ = reply.send(room_node);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
@@ -343,52 +331,94 @@ impl GraphDatabaseService {
     /// used for synchronisation
     ///
     pub async fn add_room_node(&self, room: RoomNode) -> Result<()> {
-        let (send_response, receive_response) = oneshot::channel::<Result<()>>();
-        let msg = Message::RoomAdd(room, send_response);
-        let _ = self.sender.send(msg).await;
-        receive_response.await?
+        let (reply, receive) = oneshot::channel::<Result<()>>();
+
+        let auth_service = self.auth.clone();
+        let _ = self
+            .db
+            .reader
+            .send_async(Box::new(move |conn| {
+                let room_id = &room.node.id;
+
+                let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
+                match room_node_res {
+                    Ok(old_room_node) => {
+                        let msg = AuthorisationMessage::RoomNodeAdd(old_room_node, room, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(err) => {
+                        let _ = reply.send(Err(err));
+                    }
+                }
+            }))
+            .await;
+
+        receive.await?
     }
 
     ///
     /// get all room id ordered by last modification date
     ///
     pub async fn get_rooms_for_user(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Uid>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<VecDeque<Uid>>>();
+        let (reply, receive) = oneshot::channel::<HashSet<Uid>>();
         let _ = self
-            .sender
-            .send(Message::RoomForUser(verifying_key, send_response))
+            .auth
+            .send(AuthorisationMessage::RoomForUser(
+                verifying_key,
+                now(),
+                reply,
+            ))
             .await;
 
-        receive_response.await?
+        let res = receive.await;
+        let (reply, receive) = oneshot::channel::<Result<VecDeque<Uid>>>();
+
+        match res {
+            Ok(room_ids) => {
+                let _ = self
+                    .db
+                    .reader
+                    .send_async(Box::new(move |conn| {
+                        let log = DailyLog::sort_rooms(&room_ids, conn).map_err(Error::from);
+                        let _ = reply.send(log);
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
+            }
+        }
+        receive.await?
     }
 
     ///
     /// get the most recent log and the last definition modification date
     ///
     pub async fn get_room_definition(&self, room_id: Uid) -> Result<Option<RoomDefinitionLog>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Option<RoomDefinitionLog>>>();
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<Option<RoomDefinitionLog>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_log = RoomDefinitionLog::get(&room_id, conn).map_err(Error::from);
-                let _ = send_response.send(room_log);
+                let _ = reply.send(room_log);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
     /// get the complete dayly log for a specific room
     ///
     pub async fn get_room_log(&self, room_id: Uid) -> Result<Vec<DailyLog>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<DailyLog>>>();
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<Vec<DailyLog>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_log = DailyLog::get_room_log(&room_id, conn).map_err(Error::from);
-                let _ = send_response.send(room_log);
+                let _ = reply.send(room_log);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
@@ -401,7 +431,8 @@ impl GraphDatabaseService {
     ) -> Result<Vec<NodeDeletionEntry>> {
         let (send_response, receive_response) =
             oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
-        self.database_reader
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let deteletions =
                     NodeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
@@ -413,7 +444,7 @@ impl GraphDatabaseService {
 
     ///
     /// get node deletions for a room at a specific day
-    ///
+    ///V
     pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>) -> Result<()> {
         let (send_response, receive_response) = oneshot::channel::<Result<()>>();
         let msg = Message::DeleteNodes(nodes, send_response);
@@ -431,7 +462,8 @@ impl GraphDatabaseService {
     ) -> Result<Vec<EdgeDeletionEntry>> {
         let (send_response, receive_response) =
             oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
-        self.database_reader
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let deteletions =
                     EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
@@ -443,12 +475,12 @@ impl GraphDatabaseService {
 
     ///
     /// get node deletions for a room at a specific day
-    ///
+    ///V
     pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>) -> Result<()> {
-        let (send_response, receive_response) = oneshot::channel::<Result<()>>();
-        let msg = Message::DeleteEdges(edges, send_response);
+        let (reply, receive) = oneshot::channel::<Result<()>>();
+        let msg = Message::DeleteEdges(edges, reply);
         let _ = self.sender.send(msg).await;
-        receive_response.await?
+        receive.await?
     }
 
     ///
@@ -459,15 +491,15 @@ impl GraphDatabaseService {
         room_id: Uid,
         date: i64,
     ) -> Result<HashSet<NodeIdentifier>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_node = Node::get_daily_nodes_for_room(&room_id, date, conn);
-                let _ = send_response.send(room_node);
+                let _ = reply.send(room_node);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
@@ -478,72 +510,89 @@ impl GraphDatabaseService {
         mut node_ids: HashSet<NodeIdentifier>,
         date: i64,
     ) -> Result<HashSet<NodeIdentifier>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 match Node::retain_missing_id(&mut node_ids, date, conn).map_err(Error::from) {
                     Ok(_) => {
-                        let _ = send_response.send(Ok(node_ids));
+                        let _ = reply.send(Ok(node_ids));
                     }
                     Err(e) => {
-                        let _ = send_response.send(Err(e));
+                        let _ = reply.send(Err(e));
                     }
                 }
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
     /// get full node definition
     ///
     pub async fn get_full_nodes(&self, room_id: Uid, node_ids: Vec<Uid>) -> Result<Vec<FullNode>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<FullNode>>>();
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<Vec<FullNode>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_node = FullNode::get_nodes_filtered_by_room(&room_id, node_ids, conn);
-                let _ = send_response.send(room_node);
+                let _ = reply.send(room_node);
             }))
             .await?;
-        receive_response.await?
-    }
-
-    ///
-    /// insert the full node list
-    /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
-    ///
-    pub async fn add_full_nodes(&self, room_id: Uid, nodes: Vec<FullNode>) -> Result<Vec<Uid>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Uid>>>();
-        let msg = Message::FullNodeAdd(room_id, nodes, send_response);
-        let _ = self.sender.send(msg).await;
-        receive_response.await?
+        receive.await?
     }
 
     ///
     /// retrieve sys.Peer node
     ///
     pub async fn get_peer_nodes(&self, room_id: Uid, keys: Vec<Vec<u8>>) -> Result<Vec<Node>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Node>>>();
-        let msg = Message::PeerNodes(room_id, keys, send_response);
-        let _ = self.sender.send(msg).await;
-        receive_response.await?
+        let (reply, receive) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
+        let _ = self
+            .auth
+            .send(AuthorisationMessage::ValidatePeerNodesRequest(
+                room_id, keys, reply,
+            ))
+            .await;
+        let valid_rs = receive.await;
+        if let Err(e) = valid_rs {
+            return Err(e.into());
+        }
+
+        let (reply, receive) = oneshot::channel::<Result<Vec<Node>>>();
+
+        match valid_rs.unwrap() {
+            Ok(list) => {
+                let _ = self
+                    .db
+                    .reader
+                    .send_async(Box::new(move |conn| {
+                        let nodes_rs = Peer::get(list, conn);
+                        let _ = reply.send(nodes_rs);
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e.into()));
+            }
+        }
+        receive.await?
     }
 
     ///
     /// insert sys.Peer nodes
     ///
     pub async fn add_peer_nodes(&self, nodes: Vec<Node>) -> Result<()> {
-        let (send_response, receive_response) = oneshot::channel::<Result<WriteStmt>>();
+        let (reply, receive) = oneshot::channel::<Result<WriteStmt>>();
         for node in &nodes {
             node.verify()?;
         }
         let nodes = PeerNodes { nodes };
-        self.database_writer
-            .send(WriteMessage::Write(Box::new(nodes), send_response))
+        self.db
+            .writer
+            .send(WriteMessage::Write(Box::new(nodes), reply))
             .await?;
 
-        match receive_response.await? {
+        match receive.await? {
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
@@ -553,22 +602,27 @@ impl GraphDatabaseService {
     /// retrieve users for a room
     ///
     pub async fn users_for_room(&self, room_id: Uid) -> Result<HashSet<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
-        let msg = Message::UserForRoom(room_id, send_response);
-        let _ = self.sender.send(msg).await;
-        receive_response.await?
+        let (reply, receive) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+        let _ = self
+            .auth
+            .send(AuthorisationMessage::UserForRoom(room_id, reply))
+            .await;
+        receive.await?
     }
 
+    ///
+    /// retrieve id of users defined in room users but not in the sys.Peer entity
+    ///
     pub async fn missing_peers(&self, peers: HashSet<Vec<u8>>) -> Result<HashSet<Vec<u8>>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
-
-        self.database_reader
+        let (reply, receive) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+        self.db
+            .reader
             .send_async(Box::new(move |conn| {
                 let room_node = Peer::get_missing(peers, conn);
-                let _ = send_response.send(room_node);
+                let _ = reply.send(room_node);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 }
 
@@ -814,7 +868,7 @@ impl GraphDatabase {
         Ok((query.parser.clone(), query.prepared_query.clone()))
     }
 
-    pub async fn query(
+    async fn query(
         &mut self,
         parser: Arc<QueryParser>,
         sql_queries: Arc<PreparedQueries>,
@@ -837,8 +891,6 @@ impl GraphDatabase {
             }))
             .await;
     }
-
-    pub async fn compute_daily_log() {}
 
     pub fn get_cached_deletion(&mut self, deletion: &str) -> Result<Arc<DeletionParser>> {
         let deletion = match self.deletion_cache.get(deletion) {
@@ -872,29 +924,6 @@ impl GraphDatabase {
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
-                    }
-                }
-            }))
-            .await;
-    }
-
-    pub async fn add_room(&mut self, room_node: RoomNode, reply: Sender<Result<()>>) {
-        let auth_service = self.auth_service.clone();
-        let _ = self
-            .graph_database
-            .reader
-            .send_async(Box::new(move |conn| {
-                let room_id = &room_node.node.id;
-
-                let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
-                match room_node_res {
-                    Ok(old_room_node) => {
-                        let msg =
-                            AuthorisationMessage::RoomNodeAdd(old_room_node, room_node, reply);
-                        let _ = auth_service.send_blocking(msg);
-                    }
-                    Err(err) => {
-                        let _ = reply.send(Err(err));
                     }
                 }
             }))
@@ -958,85 +987,6 @@ impl GraphDatabase {
                 }
             }))
             .await;
-    }
-
-    pub async fn rooms_for_user(
-        &self,
-        verifying_key: Vec<u8>,
-        reply: Sender<Result<VecDeque<Uid>>>,
-    ) {
-        let (send_response, receive_response) = oneshot::channel::<HashSet<Uid>>();
-        let _ = self
-            .auth_service
-            .send(AuthorisationMessage::RoomForUser(
-                verifying_key,
-                now(),
-                send_response,
-            ))
-            .await;
-
-        let res = receive_response.await;
-
-        match res {
-            Ok(room_ids) => {
-                let _ = self
-                    .graph_database
-                    .reader
-                    .send_async(Box::new(move |conn| {
-                        let log = DailyLog::sort_rooms(&room_ids, conn).map_err(Error::from);
-                        let _ = reply.send(log);
-                    }))
-                    .await;
-            }
-            Err(e) => {
-                let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
-            }
-        }
-    }
-
-    pub async fn users_for_room(&self, room_id: Uid, reply: Sender<Result<HashSet<Vec<u8>>>>) {
-        let _ = self
-            .auth_service
-            .send(AuthorisationMessage::UserForRoom(room_id, reply))
-            .await;
-    }
-
-    pub async fn users_nodes(
-        &self,
-        room_id: Uid,
-        keys: Vec<Vec<u8>>,
-        reply: Sender<Result<Vec<Node>>>,
-    ) {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
-        let _ = self
-            .auth_service
-            .send(AuthorisationMessage::ValidatePeerNodesRequest(
-                room_id,
-                keys,
-                send_response,
-            ))
-            .await;
-        let valid_rs = receive_response.await;
-        if let Err(e) = valid_rs {
-            let _ = reply.send(Err(e.into()));
-            return;
-        }
-
-        match valid_rs.unwrap() {
-            Ok(list) => {
-                let _ = self
-                    .graph_database
-                    .reader
-                    .send_async(Box::new(move |conn| {
-                        let nodes_rs = Peer::get(list, conn);
-                        let _ = reply.send(nodes_rs);
-                    }))
-                    .await;
-            }
-            Err(e) => {
-                let _ = reply.send(Err(e.into()));
-            }
-        }
     }
 
     pub async fn delete_edges(&self, mut edges: Vec<EdgeDeletionEntry>, reply: Sender<Result<()>>) {
