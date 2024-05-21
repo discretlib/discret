@@ -6,7 +6,6 @@ use crate::{
 };
 
 use super::{
-    system_entities::{ID_FIELD, ROOM_ID_FIELD},
     daily_log::DailyMutations,
     edge::{Edge, EdgeDeletionEntry},
     node::{extract_json, Node},
@@ -16,6 +15,7 @@ use super::{
         FieldType,
     },
     sqlite_database::Writeable,
+    system_entities::{ID_FIELD, ROOM_ID_FIELD},
     Error, Result,
 };
 use std::{collections::HashMap, sync::Arc};
@@ -184,19 +184,19 @@ impl MutationQuery {
                                     let insert_query =
                                         Self::get_mutate_query(mutation, parameters, conn, date)?;
 
-                                    let target_id = insert_query.node_to_mutate.id.clone();
+                                    let target_id = insert_query.node_to_mutate.id;
 
                                     if !Edge::exists(
-                                        node_to_mutate.id.clone(),
+                                        node_to_mutate.id,
                                         field.short_name.to_string(),
-                                        target_id.clone(),
+                                        target_id,
                                         conn,
                                     )? {
                                         let edge = Edge {
-                                            src: node_to_mutate.id.clone(),
+                                            src: node_to_mutate.id,
                                             src_entity: entity.short_name.clone(),
                                             label: field.short_name.to_string(),
-                                            dest: target_id.clone(),
+                                            dest: target_id,
                                             cdate: node_to_mutate.date,
                                             ..Default::default()
                                         };
@@ -225,11 +225,11 @@ impl MutationQuery {
                                 let insert_query =
                                     Self::get_mutate_query(mutation, parameters, conn, date)?;
 
-                                let target_id = insert_query.node_to_mutate.id.clone();
+                                let target_id = insert_query.node_to_mutate.id;
                                 if !Edge::exists(
-                                    node_to_mutate.id.clone(),
+                                    node_to_mutate.id,
                                     field.short_name.to_string(),
-                                    target_id.clone(),
+                                    target_id,
                                     conn,
                                 )? {
                                     let edges = Edge::get_edges(
@@ -241,7 +241,7 @@ impl MutationQuery {
                                         query.edge_deletions.push(e);
                                     }
                                     let edge = Edge {
-                                        src: node_to_mutate.id.clone(),
+                                        src: node_to_mutate.id,
                                         src_entity: entity.short_name.clone(),
                                         label: field.short_name.to_string(),
                                         dest: target_id,
@@ -344,16 +344,16 @@ impl MutationQuery {
                 let mut node: NodeToMutate = match Node::get(&id, entity_short, conn)? {
                     Some(old_node) => {
                         let node_room = if room_id.is_some() {
-                            room_id.clone()
+                            room_id
                         } else {
-                            old_node.room_id.clone()
+                            old_node.room_id
                         };
                         let mut new_node = *old_node.clone();
                         new_node.room_id = node_room.clone();
                         new_node.mdate = date;
 
                         NodeToMutate {
-                            id: old_node.id.clone(),
+                            id: old_node.id,
                             date,
                             room_id: node_room.clone(),
                             node: Some(new_node),
@@ -375,13 +375,13 @@ impl MutationQuery {
             }
             None => {
                 let node = Node {
-                    room_id: room_id.clone(),
+                    room_id: room_id,
                     _entity: String::from(entity_short),
                     ..Default::default()
                 };
                 NodeToMutate {
-                    id: node.id.clone(),
-                    room_id: node.room_id.clone(),
+                    id: node.id,
+                    room_id: node.room_id,
                     entity: entity_name.clone(),
                     date,
                     enable_full_text: entity.enable_full_text,
@@ -470,7 +470,7 @@ impl InsertEntity {
         }
 
         for edg in &self.edge_deletions_log {
-            daily_log.set_need_update(edg.room_id.clone(), edg.deletion_date);
+            daily_log.set_need_update(edg.room_id, edg.deletion_date);
         }
     }
 

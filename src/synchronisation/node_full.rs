@@ -83,7 +83,7 @@ impl FullNode {
                     }
                 }
                 let node = Node {
-                    id: id.clone(),
+                    id: id,
                     room_id: db_room_id,
                     cdate: row.get(2)?,
                     mdate: row.get(3)?,
@@ -96,7 +96,7 @@ impl FullNode {
                 };
 
                 map.insert(
-                    id.clone(),
+                    id,
                     FullNode {
                         node,
                         edges: Vec::new(),
@@ -156,7 +156,7 @@ impl FullNode {
             if !map.contains_key(&id) {
                 let db_room_id: Option<Uid> = row.get(1)?;
                 let node = Node {
-                    id: id.clone(),
+                    id: id,
                     room_id: db_room_id,
                     cdate: row.get(2)?,
                     mdate: row.get(3)?,
@@ -169,7 +169,7 @@ impl FullNode {
                 };
 
                 map.insert(
-                    id.clone(),
+                    id,
                     FullNode {
                         node,
                         edges: Vec::new(),
@@ -361,8 +361,8 @@ impl FullNode {
                 None => continue,
             }
 
-            node_ids.push(node.node.id.clone());
-            node_map.insert(node.node.id.clone(), node);
+            node_ids.push(node.node.id);
+            node_map.insert(node.node.id, node);
         }
 
         let existing_nodes = Self::get_local_nodes(node_ids, conn)?;
@@ -370,7 +370,7 @@ impl FullNode {
         let mut result: Vec<FullNode> = Vec::new();
         //process existing nodes
         for existing in existing_nodes {
-            let id: Uid = existing.node.id.clone();
+            let id: Uid = existing.node.id;
             if let Some(mut new_node) = node_map.remove(&id) {
                 let old_date: i64 = existing.node.mdate;
                 if new_node.node.mdate > old_date {
@@ -392,7 +392,7 @@ impl FullNode {
                     new_node.node._local_id = Some(rowid);
                     new_node.old_verifying_key = Some(existing.node.verifying_key.clone());
                     new_node.old_mdate = existing.node.mdate;
-                    new_node.old_room_id = existing.node.room_id.clone();
+                    new_node.old_room_id = existing.node.room_id;
                     //filter existing edges
                     let mut new_edges: Vec<Edge> = Vec::new();
                     for new_edge in new_node.edges {
@@ -492,7 +492,7 @@ mod tests {
         raw_node.write(&conn, false, &None, &None).unwrap();
 
         let mut node_ids = Vec::new();
-        node_ids.push(raw_node.id.clone());
+        node_ids.push(raw_node.id);
         let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
@@ -509,11 +509,11 @@ mod tests {
             .unwrap();
 
         let mut edge = Edge {
-            src: node_with_one_edge.id.clone(),
+            src: node_with_one_edge.id,
             src_entity: String::from(entity),
             label: "afield".to_string(),
             cdate: date,
-            dest: raw_node.id.clone(),
+            dest: raw_node.id,
             verifying_key: Vec::new(),
             signature: Vec::new(),
         };
@@ -521,7 +521,7 @@ mod tests {
         edge.write(&conn).unwrap();
 
         let mut node_ids = Vec::new();
-        node_ids.push(node_with_one_edge.id.clone());
+        node_ids.push(node_with_one_edge.id);
 
         let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
@@ -542,11 +542,11 @@ mod tests {
             .unwrap();
 
         let mut edge = Edge {
-            src: node_with_two_edge.id.clone(),
+            src: node_with_two_edge.id,
             src_entity: String::from(entity),
             label: "afield".to_string(),
             cdate: date,
-            dest: raw_node.id.clone(),
+            dest: raw_node.id,
             verifying_key: Vec::new(),
             signature: Vec::new(),
         };
@@ -554,11 +554,11 @@ mod tests {
         edge.write(&conn).unwrap();
 
         let mut edge = Edge {
-            src: node_with_two_edge.id.clone(),
+            src: node_with_two_edge.id,
             src_entity: String::from(entity),
             label: "another_field".to_string(),
             cdate: date,
-            dest: raw_node.id.clone(),
+            dest: raw_node.id,
             verifying_key: Vec::new(),
             signature: Vec::new(),
         };
@@ -566,7 +566,7 @@ mod tests {
         edge.write(&conn).unwrap();
 
         let mut node_ids = Vec::new();
-        node_ids.push(node_with_two_edge.id.clone());
+        node_ids.push(node_with_two_edge.id);
 
         let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
         assert_eq!(1, nodes.len());
@@ -575,9 +575,9 @@ mod tests {
         assert_eq!(2, full.edges.len());
 
         let mut node_ids = Vec::new();
-        node_ids.push(raw_node.id.clone());
-        node_ids.push(node_with_one_edge.id.clone());
-        node_ids.push(node_with_two_edge.id.clone());
+        node_ids.push(raw_node.id);
+        node_ids.push(node_with_one_edge.id);
+        node_ids.push(node_with_two_edge.id);
 
         let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
         assert_eq!(3, nodes.len());

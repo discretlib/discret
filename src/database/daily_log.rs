@@ -242,7 +242,7 @@ impl DailyLogsUpdate {
     }
 
     fn add_log(&mut self, log: DailyLog) {
-        let entry = self.room_dates.entry(log.room_id.clone()).or_default();
+        let entry = self.room_dates.entry(log.room_id).or_default();
         entry.insert(log);
     }
 }
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(def.history_hash, None);
 
         let daily_log_1 = DailyLog {
-            room_id: room_id.clone(),
+            room_id: room_id,
             date: 500,
             entry_number: 1,
             daily_hash: Some(random32().to_vec()),
@@ -706,7 +706,7 @@ mod tests {
         daily_log_1.write(&conn).unwrap();
 
         let daily_log_0 = DailyLog {
-            room_id: room_id.clone(),
+            room_id: room_id,
             date: 200,
             entry_number: 1,
             daily_hash: Some(random32().to_vec()),
@@ -738,7 +738,7 @@ mod tests {
             let date: i64 = OsRng.gen();
             RoomChangelog::log_room_definition(&room_id, 100, &conn).unwrap();
             let daily_log = DailyLog {
-                room_id: room_id.clone(),
+                room_id: room_id,
                 date,
                 entry_number: 1,
                 daily_hash: Some(random32().to_vec()),
@@ -746,14 +746,14 @@ mod tests {
                 need_recompute: false,
             };
             daily_log.write(&conn).unwrap();
-            rooms.insert(room_id.clone(), date);
+            rooms.insert(room_id, date);
             room_ids.insert(room_id);
         }
 
         let empty_room_id = new_uid();
         RoomChangelog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
-        rooms.insert(empty_room_id.clone(), i64::MAX);
-        room_ids.insert(empty_room_id.clone());
+        rooms.insert(empty_room_id, i64::MAX);
+        room_ids.insert(empty_room_id);
         num_room += 1;
 
         let mut room_ids = DailyLog::sort_rooms(&room_ids, &conn).unwrap();

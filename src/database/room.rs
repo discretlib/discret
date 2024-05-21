@@ -36,7 +36,7 @@ impl Room {
         if self.authorisations.get(&auth.id).is_some() {
             return Err(Error::AuthorisationExists());
         }
-        self.authorisations.insert(auth.id.clone(), auth);
+        self.authorisations.insert(auth.id, auth);
         Ok(())
     }
 

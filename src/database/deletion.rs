@@ -83,7 +83,7 @@ impl DeletionQuery {
                             deletion_query.edges.push(EdgeDelete {
                                 edge: *edge,
                                 src_name: del.name.clone(),
-                                room_id: node.room_id.clone(),
+                                room_id: node.room_id,
                                 date,
                             });
                         }
@@ -123,11 +123,11 @@ impl DeletionQuery {
 
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for edg in &self.edge_log {
-            daily_log.set_need_update(edg.room_id.clone(), edg.deletion_date);
+            daily_log.set_need_update(edg.room_id, edg.deletion_date);
         }
         for log in &self.node_log {
-            daily_log.set_need_update(log.room_id.clone(), log.mdate);
-            daily_log.set_need_update(log.room_id.clone(), log.deletion_date);
+            daily_log.set_need_update(log.room_id, log.mdate);
+            daily_log.set_need_update(log.room_id, log.deletion_date);
         }
     }
 }

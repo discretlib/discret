@@ -334,7 +334,7 @@ pub struct RoomAuthorisations {
 }
 impl RoomAuthorisations {
     pub fn add_room(&mut self, room: Room) {
-        self.rooms.insert(room.id.clone(), room);
+        self.rooms.insert(room.id, room);
     }
 
     pub fn validate_deletion(&self, deletion_query: &mut DeletionQuery) -> Result<()> {
@@ -367,7 +367,7 @@ impl RoomAuthorisations {
                                     ));
                                 }
                                 let log_entry = NodeDeletionEntry::build(
-                                    room.id.clone(),
+                                    room.id,
                                     &node.node,
                                     now,
                                     &self.signing_key,
@@ -418,7 +418,7 @@ impl RoomAuthorisations {
                                     ));
                                 }
                                 let log_entry = EdgeDeletionEntry::build(
-                                    room.id.clone(),
+                                    room.id,
                                     &edge.edge,
                                     now,
                                     &self.signing_key,
@@ -530,7 +530,7 @@ impl RoomAuthorisations {
                                 }
                                 for edge_deletion in &entity_to_mutate.edge_deletions {
                                     let log = EdgeDeletionEntry::build(
-                                        room.id.clone(),
+                                        room.id,
                                         edge_deletion,
                                         now,
                                         &self.signing_key,
@@ -559,7 +559,7 @@ impl RoomAuthorisations {
                                 }
                                 for edge_deletion in &entity_to_mutate.edge_deletions {
                                     let log = EdgeDeletionEntry::build(
-                                        room.id.clone(),
+                                        room.id,
                                         edge_deletion,
                                         now,
                                         &self.signing_key,
@@ -665,7 +665,7 @@ impl RoomAuthorisations {
                 }
 
                 let room = Room {
-                    id: node_insert.id.clone(),
+                    id: node_insert.id,
                     ..Default::default()
                 };
                 room
@@ -792,7 +792,7 @@ impl RoomAuthorisations {
                     Some(_) => return Err(Error::NotBelongsTo()),
                     None => {
                         let authorisation = Authorisation {
-                            id: node_insert.id.clone(),
+                            id: node_insert.id,
                             mdate: node_insert.date,
                             ..Default::default()
                         };
@@ -970,7 +970,7 @@ impl RoomAuthorisations {
                 .unwrap();
             for auth_value in auth_array {
                 let auth = load_auth_from_json(auth_value)?;
-                authorisations.insert(auth.id.clone(), auth);
+                authorisations.insert(auth.id, auth);
             }
 
             let mut room = Room {
@@ -1044,7 +1044,7 @@ impl RoomAuthorisations {
         if room_id.is_none() {
             return false;
         }
-        let room_id = room_id.clone().unwrap();
+        let room_id = room_id.unwrap();
 
         if let Some(old_room_id) = &node.old_room_id {
             if !old_room_id.eq(&room_id) {

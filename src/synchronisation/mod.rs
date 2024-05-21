@@ -201,14 +201,14 @@ mod tests {
 
         let first_key = first_peer.db.verifying_key().clone();
 
-        let id = room_id.clone();
+        let id = room_id;
         let event_fn: EventFn = Box::new(move |event| match event {
             Event::PeerConnected(id, _, _) => {
                 assert_eq!(id, first_key);
                 return false;
             }
             Event::RoomSynchronized(room) => {
-                assert_eq!(room, id.clone());
+                assert_eq!(room, id);
                 return true;
             }
 
@@ -251,14 +251,14 @@ mod tests {
         let mapping: RowMappingFn<Changelog> = |row| Ok(Box::new(Changelog { mdate: row.get(0)? }));
         let res = first_peer
             .db
-            .select(query.to_string(), vec![Box::new(room_id.clone())], mapping)
+            .select(query.to_string(), vec![Box::new(room_id)], mapping)
             .await
             .unwrap();
         let room_first_date = res[0].mdate;
 
         let res = second_peer
             .db
-            .select(query.to_string(), vec![Box::new(room_id.clone())], mapping)
+            .select(query.to_string(), vec![Box::new(room_id)], mapping)
             .await
             .unwrap();
 
@@ -353,14 +353,14 @@ mod tests {
             .await
             .unwrap();
 
-        let id = room_id.clone();
+        let id = room_id;
         let event_fn: EventFn = Box::new(move |event| match event {
             Event::PeerConnected(id, _, _) => {
                 assert_eq!(id, first_key);
                 return false;
             }
             Event::RoomSynchronized(room) => {
-                assert_eq!(room, id.clone());
+                assert_eq!(room, id);
                 return true;
             }
 

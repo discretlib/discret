@@ -814,7 +814,7 @@ fn prepare_new_auth(room: &Room, new_auth: &AuthorisationNode) -> Result<()> {
 ///
 pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
     let mut room = Room {
-        id: room_node.node.id.clone(),
+        id: room_node.node.id,
         mdate: room_node.node.mdate,
         ..Default::default()
     };
@@ -832,7 +832,7 @@ pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
 
     for auth in &room_node.auth_nodes {
         let mut authorisation = Authorisation {
-            id: auth.node.id.clone(),
+            id: auth.node.id,
             mdate: auth.node.mdate,
             ..Default::default()
         };
@@ -1018,7 +1018,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
 
         let node: RoomNode = app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1109,7 +1109,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
 
         let node = app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1174,7 +1174,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
         let room_id = base64_encode(&room_insert.node_to_mutate.id);
         let node = app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1335,7 +1335,7 @@ mod tests {
         let auth_id = base64_encode(&auth_insert.node_to_mutate.id);
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1426,7 +1426,7 @@ mod tests {
             .expect_err("second user cannot modify the room");
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1478,7 +1478,7 @@ mod tests {
             .expect("first user can modify the room");
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1561,7 +1561,7 @@ mod tests {
         let room_id = base64_encode(&room_insert.node_to_mutate.id);
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1615,7 +1615,7 @@ mod tests {
             .expect_err("second app cannot mutate room");
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1673,7 +1673,7 @@ mod tests {
             .expect("second_app can mutate room");
 
         let node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1683,7 +1683,7 @@ mod tests {
         second_app.add_room_node(node.clone()).await.unwrap();
 
         let node = second_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1746,7 +1746,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
 
         let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1761,7 +1761,7 @@ mod tests {
             .expect_err("invalid signature");
 
         let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1777,7 +1777,7 @@ mod tests {
 
         let bad_signing = Ed25519SigningKey::create_from(&random32());
         let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1792,7 +1792,7 @@ mod tests {
             .expect_err("right error");
 
         let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();
@@ -1808,7 +1808,7 @@ mod tests {
             .expect_err("edge must point to a node that is is in the corresponding *_edge");
 
         let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id.clone())
+            .get_room_node(room_insert.node_to_mutate.id)
             .await
             .unwrap()
             .unwrap();

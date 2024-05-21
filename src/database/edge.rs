@@ -507,7 +507,7 @@ impl EdgeDeletionEntry {
         let mut stmt = conn.prepare_cached(query)?;
         for e in edges {
             stmt.execute((&e.src, &e.src_entity, &e.label, &e.dest, &e.cdate))?;
-            daily_log.set_need_update(e.room_id.clone(), e.deletion_date);
+            daily_log.set_need_update(e.room_id, e.deletion_date);
             e.write(conn)?;
         }
         Ok(())
@@ -572,13 +572,13 @@ mod tests {
         e.verify().unwrap();
 
         let bad_id = new_uid();
-        e.src = bad_id.clone();
+        e.src = bad_id;
         e.verify()
             .expect_err("'from' has changed, verification must fail");
         e.src = from.clone();
         e.verify().unwrap();
 
-        e.dest = bad_id.clone();
+        e.dest = bad_id;
         e.verify()
             .expect_err("'to' has changed, verification must fail");
         e.sign(&keypair).unwrap();
@@ -661,7 +661,7 @@ mod tests {
         e.write(&conn).unwrap();
         e.delete(&conn).unwrap();
         let room_id = new_uid();
-        let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
+        let mut log = EdgeDeletionEntry::build(room_id, &e, now(), &signing_key);
 
         log.write(&conn).unwrap();
 
@@ -695,7 +695,7 @@ mod tests {
         e.write(&conn).unwrap();
 
         let room_id = new_uid();
-        let mut log = EdgeDeletionEntry::build(room_id.clone(), &e, now(), &signing_key);
+        let mut log = EdgeDeletionEntry::build(room_id, &e, now(), &signing_key);
         log.write(&conn).unwrap();
 
         let entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();

@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     date_utils::{date, date_next_day, now},
-    security::{base64_encode, import_verifying_key, new_uid, SigningKey, Uid},
+    security::{base64_encode, import_verifying_key, new_uid, uid_encode, SigningKey, Uid},
 };
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -255,7 +255,7 @@ impl Node {
         if size > MAX_ROW_LENTGH {
             return Err(Error::DatabaseRowToLong(format!(
                 "Node {} is too long {} bytes instead of {}",
-                base64_encode(&self.id.clone()),
+                uid_encode(&self.id),
                 size,
                 MAX_ROW_LENTGH
             )));
@@ -563,7 +563,7 @@ impl NodeDeletionEntry {
         let signature = Self::sign(&room, node, deletion_date, &verifying_key, signing_key);
         Self {
             room_id: room,
-            id: node.id.clone(),
+            id: node.id,
             entity: node._entity.clone(),
             mdate: node.mdate,
             deletion_date,
@@ -656,8 +656,8 @@ impl NodeDeletionEntry {
         let mut in_clause = String::new();
         while let Some(nid) = it.next() {
             in_clause.push('?');
-            nodes_id.push(nid.id.clone());
-            map.insert(nid.id.clone(), (nid, None));
+            nodes_id.push(nid.id);
+            map.insert(nid.id, (nid, None));
             if it.peek().is_some() {
                 in_clause.push(',');
             }
@@ -689,14 +689,14 @@ impl NodeDeletionEntry {
         let mut in_clause = String::new();
         while let Some(node) = it.next() {
             in_clause.push('?');
-            nodes_id.push(node.id.clone());
+            nodes_id.push(node.id);
             if it.peek().is_some() {
                 in_clause.push(',');
             }
             //deletiong log is written before real deletion but this function is performed inside a transaction
             node.write(conn)?;
-            daily_log.set_need_update(node.room_id.clone(), node.deletion_date);
-            daily_log.set_need_update(node.room_id.clone(), node.mdate);
+            daily_log.set_need_update(node.room_id, node.deletion_date);
+            daily_log.set_need_update(node.room_id, node.mdate);
         }
         let query = format!("DELETE FROM _node WHERE id in ({})", in_clause);
         let mut stmt = conn.prepare(&query)?;
@@ -947,7 +947,7 @@ mod tests {
         let entity = "Pet";
         let room_id = new_uid();
         let mut node = Node {
-            room_id: Some(room_id.clone()),
+            room_id: Some(room_id),
             _entity: String::from(entity),
             ..Default::default()
         };
@@ -955,8 +955,7 @@ mod tests {
         node.write(&conn, false, &None, &None).unwrap();
         Node::delete(&node.id, &conn).unwrap();
 
-        let mut node_deletion_log =
-            NodeDeletionEntry::build(room_id.clone(), &node, now(), &signing_key);
+        let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
         let deletion_logs =
@@ -1031,15 +1030,14 @@ mod tests {
         let entity = "Pet";
         let room_id = new_uid();
         let mut node = Node {
-            room_id: Some(room_id.clone()),
+            room_id: Some(room_id),
             _entity: String::from(entity),
             ..Default::default()
         };
         node.sign(&signing_key).unwrap();
         node.write(&conn, false, &None, &None).unwrap();
 
-        let mut node_deletion_log =
-            NodeDeletionEntry::build(room_id.clone(), &node, now(), &signing_key);
+        let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
         let deletion_logs =
