@@ -445,8 +445,9 @@ fn get_fields(
             QueryFieldType::Binary => {
                 if field.field.is_system {
                     q.push_str(&format!(
-                        "'{}', base64_encode({})",
+                        "'{}', base64_encode({}.{})",
                         &field.name(),
+                        parent_table,
                         &field.field.short_name,
                     ));
                 } else if let Some(val) = &field.field.default_value {

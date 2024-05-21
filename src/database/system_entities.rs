@@ -39,7 +39,7 @@ pub const ROOM_FIELD: &str = "sys_room";
 pub const ENTITY_FIELD: &str = "_entity";
 pub const JSON_FIELD: &str = "_json";
 pub const BINARY_FIELD: &str = "_binary";
-pub const VERIFYING_KEY_FIELD: &str = "_verifying_key";
+pub const VERIFYING_KEY_FIELD: &str = "verifying_key";
 pub const SIGNATURE_FIELD: &str = "_signature";
 
 //name of the entity fields
@@ -82,7 +82,7 @@ sys{
     }
     
     UserAuth{
-        verifying_key: Base64,
+        verif_key: Base64,
         enabled: Boolean default true,
     }
     
@@ -95,7 +95,7 @@ sys{
     //Entities for the peer connection
     Peer {
         meeting_pub_key: Base64 ,
-        index(_verifying_key)
+        index(verifying_key)
     }
 
     AllowedPeer{

@@ -55,7 +55,7 @@ impl FullNode {
 
         let query = format!("
         SELECT 
-            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, rowid,
+            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node.verifying_key, _node._signature, rowid,
             _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature
         FROM _node
         LEFT JOIN _edge ON _node.id = _edge.src 
@@ -90,7 +90,7 @@ impl FullNode {
                     _entity: row.get(4)?,
                     _json: row.get(5)?,
                     _binary: row.get(6)?,
-                    _verifying_key: row.get(7)?,
+                    verifying_key: row.get(7)?,
                     _signature: row.get(8)?,
                     _local_id: row.get(9)?,
                 };
@@ -138,7 +138,7 @@ impl FullNode {
 
         let query = format!("
         SELECT 
-            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node._verifying_key, _node._signature, rowid,
+            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node.verifying_key, _node._signature, rowid,
             _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature
         FROM _node
         LEFT JOIN _edge ON _node.id = _edge.src 
@@ -163,7 +163,7 @@ impl FullNode {
                     _entity: row.get(4)?,
                     _json: row.get(5)?,
                     _binary: row.get(6)?,
-                    _verifying_key: row.get(7)?,
+                    verifying_key: row.get(7)?,
                     _signature: row.get(8)?,
                     _local_id: row.get(9)?,
                 };
@@ -390,7 +390,7 @@ impl FullNode {
                     }
                     let rowid: i64 = existing.node._local_id.unwrap();
                     new_node.node._local_id = Some(rowid);
-                    new_node.old_verifying_key = Some(existing.node._verifying_key.clone());
+                    new_node.old_verifying_key = Some(existing.node.verifying_key.clone());
                     new_node.old_mdate = existing.node.mdate;
                     new_node.old_room_id = existing.node.room_id.clone();
                     //filter existing edges
@@ -705,10 +705,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$first_user_id
+                            verif_key:$first_user_id
                         }]
                         user_admin: [{
-                            verifying_key:$first_user_id
+                            verif_key:$first_user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -718,9 +718,9 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$first_user_id
+                                verif_key:$first_user_id
                             },{
-                                verifying_key:$second_user_id
+                                verif_key:$second_user_id
                             }]
                         }]
                     }

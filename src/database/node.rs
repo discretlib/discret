@@ -27,7 +27,7 @@ impl Default for Node {
             _entity: "".to_string(),
             _json: None,
             _binary: None,
-            _verifying_key: vec![],
+            verifying_key: vec![],
             _signature: vec![],
             _local_id: None,
         }
@@ -43,7 +43,7 @@ pub struct Node {
     pub _entity: String,
     pub _json: Option<String>,
     pub _binary: Option<Vec<u8>>,
-    pub _verifying_key: Vec<u8>,
+    pub verifying_key: Vec<u8>,
     pub _signature: Vec<u8>,
 
     //_local_id stores the rowid of the Node for update purpose.
@@ -72,7 +72,7 @@ impl Node {
             _entity TEXT  NOT NULL,
             _json TEXT,
             _binary BLOB,
-            _verifying_key BLOB NOT NULL,
+            verifying_key BLOB NOT NULL,
             _signature BLOB NOT NULL
         ) STRICT",
             [],
@@ -141,7 +141,7 @@ impl Node {
             len += v.len();
         }
 
-        len += &self._verifying_key.len();
+        len += &self.verifying_key.len();
         len += &self._signature.len();
         Ok(len)
     }
@@ -172,7 +172,7 @@ impl Node {
             && self.cdate.eq(&node.cdate)
             && self.mdate.eq(&node.mdate)
             && self._entity.eq(&node._entity)
-            && self._verifying_key.eq(&node._verifying_key)
+            && self.verifying_key.eq(&node.verifying_key)
     }
 
     fn hash(&self) -> Result<blake3::Hash> {
@@ -194,7 +194,7 @@ impl Node {
             hasher.update(v);
         }
 
-        hasher.update(&self._verifying_key);
+        hasher.update(&self.verifying_key);
         Ok(hasher.finalize())
     }
 
@@ -226,7 +226,7 @@ impl Node {
         }
         let hash = self.hash()?;
 
-        let pub_key = import_verifying_key(&self._verifying_key)?;
+        let pub_key = import_verifying_key(&self.verifying_key)?;
         pub_key.verify(hash.as_bytes(), &self._signature)?;
 
         Ok(())
@@ -236,7 +236,7 @@ impl Node {
     /// sign the node after performing some checks
     ///
     pub fn sign(&mut self, signing_key: &impl SigningKey) -> Result<()> {
-        self._verifying_key = signing_key.export_verifying_key();
+        self.verifying_key = signing_key.export_verifying_key();
 
         if self._entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
@@ -280,7 +280,7 @@ impl Node {
             _entity: row.get(4)?,
             _json: row.get(5)?,
             _binary: row.get(6)?,
-            _verifying_key: row.get(7)?,
+            verifying_key: row.get(7)?,
             _signature: row.get(8)?,
             _local_id: row.get(9)?,
         }))
@@ -290,7 +290,7 @@ impl Node {
     /// SQL Query to retrieve a Node by its primary key
     ///
     pub const NODE_QUERY: &'static str = "
-    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature, rowid  
+    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
     FROM _node 
     WHERE id = ? AND 
     _entity = ?";
@@ -376,7 +376,7 @@ impl Node {
                 _entity = ?,
                 _json = ?,
                 _binary = ?,
-                _verifying_key = ?,
+                verifying_key = ?,
                 _signature = ?
             WHERE
                 rowid = ? ",
@@ -390,7 +390,7 @@ impl Node {
                 &self._entity,
                 &self._json,
                 &self._binary,
-                &self._verifying_key,
+                &self.verifying_key,
                 &self._signature,
                 id,
             ))?;
@@ -404,7 +404,7 @@ impl Node {
                     _entity,
                     _json,
                     _binary,
-                    _verifying_key,
+                    verifying_key,
                     _signature
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -418,7 +418,7 @@ impl Node {
                 &self._entity,
                 &self._json,
                 &self._binary,
-                &self._verifying_key,
+                &self.verifying_key,
                 &self._signature,
             ))?;
             self._local_id = Some(conn.last_insert_rowid());
@@ -663,7 +663,7 @@ impl NodeDeletionEntry {
             }
         }
         let query = format!(
-            "SELECT id, _verifying_key  FROM _node WHERE id in ({})",
+            "SELECT id, verifying_key  FROM _node WHERE id in ({})",
             in_clause
         );
         let mut stmt = conn.prepare(&query)?;
@@ -810,11 +810,11 @@ mod tests {
         node.sign(&keypair).unwrap();
         node.verify().unwrap();
 
-        node._verifying_key = b"badkey".to_vec();
+        node.verifying_key = b"badkey".to_vec();
         node.verify()
             .expect_err("_pub_key has changed, the verifcation fails");
         node.sign(&keypair).unwrap();
-        assert_ne!(b"badkey".to_vec(), node._verifying_key);
+        assert_ne!(b"badkey".to_vec(), node.verifying_key);
         node.verify().unwrap();
 
         let sq = &['a'; MAX_ROW_LENTGH];
@@ -854,7 +854,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 "
-        SELECT id ,room_id, cdate, mdate, _entity,_json, _binary, _verifying_key, _signature, _node.rowid 
+        SELECT id ,room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, _node.rowid 
         FROM _node_fts JOIN _node ON _node_fts.rowid=_node.rowid 
         WHERE _node_fts MATCH ? 
         ORDER BY rank;",

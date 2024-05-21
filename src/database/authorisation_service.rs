@@ -338,7 +338,7 @@ impl RoomAuthorisations {
                     if let Some(room_id) = &node.node.room_id {
                         match self.rooms.get(room_id) {
                             Some(room) => {
-                                let can = if node.node._verifying_key.eq(&verifying_key) {
+                                let can = if node.node.verifying_key.eq(&verifying_key) {
                                     room.can(
                                         &verifying_key,
                                         &node.name,
@@ -461,7 +461,7 @@ impl RoomAuthorisations {
             _ => {
                 match &to_insert.old_node {
                     Some(old_node) => {
-                        let same_user = old_node._verifying_key.eq(verifying_key);
+                        let same_user = old_node.verifying_key.eq(verifying_key);
 
                         if let Some(room_id) = &to_insert.room_id {
                             if let Some(room) = self.rooms.get(room_id) {
@@ -996,7 +996,7 @@ impl RoomAuthorisations {
             return false;
         }
         let required_right = match &node.old_verifying_key {
-            Some(old_key) => match old_key.eq(&node.node._verifying_key) {
+            Some(old_key) => match old_key.eq(&node.node.verifying_key) {
                 true => RightType::MutateSelf,
                 false => RightType::MutateAll,
             },
@@ -1020,7 +1020,7 @@ impl RoomAuthorisations {
                 }
                 let entity_name = &node.entity_name.clone().unwrap();
                 if !room.can(
-                    &node.node._verifying_key,
+                    &node.node.verifying_key,
                     entity_name,
                     node.node.mdate,
                     &required_right,
@@ -1041,7 +1041,7 @@ impl RoomAuthorisations {
         }
         let entity_name = &node.entity_name.clone().unwrap();
         if !room.can(
-            &node.node._verifying_key,
+            &node.node.verifying_key,
             entity_name,
             node.node.mdate,
             &required_right,

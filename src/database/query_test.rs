@@ -189,7 +189,7 @@ mod tests {
                     _entity
                     _json
                     _binary
-                    _verifying_key
+                    verifying_key
                     _signature
                 }
                 
@@ -220,8 +220,8 @@ mod tests {
                 _entity ="0", 
                 _json="", 
                 _binary = "ZXRzZXRzNDMx",
-                _verifying_key <="ZXRzZXRzNDMx",
-                _verifying_key >= "ZXRzZXRzNDMx",
+                verifying_key <="ZXRzZXRzNDMx",
+                verifying_key >= "ZXRzZXRzNDMx",
             ){
                     id
                     cdate
@@ -229,7 +229,7 @@ mod tests {
                     _entity
                     _json
                     _binary
-                    _verifying_key
+                    verifying_key
                     _signature
                 }
                 

@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::database::{
-        system_entities,
         query_language::{data_model_parser::DataModel, query_parser::QueryParser},
+        system_entities,
     };
 
     #[test]
@@ -581,13 +581,13 @@ mod tests {
                 }
 
                 pet: Person {
-                    _verifying_key
+                    verifying_key
                 }
 
             } "#,
             &data_model,
         )
-        .expect("_verifying_key is a valid system field");
+        .expect("verifying_key is a valid system field");
     }
 
     #[test]
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn author() {
+    fn sys_peer() {
         let mut data_model = DataModel::new();
         data_model
             .update_system(system_entities::SYSTEM_DATA_MODEL)
@@ -1178,8 +1178,8 @@ mod tests {
             query aquery {
                 Person  {
                     name
-                    author {
-                        name
+                    sys_peer {
+                        meeting_pub_key
                     }
                 }
             } "#,

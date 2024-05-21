@@ -168,10 +168,10 @@ mod tests {
                 r#"mutation mut {
                 sys.Room{
                     admin: [{
-                        verifying_key:$first_id
+                        verif_key:$first_id
                     }]
                     user_admin: [{
-                        verifying_key:$first_id
+                        verif_key:$first_id
                     }]
                     authorisations:[{
                         name:"admin"
@@ -181,9 +181,9 @@ mod tests {
                             mutate_all:false
                         }]
                         users: [{
-                            verifying_key:$first_id
+                            verif_key:$first_id
                         },{
-                            verifying_key:$second_id
+                            verif_key:$second_id
                         }]
                     }]
                 }
@@ -286,10 +286,10 @@ mod tests {
                 r#"mutation mut {
                 sys.Room{
                     admin: [{
-                        verifying_key:$first_id
+                        verif_key:$first_id
                     }]
                     user_admin: [{
-                        verifying_key:$first_id
+                        verif_key:$first_id
                     }]
                     authorisations:[{
                         name:"admin"
@@ -299,9 +299,9 @@ mod tests {
                             mutate_all:false
                         }]
                         users: [{
-                            verifying_key:$first_id
+                            verif_key:$first_id
                         },{
-                            verifying_key:$second_id
+                            verif_key:$second_id
                         }]
                     }]
                 }

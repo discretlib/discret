@@ -406,7 +406,6 @@ impl DailyLog {
                         _dl.date
                     FROM _daily_log _dl
                     WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
-                    LIMIT 1
                 ) as dl ON rcl.room_id=dl.room_id
                 WHERE rcl.room_id in ({})
                 ",
@@ -600,10 +599,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -613,7 +612,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }

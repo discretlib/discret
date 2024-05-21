@@ -266,10 +266,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"what"
@@ -279,7 +279,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -360,10 +360,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -373,7 +373,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -442,10 +442,10 @@ mod tests {
                 r#"mutation {
                 sys.Room{
                     admin: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                     }]
                     user_admin: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                     }]
                     authorisations:[{
                         name:"admin"
@@ -455,7 +455,7 @@ mod tests {
                             mutate_all:true
                         }]
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -556,7 +556,7 @@ mod tests {
                         mutate_all:true
                     }]
                     users: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                     }]
                 }
             }"#,
@@ -629,10 +629,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -642,7 +642,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -759,7 +759,7 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -784,7 +784,7 @@ mod tests {
                 sys.Room{
                     id:$room_id
                     admin: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                         enabled:false
                     }]
                 }
@@ -806,7 +806,7 @@ mod tests {
                     authorisations:[{
                         id: $auth_id
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -826,12 +826,12 @@ mod tests {
                 sys.Room{
                     id:$room_id
                     user_admin: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                     }]
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -851,7 +851,7 @@ mod tests {
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
+                            verif_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
                         }]
                     }]
                 }
@@ -872,7 +872,7 @@ mod tests {
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
+                            verif_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
                             enabled:false
                         }]
                     }]
@@ -894,7 +894,7 @@ mod tests {
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                             enabled:false
                         }]
                     }]
@@ -913,7 +913,7 @@ mod tests {
                 sys.Room{
                     id:$room_id
                     user_admin: [{
-                        verifying_key:$user_id
+                        verif_key:$user_id
                         enabled:false
                     }]
                 }
@@ -981,10 +981,10 @@ mod tests {
                 mutation {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -994,7 +994,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1015,10 +1015,10 @@ mod tests {
                 mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1028,7 +1028,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1148,10 +1148,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1161,7 +1161,7 @@ mod tests {
                                 mutate_all:true
                             }]       
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1372,10 +1372,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1385,7 +1385,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }

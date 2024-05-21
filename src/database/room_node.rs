@@ -467,7 +467,7 @@ pub fn prepare_room_with_history(
             .iter()
             .find(|user| user.node.id.eq(&new_admin.node.id));
         if admin_node.is_none() {
-            match room.is_admin(&new_admin.node._verifying_key, new_admin.node.mdate) {
+            match room.is_admin(&new_admin.node.verifying_key, new_admin.node.mdate) {
                 true => {
                     let user = parse_user_node(new_admin)?;
                     room.add_admin_user(user)?;
@@ -532,7 +532,7 @@ pub fn prepare_room_with_history(
             .find(|user| user.node.id.eq(&new_user_admin.node.id));
         if user_admin_node.is_none() {
             match room.is_admin(
-                &new_user_admin.node._verifying_key,
+                &new_user_admin.node.verifying_key,
                 new_user_admin.node.mdate,
             ) {
                 true => {
@@ -568,7 +568,7 @@ pub fn prepare_room_with_history(
                 match old_auth.node.mdate < new_auth.node.mdate {
                     true => {
                         new_auth.node._local_id = old_auth.node._local_id;
-                        if !room.is_admin(&new_auth.node._verifying_key, new_auth.node.mdate) {
+                        if !room.is_admin(&new_auth.node.verifying_key, new_auth.node.mdate) {
                             return Err(Error::InvalidNode(
                                 "RoomNode Authorisation mutation not authorised".to_string(),
                             ));
@@ -598,7 +598,7 @@ pub fn prepare_room_with_history(
             .iter()
             .find(|auth| auth.node.id.eq(&new_auth.node.id));
         if old_auth.is_none() {
-            match room.is_admin(&new_auth.node._verifying_key, new_auth.node.mdate) {
+            match room.is_admin(&new_auth.node.verifying_key, new_auth.node.mdate) {
                 true => {
                     prepare_new_auth(&room, new_auth)?;
                     need_update = true;
@@ -626,7 +626,7 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
 
     //verify rights
     for admin in &room_node.admin_nodes {
-        if !room.is_admin(&admin.node._verifying_key, admin.node.mdate) {
+        if !room.is_admin(&admin.node.verifying_key, admin.node.mdate) {
             return Err(Error::InvalidNode(
                 "New RoomNode Administrator not authorised".to_string(),
             ));
@@ -635,7 +635,7 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
 
     for user_admin in &room_node.user_admin_nodes {
         //println!("{}", base64_encode(&user_admin.node._verifying_key));
-        if !room.is_admin(&user_admin.node._verifying_key, user_admin.node.mdate) {
+        if !room.is_admin(&user_admin.node.verifying_key, user_admin.node.mdate) {
             return Err(Error::InvalidNode(
                 "New RoomNode User Administrator not authorised".to_string(),
             ));
@@ -643,17 +643,17 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
     }
 
     for auth in &room_node.auth_nodes {
-        match room.is_admin(&auth.node._verifying_key, auth.node.mdate) {
+        match room.is_admin(&auth.node.verifying_key, auth.node.mdate) {
             true => {
                 for user in &auth.user_nodes {
-                    if !room.is_admin(&user.node._verifying_key, user.node.mdate) {
+                    if !room.is_admin(&user.node.verifying_key, user.node.mdate) {
                         return Err(Error::InvalidNode(
                             "New RoomNode Authorisation User not authorised".to_string(),
                         ));
                     }
                 }
                 for right in &auth.right_nodes {
-                    if !room.is_admin(&right.node._verifying_key, right.node.mdate) {
+                    if !room.is_admin(&right.node.verifying_key, right.node.mdate) {
                         return Err(Error::InvalidNode(
                             "New RoomNode Authorisation Right not authorised".to_string(),
                         ));
@@ -720,7 +720,7 @@ fn prepare_auth_with_history(
             .find(|user| user.node.id.eq(&new_user.node.id));
 
         if user_node.is_none() {
-            match room.is_user_admin(&new_user.node._verifying_key, new_user.node.mdate) {
+            match room.is_user_admin(&new_user.node.verifying_key, new_user.node.mdate) {
                 true => {
                     need_update = true;
                 }
@@ -777,7 +777,7 @@ fn prepare_auth_with_history(
             .find(|user| user.node.id.eq(&new_right.node.id));
 
         if right_node.is_none() {
-            match room.is_user_admin(&new_right.node._verifying_key, new_right.node.mdate) {
+            match room.is_user_admin(&new_right.node.verifying_key, new_right.node.mdate) {
                 true => {
                     need_update = true;
                 }
@@ -794,14 +794,14 @@ fn prepare_auth_with_history(
 
 fn prepare_new_auth(room: &Room, new_auth: &AuthorisationNode) -> Result<()> {
     for new_user in &new_auth.user_nodes {
-        if !room.is_user_admin(&new_user.node._verifying_key, new_user.node.mdate) {
+        if !room.is_user_admin(&new_user.node.verifying_key, new_user.node.mdate) {
             return Err(Error::InvalidNode(
                 "RoomNode Authorisation new user is not authorised".to_string(),
             ));
         }
     }
     for new_right in &new_auth.right_nodes {
-        if !room.is_user_admin(&new_right.node._verifying_key, new_right.node.mdate) {
+        if !room.is_user_admin(&new_right.node.verifying_key, new_right.node.mdate) {
             return Err(Error::InvalidNode(
                 "RoomNode Authorisation new Right is not authorised".to_string(),
             ));
@@ -991,10 +991,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1004,7 +1004,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1082,10 +1082,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1095,7 +1095,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1152,15 +1152,15 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1196,7 +1196,7 @@ mod tests {
                             mutate_all:true
                         }]
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -1305,10 +1305,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
@@ -1318,7 +1318,7 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1391,7 +1391,7 @@ mod tests {
                     authorisations:[{
                         id:$auth_id
                         users: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -1415,7 +1415,7 @@ mod tests {
                         authorisations:[{
                             id:$auth_id
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1466,7 +1466,7 @@ mod tests {
                         authorisations:[{
                             id:$auth_id
                             users: [{
-                                verifying_key:$user_id
+                                verif_key:$user_id
                                 enabled: false
                             }]
                         }]
@@ -1545,10 +1545,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }
                 }"#,
@@ -1579,10 +1579,10 @@ mod tests {
                     sys.Room{
                         id: $room_id
                         admin: [{
-                            verifying_key:$second_user
+                            verif_key:$second_user
                         }]
                         user_admin: [{
-                            verifying_key:$second_user
+                            verif_key:$second_user
                         }]
                        
                     }
@@ -1601,10 +1601,10 @@ mod tests {
                         sys.Room{
                             id: $room_id
                             admin: [{
-                                verifying_key:$second_user
+                                verif_key:$second_user
                             }]
                             user_admin: [{
-                                verifying_key:$second_user
+                                verif_key:$second_user
                             }]
                            
                         }
@@ -1635,10 +1635,10 @@ mod tests {
                 sys.Room{
                     id: $room_id
                     admin: [{
-                        verifying_key:$third_user
+                        verif_key:$third_user
                     }]
                     user_admin: [{
-                        verifying_key:$third_user
+                        verif_key:$third_user
                     }]
                    
                 }
@@ -1659,10 +1659,10 @@ mod tests {
                 sys.Room{
                     id: $room_id
                     admin: [{
-                        verifying_key:$third_user
+                        verif_key:$third_user
                     }]
                     user_admin: [{
-                        verifying_key:$third_user
+                        verif_key:$third_user
                     }]
                    
                 }
@@ -1731,10 +1731,10 @@ mod tests {
                 r#"mutation mut {
                     sys.Room{
                         admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                         user_admin: [{
-                            verifying_key:$user_id
+                            verif_key:$user_id
                         }]
                     }
                 }"#,
