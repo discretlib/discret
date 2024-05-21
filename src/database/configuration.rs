@@ -104,14 +104,15 @@ pub const ID_FIELD: &str = "id";
 pub const ROOM_ID_FIELD: &str = "room_id";
 pub const CREATION_DATE_FIELD: &str = "cdate";
 pub const MODIFICATION_DATE_FIELD: &str = "mdate";
+pub const AUTHOR_FIELD: &str = "author";
+pub const ROOM_FIELD: &str = "room";
 pub const ENTITY_FIELD: &str = "_entity";
 pub const JSON_FIELD: &str = "_json";
 pub const BINARY_FIELD: &str = "_binary";
-pub const PUB_KEY_FIELD: &str = "_verifying_key";
+pub const VERIFYING_KEY_FIELD: &str = "_verifying_key";
 pub const SIGNATURE_FIELD: &str = "_signature";
 
 //name of the entity fields
-pub const AUTHORS_FIELD: &str = "_authors";
 pub const AUTHORS_FIELD_SHORT: &str = "0";
 
 //names of some authentication fields used during auth validation
@@ -162,6 +163,12 @@ sys{
     }
 
     //Entities for the peer connection
+    User {
+        name: String,
+        data: Json nullable,
+        meeting_pub_key: Base64 ,
+        index(_verifying_key)
+    }
 
     AllowedPeer{
         verifying_key: Base64,
@@ -177,17 +184,16 @@ sys{
     }
 
     InboundInvitation{
-        public_key: Base64,
-        static_adress: String,
-        beacon: String,
+        invite_id: Base64,
+        beacons: [sys.Beacon],
+        static_adress: String nullable,
         signature: Base64,
     }
 
     ProposedInvitation{
-        beacon: [sys.Beacon],
         remaining_use: Integer,
-        room: Base64,
-        authorisation: Base64,
+        target_room: Base64,
+        target_authorisation: Base64,
     }
 
     Beacon{

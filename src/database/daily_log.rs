@@ -406,6 +406,7 @@ impl DailyLog {
                         _dl.date
                     FROM _daily_log _dl
                     WHERE date = (SELECT MAX(date) FROM _daily_log WHERE _dl.room_id=_daily_log.room_id)
+                    LIMIT 1
                 ) as dl ON rcl.room_id=dl.room_id
                 WHERE rcl.room_id in ({})
                 ",

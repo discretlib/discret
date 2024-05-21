@@ -10,7 +10,7 @@ use crate::{
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
-    security::MeetingSecret,
+    security::{MeetingSecret, Uid},
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
         peer_outbound_service::{InboundQueryService, RemotePeerHandle},
@@ -56,6 +56,7 @@ impl PeerConnectionService {
         let lock_service = RoomLockService::start(max_concurent_synchronisation);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
+
         tokio::spawn(async move {
             let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
             let mut event_receiver = event_service.subcribe().await;
@@ -235,13 +236,49 @@ impl PeerConnectionService {
     }
 }
 
-// struct AllowedPeer {
-//     verifying_key: Vec<u8>,
-//     meeting_pub_key: Vec<u8>,
-//     disabled_until: Integer,
-//     beacons: [sys.Beacon],
-//     allowed_hardware: [sys.Hardware],
-// }
+pub struct AllowedConnection {}
+impl AllowedConnection {
+    pub async fn load() {}
+    pub async fn add() {}
+    pub async fn create_invite() {}
+    pub async fn add_invite() {}
+}
+
+pub struct AllowedPeer {
+    id: String,
+    verifying_key: String,
+    meeting_pub_key: String,
+    banned_until: i64,
+    beacons: Vec<Beacon>,
+    static_adress: Option<String>,
+}
+
+pub struct AllowedHardware {
+    id: String,
+    fingerprint: String,
+    name: String,
+}
+
+pub struct InboundInvitation {
+    id: String,
+    invite_id: String,
+    beacons: Vec<Beacon>,
+    static_adress: Option<String>,
+    signature: String,
+}
+
+pub struct ProposedInvitation {
+    id: String,
+    beacons: Vec<Beacon>,
+    remaining_use: i64,
+    room: String,
+    authorisation: String,
+}
+
+pub struct Beacon {
+    id: String,
+    address: String,
+}
 
 #[cfg(test)]
 pub use crate::{log_service::Log, security::random32};

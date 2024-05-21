@@ -1,8 +1,8 @@
 use crate::{
     database::configuration::{
-        AUTHORS_FIELD, AUTHORS_FIELD_SHORT, AUTHOR_ENT, BINARY_FIELD, CREATION_DATE_FIELD,
-        ENTITY_FIELD, ID_FIELD, JSON_FIELD, MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, ROOM_ID_FIELD,
-        SIGNATURE_FIELD, SYSTEM_NAMESPACE,
+        AUTHOR_ENT, AUTHOR_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD,
+        JSON_FIELD, MODIFICATION_DATE_FIELD, ROOM_ENT, ROOM_FIELD, ROOM_ID_FIELD, SIGNATURE_FIELD,
+        SYSTEM_NAMESPACE, VERIFYING_KEY_FIELD,
     },
     security::base64_decode,
 };
@@ -80,6 +80,34 @@ lazy_static::lazy_static! {
             },
         );
 
+        fields.insert(
+            AUTHOR_FIELD.to_string(),
+            Field {
+                name: AUTHOR_FIELD.to_string(),
+                short_name: AUTHOR_FIELD.to_string(),
+                field_type: FieldType::Entity(AUTHOR_ENT.to_string()),
+                default_value: None,
+                nullable: false,
+                deprecated: false,
+                mutable: false,
+                is_system: true,
+            },
+        );
+
+        fields.insert(
+            ROOM_FIELD.to_string(),
+            Field {
+                name: ROOM_FIELD.to_string(),
+                short_name: ROOM_FIELD.to_string(),
+                field_type: FieldType::Entity(ROOM_ENT.to_string()),
+                default_value: None,
+                nullable: false,
+                deprecated: false,
+                mutable: false,
+                is_system: true,
+            },
+        );
+
        fields.insert(
             ENTITY_FIELD.to_string(),
             Field {
@@ -123,10 +151,10 @@ lazy_static::lazy_static! {
         );
 
         fields.insert(
-            PUB_KEY_FIELD.to_string(),
+            VERIFYING_KEY_FIELD.to_string(),
             Field {
-                name: PUB_KEY_FIELD.to_string(),
-                short_name: PUB_KEY_FIELD.to_string(),
+                name: VERIFYING_KEY_FIELD.to_string(),
+                short_name: VERIFYING_KEY_FIELD.to_string(),
                 field_type: FieldType::Base64,
                 default_value: None,
                 nullable: false,
@@ -150,19 +178,7 @@ lazy_static::lazy_static! {
             },
         );
 
-        fields.insert(
-            AUTHORS_FIELD.to_string(),
-            Field {
-                name: AUTHORS_FIELD.to_string(),
-                short_name: AUTHORS_FIELD_SHORT.to_string(),
-                field_type: FieldType::Array(AUTHOR_ENT.to_string()),
-                default_value: None,
-                nullable: false,
-                deprecated: false,
-                mutable: false,
-                is_system: false,
-            },
-        );
+
 
         fields
 

@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::database::query_language::{
-        data_model_parser::DataModel, query_parser::QueryParser,
+    use crate::database::{
+        configuration,
+        query_language::{data_model_parser::DataModel, query_parser::QueryParser},
     };
 
     #[test]
@@ -1153,5 +1154,37 @@ mod tests {
             &data_model,
         )
         .expect("aliases are supported");
+    }
+
+    #[test]
+    fn author() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update_system(configuration::SYSTEM_DATA_MODEL)
+            .unwrap();
+        data_model
+            .update(
+                "
+            {
+                Person {
+                    name : String,
+                } 
+            }",
+            )
+            .unwrap();
+
+        let _query = QueryParser::parse(
+            r#"
+            query aquery {
+                Person  {
+                    name
+                    author {
+                        name
+                    }
+                }
+            } "#,
+            &data_model,
+        )
+        .expect("valid query");
     }
 }

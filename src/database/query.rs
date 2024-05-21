@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
 
+use super::configuration::{
+    AUTHOR_FIELD, ID_FIELD, ROOM_FIELD, ROOM_ID_FIELD, VERIFYING_KEY_FIELD,
+};
 use super::query_language::query_parser::{
     Direction, EntityParams, EntityQuery, Function, QueryField, QueryFieldType,
 };
@@ -172,15 +175,28 @@ pub fn get_exists_query(
                 if !nullable && !entity.params.nullable.contains(field_name) {
                     tab(&mut q, t);
                     q.push_str("AND EXISTS (\n");
-                    let sub = get_sub_entity_query(
-                        sub_entity,
-                        prepared_query,
-                        parent_table,
-                        field_name,
-                        field_short,
-                        t + 1,
-                        true,
-                    );
+                    let sub = if field.field.is_system {
+                        get_sub_system_entity_query(
+                            sub_entity,
+                            prepared_query,
+                            parent_table,
+                            &field.name(),
+                            &field.field.name,
+                            t + 1,
+                            true,
+                        )
+                    } else {
+                        get_sub_entity_query(
+                            sub_entity,
+                            prepared_query,
+                            parent_table,
+                            field_name,
+                            field_short,
+                            t + 1,
+                            true,
+                        )
+                    };
+
                     q.push_str(&sub);
                     q.push('\n');
                     tab(&mut q, t);
@@ -262,6 +278,76 @@ pub fn get_sub_entity_query(
     ));
     tab(&mut q, t);
     q.push_str(&format!("_edge.src={}.id ", &parent_table));
+
+    let exists = get_exists_query(entity, prepared_query, field_name, t);
+    q.push_str(&exists);
+
+    let end = get_end_select_query(entity, prepared_query, t);
+    q.push_str(&end);
+
+    q.push('\n');
+    tab(&mut q, t);
+    if !is_unique_value {
+        let limit = get_limit(&entity.params, prepared_query);
+        q.push_str(&limit);
+    } else {
+        q.push_str("LIMIT 1 ");
+    }
+    q
+}
+
+///
+/// process query to link
+///     room_id  to sys.Room using the 'room' virtual field
+///     author to sys.User using the 'room' virtual field
+///
+pub fn get_sub_system_entity_query(
+    entity: &EntityQuery,
+    prepared_query: &mut SingleQuery,
+    parent_table: &str,
+    field_name: &str,
+    field_system_name: &str,
+    t: usize,
+    is_unique_value: bool,
+) -> String {
+    let mut q = String::new();
+    tab(&mut q, t);
+    q.push_str("SELECT \n");
+    let selection = get_fields(entity, prepared_query, field_name, t);
+    tab(&mut q, t);
+    q.push_str(&selection);
+    q.push_str(" as value \n");
+    tab(&mut q, t);
+
+    q.push_str(&format!("FROM _node {0}", field_name));
+    let search = get_search_join(&entity.params, field_name, t);
+    q.push_str(&search);
+
+    q.push('\n');
+    tab(&mut q, t);
+    q.push_str("WHERE \n");
+    tab(&mut q, t);
+    q.push_str(&format!(
+        "{}._entity='{}' AND \n",
+        field_name, &entity.short_name
+    ));
+    tab(&mut q, t);
+
+    match field_system_name {
+        AUTHOR_FIELD => {
+            q.push_str(&format!(
+                "{}.{}={}.{} ",
+                field_name, VERIFYING_KEY_FIELD, &parent_table, VERIFYING_KEY_FIELD
+            ));
+        }
+        ROOM_FIELD => {
+            q.push_str(&format!(
+                "{}.{}={}.{} ",
+                field_name, ID_FIELD, &parent_table, ROOM_ID_FIELD
+            ));
+        }
+        _ => unreachable!(),
+    }
 
     let exists = get_exists_query(entity, prepared_query, field_name, t);
     q.push_str(&exists);
@@ -438,15 +524,28 @@ fn get_fields(
 
             QueryFieldType::EntityQuery(field_entity, _) => {
                 q.push_str(&format!("'{}', (\n", &field.name()));
-                let query = get_sub_entity_query(
-                    field_entity,
-                    prepared_query,
-                    parent_table,
-                    &field.name(),
-                    &field.field.short_name,
-                    t + 1,
-                    true,
-                );
+
+                let query = if field.field.is_system {
+                    get_sub_system_entity_query(
+                        field_entity,
+                        prepared_query,
+                        parent_table,
+                        &field.name(),
+                        &field.field.name,
+                        t + 1,
+                        true,
+                    )
+                } else {
+                    get_sub_entity_query(
+                        field_entity,
+                        prepared_query,
+                        parent_table,
+                        &field.name(),
+                        &field.field.short_name,
+                        t + 1,
+                        true,
+                    )
+                };
                 q.push_str(&query);
                 q.push('\n');
                 tab(&mut q, t);

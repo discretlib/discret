@@ -3,8 +3,8 @@ mod tests {
 
     use crate::database::{
         configuration::{
-            AUTHORS_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
-            MODIFICATION_DATE_FIELD, PUB_KEY_FIELD, SIGNATURE_FIELD,
+            AUTHOR_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
+            MODIFICATION_DATE_FIELD, SIGNATURE_FIELD, VERIFYING_KEY_FIELD,
         },
         query_language::{data_model_parser::*, FieldType, Value},
     };
@@ -573,13 +573,13 @@ mod tests {
         let mut entity = Entity::new();
 
         let mut field = Field::new();
-        field.name = AUTHORS_FIELD.to_string();
+        field.name = AUTHOR_FIELD.to_string();
         entity
             .add_field(field)
             .expect_err("system field allready defined");
 
         let mut field = Field::new();
-        field.name = AUTHORS_FIELD.to_string();
+        field.name = AUTHOR_FIELD.to_string();
         entity
             .add_field(field)
             .expect_err("system field allready defined");
@@ -621,7 +621,7 @@ mod tests {
             .expect_err("system field allready defined");
 
         let mut field = Field::new();
-        field.name = PUB_KEY_FIELD.to_string();
+        field.name = VERIFYING_KEY_FIELD.to_string();
         entity
             .add_field(field)
             .expect_err("system field allready defined");
