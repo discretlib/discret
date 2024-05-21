@@ -189,10 +189,10 @@ impl GraphDatabaseService {
         deletion: &str,
         param_opt: Option<Parameters>,
     ) -> Result<DeletionQuery> {
-        let (send, recieve) = oneshot::channel::<Result<DeletionQuery>>();
-        let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), send);
+        let (reply, receive) = oneshot::channel::<Result<DeletionQuery>>();
+        let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
-        let result = recieve.await?;
+        let result = receive.await?;
         let _ = self.sender.send(Message::ComputeDailyLog()).await;
         result
     }
@@ -207,12 +207,12 @@ impl GraphDatabaseService {
         mutation: &str,
         param_opt: Option<Parameters>,
     ) -> Result<MutationQuery> {
-        let (send, recieve) = oneshot::channel::<Result<MutationQuery>>();
+        let (reply, receive) = oneshot::channel::<Result<MutationQuery>>();
 
-        let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), send);
+        let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
 
-        let result = recieve.await?;
+        let result = receive.await?;
 
         let _ = self.sender.send(Message::ComputeDailyLog()).await;
 
@@ -238,10 +238,10 @@ impl GraphDatabaseService {
     /// GraphQL query
     ///
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
-        let (send, recieve) = oneshot::channel::<Result<String>>();
-        let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), send);
+        let (reply, receive) = oneshot::channel::<Result<String>>();
+        let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
-        recieve.await?
+        receive.await?
     }
 
     ///
@@ -254,17 +254,17 @@ impl GraphDatabaseService {
         params: Vec<Box<dyn ToSql + Sync + Send>>,
         mapping: RowMappingFn<T>,
     ) -> Result<Vec<T>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
+        let (reply, receive) = oneshot::channel::<Result<Vec<T>>>();
 
         self.db
             .reader
             .send_async(Box::new(move |conn| {
                 let result =
                     DatabaseReader::select(&query, &params, &mapping, conn).map_err(Error::from);
-                let _ = send_response.send(result);
+                let _ = reply.send(result);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
@@ -460,17 +460,16 @@ impl GraphDatabaseService {
         room_id: Uid,
         del_date: i64,
     ) -> Result<Vec<EdgeDeletionEntry>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
+        let (reply, receive) = oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
         self.db
             .reader
             .send_async(Box::new(move |conn| {
                 let deteletions =
                     EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
-                let _ = send_response.send(deteletions);
+                let _ = reply.send(deteletions);
             }))
             .await?;
-        receive_response.await?
+        receive.await?
     }
 
     ///
