@@ -200,25 +200,25 @@ mod tests {
 
         room_auth.add_room(room);
 
-        let room_list = room_auth.get_rooms_for_user(&random32().to_vec(), user_valid_date);
+        let room_list = room_auth.rooms_for_user(&random32().to_vec(), user_valid_date);
         assert_eq!(0, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user1.verifying_key, user_valid_date);
+        let room_list = room_auth.rooms_for_user(&user1.verifying_key, user_valid_date);
         assert_eq!(1, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user2.verifying_key, user_valid_date);
+        let room_list = room_auth.rooms_for_user(&user2.verifying_key, user_valid_date);
         assert_eq!(1, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user3.verifying_key, user_valid_date);
+        let room_list = room_auth.rooms_for_user(&user3.verifying_key, user_valid_date);
         assert_eq!(1, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user1.verifying_key, 0);
+        let room_list = room_auth.rooms_for_user(&user1.verifying_key, 0);
         assert_eq!(0, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user2.verifying_key, 0);
+        let room_list = room_auth.rooms_for_user(&user2.verifying_key, 0);
         assert_eq!(0, room_list.len());
 
-        let room_list = room_auth.get_rooms_for_user(&user3.verifying_key, 0);
+        let room_list = room_auth.rooms_for_user(&user3.verifying_key, 0);
         assert_eq!(0, room_list.len());
     }
 

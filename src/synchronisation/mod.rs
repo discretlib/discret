@@ -24,6 +24,7 @@ pub enum Query {
     EdgeDeletionLog(Uid, i64),
     NodeDeletionLog(Uid, i64),
     FullNodes(Uid, Vec<Uid>),
+    PeerNodes(Uid, Vec<Vec<u8>>),
 }
 
 #[derive(Serialize, Deserialize)]

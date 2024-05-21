@@ -1,4 +1,8 @@
-use rusqlite::Connection;
+use std::collections::HashSet;
+
+use rusqlite::{params_from_iter, Connection, OptionalExtension};
+
+use super::{node::Node, sqlite_database::Writeable, Error};
 
 pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
@@ -28,6 +32,7 @@ pub const ENTITY_RIGHT_ENT: &str = "sys.EntityRight";
 pub const ENTITY_RIGHT_ENT_SHORT: &str = "0.3";
 
 pub const PEER_ENT: &str = "sys.Peer";
+pub const PEER_ENT_SHORT: &str = "0.4";
 
 //name of the system fields
 pub const ID_FIELD: &str = "id";
@@ -138,8 +143,188 @@ pub fn sys_room_entities() -> Vec<String> {
 }
 
 pub struct Peer {}
-impl Peer {}
+impl Peer {
+    pub fn get_missing(
+        keys: HashSet<Vec<u8>>,
+        conn: &Connection,
+    ) -> Result<HashSet<Vec<u8>>, Error> {
+        let it = &mut keys.iter().peekable();
+        let mut result = HashSet::with_capacity(keys.len());
 
+        //limit the IN clause to a reasonable size, avoiding the 32766 parameter limit in sqlite
+        let row_per_query = 500;
+        let mut query_list = Vec::new();
+        let mut row_num = 0;
+        struct QueryParams<'a> {
+            in_clause: String,
+            ids: Vec<&'a Vec<u8>>,
+        }
+        let mut current_query = QueryParams {
+            in_clause: String::new(),
+            ids: Vec::new(),
+        };
+
+        while let Some(nid) = it.next() {
+            current_query.in_clause.push('?');
+            current_query.ids.push(nid);
+
+            row_num += 1;
+            if row_num < row_per_query {
+                if it.peek().is_some() {
+                    current_query.in_clause.push(',');
+                }
+            } else {
+                query_list.push(current_query);
+                row_num = 0;
+                current_query = QueryParams {
+                    in_clause: String::new(),
+                    ids: Vec::new(),
+                };
+            }
+            result.insert(nid.clone());
+        }
+        if !current_query.ids.is_empty() {
+            query_list.push(current_query);
+        }
+        for i in 0..query_list.len() {
+            let current_query = &query_list[i];
+            let ids = &current_query.ids;
+            let in_clause = &current_query.in_clause;
+
+            let query = format!(
+                "SELECT verifying_key 
+                FROM _node 
+                WHERE _entity='{}' 
+                AND verifying_key IN ({})
+                AND room_id IS NULL",
+                PEER_ENT_SHORT, in_clause
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut rows = stmt.query(params_from_iter(ids.iter()))?;
+            while let Some(row) = rows.next()? {
+                let veri: Vec<u8> = row.get(0)?;
+                result.remove(&veri);
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn get(keys: Vec<Vec<u8>>, conn: &Connection) -> Result<Vec<Node>, Error> {
+        let it = &mut keys.iter().peekable();
+        let mut result = Vec::with_capacity(keys.len());
+
+        //limit the IN clause to a reasonable size, avoiding the 32766 parameter limit in sqlite
+        let row_per_query = 500;
+        let mut query_list = Vec::new();
+        let mut row_num = 0;
+        struct QueryParams<'a> {
+            in_clause: String,
+            ids: Vec<&'a Vec<u8>>,
+        }
+        let mut current_query = QueryParams {
+            in_clause: String::new(),
+            ids: Vec::new(),
+        };
+
+        while let Some(nid) = it.next() {
+            current_query.in_clause.push('?');
+            current_query.ids.push(nid);
+
+            row_num += 1;
+            if row_num < row_per_query {
+                if it.peek().is_some() {
+                    current_query.in_clause.push(',');
+                }
+            } else {
+                query_list.push(current_query);
+                row_num = 0;
+                current_query = QueryParams {
+                    in_clause: String::new(),
+                    ids: Vec::new(),
+                };
+            }
+        }
+        if !current_query.ids.is_empty() {
+            query_list.push(current_query);
+        }
+        for i in 0..query_list.len() {
+            let current_query = &query_list[i];
+            let ids = &current_query.ids;
+            let in_clause = &current_query.in_clause;
+
+            let query = format!(
+                "SELECT id, room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature  
+                FROM _node 
+                WHERE _entity='{}' 
+                AND verifying_key IN ({})
+                AND room_id IS NULL",
+                PEER_ENT_SHORT, in_clause
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut rows = stmt.query(params_from_iter(ids.iter()))?;
+            while let Some(row) = rows.next()? {
+                let node = Node {
+                    id: row.get(0)?,
+                    room_id: row.get(1)?,
+                    cdate: row.get(2)?,
+                    mdate: row.get(3)?,
+                    _entity: row.get(4)?,
+                    _json: row.get(5)?,
+                    _binary: row.get(6)?,
+                    verifying_key: row.get(7)?,
+                    _signature: row.get(8)?,
+                    _local_id: None,
+                };
+                result.push(node)
+            }
+        }
+        Ok(result)
+    }
+}
+pub struct PeerNodes {
+    pub nodes: Vec<Node>,
+}
+impl Writeable for PeerNodes {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        for node in &self.nodes {
+            let mut exists_stmt =
+                conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
+            let esists: Option<i64> = exists_stmt
+                .query_row((node.id, &node._entity), |row| row.get(0))
+                .optional()?;
+            if esists.is_none() {
+                let mut insert_stmt = conn.prepare_cached(
+                    "INSERT INTO _node ( 
+                        id,
+                        room_id,
+                        cdate,
+                        mdate,
+                        _entity,
+                        _json,
+                        _binary,
+                        verifying_key,
+                        _signature
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )",
+                )?;
+                insert_stmt.insert((
+                    &node.id,
+                    &node.room_id,
+                    &node.cdate,
+                    &node.mdate,
+                    &node._entity,
+                    &node._json,
+                    &node._binary,
+                    &node.verifying_key,
+                    &node._signature,
+                ))?;
+            }
+        }
+
+        Ok(())
+    }
+}
 pub struct AllowedPeer {
     id: String,
     verifying_key: String,
@@ -174,4 +359,73 @@ pub struct ProposedInvitation {
 pub struct Beacon {
     id: String,
     address: String,
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::{fs, path::PathBuf};
+
+    use crate::security::Ed25519SigningKey;
+
+    use crate::database::sqlite_database::prepare_connection;
+
+    use super::*;
+    const DATA_PATH: &str = "test_data/database/system_entities/";
+    fn init_database_path() {
+        let path: PathBuf = DATA_PATH.into();
+        fs::create_dir_all(&path).unwrap();
+        let paths = fs::read_dir(path).unwrap();
+
+        for path in paths {
+            let dir = path.unwrap().path();
+            let paths = fs::read_dir(dir).unwrap();
+            for file in paths {
+                let files = file.unwrap().path();
+                // println!("Name: {}", files.display());
+                let _ = fs::remove_file(&files);
+            }
+        }
+    }
+
+    #[test]
+    fn peer() {
+        let conn1 = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn1).unwrap();
+
+        let num_peer = 10;
+        let mut peers = HashSet::with_capacity(num_peer);
+
+        for _ in 0..num_peer {
+            let keypair = Ed25519SigningKey::new();
+            let mut node = Node {
+                _entity: PEER_ENT_SHORT.to_string(),
+                ..Default::default()
+            };
+            node.sign(&keypair).unwrap();
+            assert!(node.verify().is_ok());
+            peers.insert(node.verifying_key.clone());
+            node.write(&conn1, false, &None, &None).unwrap();
+        }
+
+        let conn2 = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn2).unwrap();
+
+        let missing_1 = Peer::get_missing(peers.clone(), &conn1).unwrap();
+        assert_eq!(missing_1.len(), 0);
+
+        let missing = Peer::get_missing(peers.clone(), &conn2).unwrap();
+        assert_eq!(missing.len(), num_peer);
+
+        let keys = missing.into_iter().collect();
+        let nodes = Peer::get(keys, &conn1).unwrap();
+        assert_eq!(nodes.len(), num_peer);
+
+        let mut pn = PeerNodes { nodes };
+
+        pn.write(&conn2).unwrap();
+
+        let missing = Peer::get_missing(peers, &conn2).unwrap();
+        assert_eq!(missing.len(), 0);
+    }
 }

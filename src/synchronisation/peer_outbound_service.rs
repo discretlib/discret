@@ -266,6 +266,28 @@ impl InboundQueryService {
                 }
                 Ok(())
             }
+
+            Query::PeerNodes(room_id, keys) => {
+                if peer.allowed_room.contains(&room_id) {
+                    let res = peer.db.get_peer_nodes(room_id, keys).await;
+                    match res {
+                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Err(e) => {
+                            log_service.error("PeerNodes".to_string(), e.into());
+                            peer.send(
+                                msg.id,
+                                false,
+                                Error::RemoteTechnical("PeerNodes".to_string()),
+                            )
+                            .await?
+                        }
+                    }
+                } else {
+                    peer.send(msg.id, false, Error::Authorisation("PeerNodes".to_string()))
+                        .await?
+                }
+                Ok(())
+            }
         }
     }
     pub fn add_allowed_room(&self, room: Uid) {

@@ -4,7 +4,8 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
-use super::system_entities;
+use super::sqlite_database::{BufferedDatabaseWriter, WriteStmt};
+use super::system_entities::{self, Peer, PeerNodes};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -43,6 +44,8 @@ enum Message {
     RoomAdd(RoomNode, Sender<Result<()>>),
     FullNodeAdd(Uid, Vec<FullNode>, Sender<Result<Vec<Uid>>>),
     RoomForUser(Vec<u8>, Sender<Result<VecDeque<Uid>>>),
+    UserForRoom(Uid, Sender<Result<HashSet<Vec<u8>>>>),
+    PeerNodes(Uid, Vec<Vec<u8>>, Sender<Result<Vec<Node>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
@@ -55,6 +58,7 @@ enum Message {
 pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
     database_reader: DatabaseReader,
+    database_writer: BufferedDatabaseWriter,
     verifying_key: Vec<u8>,
     system_room_id: Uid,
 }
@@ -70,7 +74,7 @@ impl GraphDatabaseService {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
         let system_room_id = derive_uid(&format!("{}{}", name, "SYSTEM_ROOM"), key_material);
 
-        let mut db = GraphDatabase::start(
+        let mut db = GraphDatabase::new(
             system_room_id,
             model,
             name,
@@ -82,7 +86,7 @@ impl GraphDatabaseService {
         .await?;
 
         let database_reader = db.graph_database.reader.clone();
-
+        let database_writer = db.graph_database.writer.clone();
         let verifying_key = db.verifying_key.clone();
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
@@ -158,13 +162,19 @@ impl GraphDatabaseService {
                     }
 
                     Message::RoomForUser(verifying_key, reply) => {
-                        db.get_rooms_for_user(verifying_key, reply).await;
+                        db.rooms_for_user(verifying_key, reply).await;
                     }
                     Message::DeleteEdges(edges, reply) => {
                         db.delete_edges(edges, reply).await;
                     }
                     Message::DeleteNodes(nodes, reply) => {
                         db.delete_nodes(nodes, reply).await;
+                    }
+                    Message::UserForRoom(room_id, reply) => {
+                        db.users_for_room(room_id, reply).await;
+                    }
+                    Message::PeerNodes(room_id, keys, reply) => {
+                        db.users_nodes(room_id, keys, reply).await;
                     }
                 }
             }
@@ -173,6 +183,7 @@ impl GraphDatabaseService {
         Ok(GraphDatabaseService {
             sender,
             database_reader,
+            database_writer,
             verifying_key,
             system_room_id,
         })
@@ -508,6 +519,57 @@ impl GraphDatabaseService {
         let _ = self.sender.send(msg).await;
         receive_response.await?
     }
+
+    ///
+    /// retrieve sys.Peer node
+    ///
+    pub async fn get_peer_nodes(&self, room_id: Uid, keys: Vec<Vec<u8>>) -> Result<Vec<Node>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Node>>>();
+        let msg = Message::PeerNodes(room_id, keys, send_response);
+        let _ = self.sender.send(msg).await;
+        receive_response.await?
+    }
+
+    ///
+    /// insert sys.Peer nodes
+    ///
+    pub async fn add_peer_nodes(&self, nodes: Vec<Node>) -> Result<()> {
+        let (send_response, receive_response) = oneshot::channel::<Result<WriteStmt>>();
+        for node in &nodes {
+            node.verify()?;
+        }
+        let nodes = PeerNodes { nodes };
+        self.database_writer
+            .send(WriteMessage::Write(Box::new(nodes), send_response))
+            .await?;
+
+        match receive_response.await? {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    ///
+    /// retrieve users for a room
+    ///
+    pub async fn users_for_room(&self, room_id: Uid) -> Result<HashSet<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+        let msg = Message::UserForRoom(room_id, send_response);
+        let _ = self.sender.send(msg).await;
+        receive_response.await?
+    }
+
+    pub async fn missing_peers(&self, peers: HashSet<Vec<u8>>) -> Result<HashSet<Vec<u8>>> {
+        let (send_response, receive_response) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+
+        self.database_reader
+            .send_async(Box::new(move |conn| {
+                let room_node = Peer::get_missing(peers, conn);
+                let _ = send_response.send(room_node);
+            }))
+            .await?;
+        receive_response.await?
+    }
 }
 
 struct GraphDatabase {
@@ -522,7 +584,7 @@ struct GraphDatabase {
     verifying_key: Vec<u8>,
 }
 impl GraphDatabase {
-    pub async fn start(
+    pub async fn new(
         system_room_id: Uid,
         model: &str,
         name: &str,
@@ -898,7 +960,7 @@ impl GraphDatabase {
             .await;
     }
 
-    pub async fn get_rooms_for_user(
+    pub async fn rooms_for_user(
         &self,
         verifying_key: Vec<u8>,
         reply: Sender<Result<VecDeque<Uid>>>,
@@ -928,6 +990,51 @@ impl GraphDatabase {
             }
             Err(e) => {
                 let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
+            }
+        }
+    }
+
+    pub async fn users_for_room(&self, room_id: Uid, reply: Sender<Result<HashSet<Vec<u8>>>>) {
+        let _ = self
+            .auth_service
+            .send(AuthorisationMessage::UserForRoom(room_id, reply))
+            .await;
+    }
+
+    pub async fn users_nodes(
+        &self,
+        room_id: Uid,
+        keys: Vec<Vec<u8>>,
+        reply: Sender<Result<Vec<Node>>>,
+    ) {
+        let (send_response, receive_response) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
+        let _ = self
+            .auth_service
+            .send(AuthorisationMessage::ValidatePeerNodesRequest(
+                room_id,
+                keys,
+                send_response,
+            ))
+            .await;
+        let valid_rs = receive_response.await;
+        if let Err(e) = valid_rs {
+            let _ = reply.send(Err(e.into()));
+            return;
+        }
+
+        match valid_rs.unwrap() {
+            Ok(list) => {
+                let _ = self
+                    .graph_database
+                    .reader
+                    .send_async(Box::new(move |conn| {
+                        let nodes_rs = Peer::get(list, conn);
+                        let _ = reply.send(nodes_rs);
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e.into()));
             }
         }
     }

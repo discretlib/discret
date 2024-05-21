@@ -6,7 +6,9 @@ use std::{
 use crate::security::{base64_decode, uid_decode, Uid};
 
 use super::{
-    system_entities::{self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD},
+    system_entities::{
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
+    },
     Error, Result,
 };
 
@@ -127,6 +129,22 @@ impl Room {
     }
 
     pub fn has_user(&self, user: &Vec<u8>) -> bool {
+        for entry in &self.admins {
+            for u in entry.1 {
+                if user.eq(&u.verifying_key) {
+                    return true;
+                }
+            }
+        }
+
+        for entry in &self.user_admins {
+            for u in entry.1 {
+                if user.eq(&u.verifying_key) {
+                    return true;
+                }
+            }
+        }
+
         for entry in &self.authorisations {
             let auth = entry.1;
             if auth.has_user(user) {

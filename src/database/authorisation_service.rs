@@ -5,7 +5,9 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use crate::{
     date_utils::now,
     event_service::{EventService, EventServiceMessage},
-    security::{base64_encode, derive_uid, uid_decode, Ed25519SigningKey, SigningKey, Uid},
+    security::{
+        base64_encode, derive_uid, uid_decode, uid_encode, Ed25519SigningKey, SigningKey, Uid,
+    },
     synchronisation::node_full::FullNode,
 };
 
@@ -43,6 +45,8 @@ pub enum AuthorisationMessage {
         HashMap<Uid, (NodeDeletionEntry, Option<Vec<u8>>)>,
         Sender<Result<()>>,
     ),
+    UserForRoom(Uid, Sender<Result<HashSet<Vec<u8>>>>),
+    ValidatePeerNodesRequest(Uid, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -255,7 +259,7 @@ impl AuthorisationService {
                 }
             },
             AuthorisationMessage::RoomForUser(verifying_key, date, reply) => {
-                let rooms = auth.get_rooms_for_user(&verifying_key, date);
+                let rooms = auth.rooms_for_user(&verifying_key, date);
                 let _ = reply.send(rooms);
             }
 
@@ -292,6 +296,14 @@ impl AuthorisationService {
                         .send(WriteMessage::DeleteNodes(filtered_nodes, reply))
                         .await;
                 }
+            }
+
+            AuthorisationMessage::UserForRoom(room_id, reply) => {
+                let _ = reply.send(auth.user_for_room(room_id));
+            }
+
+            AuthorisationMessage::ValidatePeerNodesRequest(room_id, keys, reply) => {
+                let _ = reply.send(auth.validate_peer_nodes_request(room_id, keys));
             }
         }
     }
@@ -860,7 +872,7 @@ impl RoomAuthorisations {
         Ok((need_room_mutation, need_user_mutation))
     }
 
-    pub fn get_rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
+    pub fn rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
         let mut result = HashSet::new();
         for room in &self.rooms {
             if room.1.is_user_valid_at(&verifying_key, date) {
@@ -868,6 +880,32 @@ impl RoomAuthorisations {
             }
         }
         result
+    }
+
+    pub fn user_for_room(&self, room_id: Uid) -> Result<HashSet<Vec<u8>>> {
+        let room = self
+            .rooms
+            .get(&room_id)
+            .ok_or(Error::UnknownRoom(uid_encode(&room_id)))?;
+        Ok(room.users())
+    }
+
+    pub fn validate_peer_nodes_request(
+        &self,
+        room_id: Uid,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Vec<u8>>> {
+        let room = self
+            .rooms
+            .get(&room_id)
+            .ok_or(Error::UnknownRoom(uid_encode(&room_id)))?;
+
+        for key in &keys {
+            if !room.has_user(key) {
+                return Err(Error::InvalidUser(uid_encode(&room_id)));
+            }
+        }
+        Ok(keys)
     }
 
     pub const LOAD_QUERY: &'static str = "

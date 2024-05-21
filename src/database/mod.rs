@@ -29,6 +29,18 @@ pub enum Error {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    #[error(transparent)]
+    OneshotAsyncRecv(#[from] tokio::sync::oneshot::error::RecvError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error("{0}")]
+    DatabaseRowToLong(String),
+
     #[error("Invalid JSON Object {0}")]
     InvalidJsonObject(String),
 
@@ -43,18 +55,6 @@ pub enum Error {
 
     #[error("{0}")]
     InvalidNode(String),
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Utf8(#[from] std::str::Utf8Error),
-
-    #[error("{0}")]
-    DatabaseRowToLong(String),
-
-    #[error(transparent)]
-    OneshotAsyncRecv(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error("{0}")]
     ChannelSend(String),
@@ -91,6 +91,9 @@ pub enum Error {
 
     #[error("Rights allreday exits for entity '{0}'")]
     RightsExists(String),
+
+    #[error("user not found in room {0}")]
+    InvalidUser(String),
 
     #[error("A more recent User definition exists")]
     InvalidUserDate(),

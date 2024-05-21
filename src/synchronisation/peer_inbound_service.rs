@@ -21,7 +21,7 @@ use crate::{
         daily_log::{DailyLog, RoomDefinitionLog},
         edge::EdgeDeletionEntry,
         graph_database::GraphDatabaseService,
-        node::{NodeDeletionEntry, NodeIdentifier},
+        node::{Node, NodeDeletionEntry, NodeIdentifier},
         room_node::RoomNode,
     },
     event_service::{EventService, EventServiceMessage},
@@ -333,12 +333,15 @@ impl LocalPeerService {
         }
         let remote_room = remote_room_def.unwrap();
         Self::synchronise_room_definition(&remote_room, &local_room_def, db, query_service).await?;
+        let peers = db.users_for_room(room_id).await?;
+        let missing_peers = db.missing_peers(peers).await?;
 
-        // let missing_users: Vec<Vec<u8>> = db.get_missing_users(room_id).await?;
-        //
-        //ask for let users:Vec<Node> = Self::query(query_service, Query::Users(room_id, Vec<Vec<u8>>)).await?;  user get_users(room.id, Vec<verifying_key>)
-        //db.add_users(Vec<Node>)
-        //write user
+        let peer_nodes: Vec<Node> = Self::query(
+            query_service,
+            Query::PeerNodes(room_id, missing_peers.into_iter().collect()),
+        )
+        .await?;
+        db.add_peer_nodes(peer_nodes).await?;
 
         if Self::synchronise_room_data(&remote_room, &local_room_def, db, query_service).await? {
             db.compute_daily_log().await;
