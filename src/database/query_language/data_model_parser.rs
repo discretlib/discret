@@ -940,24 +940,6 @@ impl Entity {
         }
     }
 
-    pub fn add_index(&mut self, index: Index) -> Result<(), Error> {
-        let name = index.name();
-        if self.indexes.contains_key(&name) {
-            return Err(Error::InvalidQuery(format!(
-                "Index '{}' allready exists",
-                name
-            )));
-        }
-        if index.fields.is_empty() {
-            return Err(Error::InvalidQuery(format!(
-                "Index '{}' has no fields",
-                name
-            )));
-        }
-        self.indexes.insert(name, index);
-        Ok(())
-    }
-
     ///
     /// retrieve an entity field definition
     ///

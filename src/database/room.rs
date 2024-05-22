@@ -40,10 +40,6 @@ impl Room {
         Ok(())
     }
 
-    pub fn get_auth(&self, id: &Uid) -> Option<&Authorisation> {
-        self.authorisations.get(id)
-    }
-
     pub fn get_auth_mut(&mut self, id: &Uid) -> Option<&mut Authorisation> {
         self.authorisations.get_mut(id)
     }

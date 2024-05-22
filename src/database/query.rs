@@ -12,7 +12,7 @@ use super::system_entities::{
 };
 use super::Error;
 use super::Result;
-pub struct QueryVariable {}
+
 #[derive(Debug)]
 pub struct Param {
     internal: bool,

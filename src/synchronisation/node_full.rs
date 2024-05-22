@@ -668,7 +668,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let first_app = GraphDatabaseService::start(
+        let (first_app, verifying_key, _) = GraphDatabaseService::start(
             "app",
             data_model,
             &secret,
@@ -679,11 +679,11 @@ mod tests {
         .await
         .unwrap();
 
-        let first_user_id = base64_encode(first_app.verifying_key());
+        let first_user_id = base64_encode(&verifying_key);
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let second_app = GraphDatabaseService::start(
+        let (second_app, verifying_key, _) = GraphDatabaseService::start(
             "app",
             data_model,
             &secret,
@@ -694,7 +694,7 @@ mod tests {
         .await
         .unwrap();
 
-        let second_user_id = base64_encode(second_app.verifying_key());
+        let second_user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("first_user_id", first_user_id.clone()).unwrap();

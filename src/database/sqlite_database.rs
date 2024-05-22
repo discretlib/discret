@@ -14,13 +14,12 @@ use crate::{
 
 use super::{
     authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
-    system_entities,
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::{Edge, EdgeDeletionEntry},
     mutation_query::MutationQuery,
     node::{Node, NodeDeletionEntry},
-    Error, Result,
+    system_entities, Error, Result,
 };
 
 pub type RowMappingFn<T> = fn(&Row) -> std::result::Result<Box<T>, rusqlite::Error>;
@@ -93,7 +92,7 @@ pub fn create_connection(
     //
     //Value is the one recommended in the doc: 256 Mb
     //  - Is it ok on phones?
-    //  - Disabled because it hides the real RAM usage on linux, which is anoying for destop applications
+    //  - Disabled because it hides the real RAM usage on linux, which is anoying for a desktop applications
     //set_pragma("mmap_size", "268435456", &conn)?;
 
     //
@@ -203,8 +202,6 @@ impl Database {
         )?;
         Ok(Database { reader, writer })
     }
-
-    fn send_to_reader(&self) {}
 }
 
 // Main entry point to perform SELECT queries

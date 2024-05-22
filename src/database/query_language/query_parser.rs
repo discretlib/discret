@@ -51,9 +51,6 @@ pub enum Function {
     Sum(String),
 }
 
-
-
-const DEFAULT_LIMIT: i64 = 100;
 #[derive(Debug)]
 pub struct EntityParams {
    pub filters: Vec<FilterParam>,

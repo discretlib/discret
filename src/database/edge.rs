@@ -265,24 +265,6 @@ impl Edge {
         Ok(())
     }
 
-    pub fn delete_edge(
-        src: &Uid,
-        label: &str,
-        dest: &Uid,
-        conn: &Connection,
-    ) -> std::result::Result<(), rusqlite::Error> {
-        let mut delete_stmt = conn.prepare_cached(
-            "DELETE FROM _edge
-            WHERE 
-                src = ? AND
-                label = ? AND
-                dest = ?
-            ",
-        )?;
-        delete_stmt.execute((&src, &label, &dest))?;
-        Ok(())
-    }
-
     ///
     /// retrieve an edge
     ///

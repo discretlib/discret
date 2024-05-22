@@ -1,5 +1,5 @@
 use lru::LruCache;
-use rusqlite::{OptionalExtension, ToSql};
+use rusqlite::OptionalExtension;
 use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
@@ -20,7 +20,7 @@ use super::{
         mutation_parser::MutationParser, parameter::Parameters, query_parser::QueryParser,
     },
     room_node::RoomNode,
-    sqlite_database::{Database, DatabaseReader, RowMappingFn, WriteMessage, Writeable},
+    sqlite_database::{Database, WriteMessage, Writeable},
     system_entities::SYSTEM_DATA_MODEL,
     Error, Result,
 };
@@ -39,7 +39,8 @@ enum Message {
     Query(String, Parameters, Sender<Result<String>>),
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
-    UpdateModel(String, Sender<Result<String>>),
+    DataModelUpdate(String, Sender<Result<String>>),
+    DataModel(Sender<Result<String>>),
     FullNodeAdd(Uid, Vec<FullNode>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
@@ -54,28 +55,26 @@ pub struct GraphDatabaseService {
     sender: mpsc::Sender<Message>,
     auth: AuthorisationService,
     db: Database,
-    verifying_key: Vec<u8>,
-    system_room_id: Uid,
 }
 impl GraphDatabaseService {
     pub async fn start(
-        name: &str,
-        model: &str,
+        app_key: &str,
+        datamodel: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
-        config: Configuration,
+        configuration: Configuration,
         event_service: EventService,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Vec<u8>, Uid)> {
         let (sender, mut receiver) = mpsc::channel::<Message>(100);
-        let system_room_id = derive_uid(&format!("{}{}", name, "SYSTEM_ROOM"), key_material);
+        let system_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
 
         let mut db = GraphDatabase::new(
             system_room_id,
-            model,
-            name,
+            datamodel,
+            app_key,
             key_material,
             data_folder,
-            config,
+            configuration,
             event_service,
         )
         .await?;
@@ -125,7 +124,7 @@ impl GraphDatabaseService {
                         db.add_full_nodes(room_id, nodes, reply).await;
                     }
 
-                    Message::UpdateModel(value, reply) => {
+                    Message::DataModelUpdate(value, reply) => {
                         match db.update_data_model(&value).await {
                             Ok(model) => {
                                 let _ = reply.send(Ok(model));
@@ -135,6 +134,18 @@ impl GraphDatabaseService {
                             }
                         }
                     }
+
+                    Message::DataModel(reply) => {
+                        match serde_json::to_string_pretty(&db.data_model) {
+                            Ok(model) => {
+                                let _ = reply.send(Ok(model));
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err.into()));
+                            }
+                        }
+                    }
+
                     Message::ComputeDailyLog() => {
                         _ = db
                             .graph_database
@@ -156,29 +167,15 @@ impl GraphDatabaseService {
             }
         });
 
-        Ok(GraphDatabaseService {
-            sender,
-            auth,
-            db: database,
+        Ok((
+            GraphDatabaseService {
+                sender,
+                auth,
+                db: database,
+            },
             verifying_key,
             system_room_id,
-        })
-    }
-
-    ///
-    /// Get the verifying key derived from the key material
-    /// The assiociated signing key is used internaly to sign every change
-    ///
-    pub fn verifying_key(&self) -> &Vec<u8> {
-        &self.verifying_key
-    }
-
-    ///
-    /// Get the verifying key derived from the key material
-    /// The assiociated signing key is used internaly to sign every change
-    ///
-    pub fn system_room_id(&self) -> &Uid {
-        &self.system_room_id
+        ))
     }
 
     ///
@@ -244,15 +241,16 @@ impl GraphDatabaseService {
         receive.await?
     }
 
-    ///
-    /// Perform a SQL Selection query on the database
-    /// SQL mutation query are forbidden
-    ///
+    //
+    // Perform a SQL Selection query on the database
+    // SQL mutation query are forbidden
+    //
+    #[cfg(test)]
     pub async fn select<T: Send + Sized + 'static>(
         &self,
         query: String,
-        params: Vec<Box<dyn ToSql + Sync + Send>>,
-        mapping: RowMappingFn<T>,
+        params: Vec<Box<dyn rusqlite::ToSql + Sync + Send>>,
+        mapping: super::sqlite_database::RowMappingFn<T>,
     ) -> Result<Vec<T>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<T>>>();
 
@@ -260,7 +258,8 @@ impl GraphDatabaseService {
             .reader
             .send_async(Box::new(move |conn| {
                 let result =
-                    DatabaseReader::select(&query, &params, &mapping, conn).map_err(Error::from);
+                    super::sqlite_database::DatabaseReader::select(&query, &params, &mapping, conn)
+                        .map_err(Error::from);
                 let _ = reply.send(result);
             }))
             .await?;
@@ -270,9 +269,21 @@ impl GraphDatabaseService {
     ///
     /// Update the existing data model definition with a new one  
     ///
-    pub async fn update_data_model(&self, query: &str) -> Result<String> {
+    pub async fn update_data_model(&self, datamodel: &str) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
-        let msg = Message::UpdateModel(query.to_string(), reply);
+        let msg = Message::DataModelUpdate(datamodel.to_string(), reply);
+        let _ = self.sender.send(msg).await;
+        let _ = receive.await?;
+
+        self.datamodel().await
+    }
+
+    ///
+    /// Update the existing data model definition with a new one  
+    ///
+    pub async fn datamodel(&self) -> Result<String> {
+        let (reply, receive) = oneshot::channel::<Result<String>>();
+        let msg = Message::DataModel(reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -630,7 +641,6 @@ struct GraphDatabase {
     auth_service: AuthorisationService,
     graph_database: Database,
     event_service: EventService,
-    database_path: PathBuf,
     mutation_cache: LruCache<String, Arc<MutationParser>>,
     query_cache: LruCache<String, QueryCacheEntry>,
     deletion_cache: LruCache<String, Arc<DeletionParser>>,
@@ -693,7 +703,6 @@ impl GraphDatabase {
             auth_service,
             graph_database,
             event_service,
-            database_path,
             mutation_cache,
             query_cache,
             deletion_cache,
@@ -1086,7 +1095,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, _, _) = GraphDatabaseService::start(
             "selection app",
             &data_model,
             &secret,
@@ -1132,7 +1141,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, _, _) = GraphDatabaseService::start(
             "delete app",
             &data_model,
             &secret,
@@ -1262,7 +1271,7 @@ mod tests {
                     }
                 }";
             let path: PathBuf = DATA_PATH.into();
-            let app = GraphDatabaseService::start(
+            let (_, _, system_room_id) = GraphDatabaseService::start(
                 "app",
                 &data_model,
                 &secret,
@@ -1272,7 +1281,7 @@ mod tests {
             )
             .await
             .unwrap();
-            app.system_room_id
+            system_room_id
         };
 
         let uid2 = {
@@ -1284,7 +1293,7 @@ mod tests {
                     }
                 }";
             let path: PathBuf = DATA_PATH.into();
-            let app = GraphDatabaseService::start(
+            let (_, _, system_room_id) = GraphDatabaseService::start(
                 "app",
                 &data_model,
                 &secret,
@@ -1294,7 +1303,7 @@ mod tests {
             )
             .await
             .unwrap();
-            app.system_room_id
+            system_room_id
         };
         assert_eq!(uid1, uid2);
 
@@ -1307,7 +1316,7 @@ mod tests {
                     }
                 }";
             let path: PathBuf = DATA_PATH.into();
-            let app = GraphDatabaseService::start(
+            let (_, _, system_room_id) = GraphDatabaseService::start(
                 "another app",
                 &data_model,
                 &secret,
@@ -1317,10 +1326,10 @@ mod tests {
             )
             .await
             .unwrap();
-            app.system_room_id
+            system_room_id
         };
 
-        //the system_room_id depends on the name
+        //the system_room_id depends on the app_key
         assert_ne!(uid1, uid3);
         let uid4 = {
             let data_model = "
@@ -1331,7 +1340,7 @@ mod tests {
                     }
                 }";
             let path: PathBuf = DATA_PATH.into();
-            let app = GraphDatabaseService::start(
+            let (_, _, system_room_id) = GraphDatabaseService::start(
                 "another app",
                 &data_model,
                 &random32(),
@@ -1341,7 +1350,7 @@ mod tests {
             )
             .await
             .unwrap();
-            app.system_room_id
+            system_room_id
         };
 
         //the system_room_id depends on the key_material
@@ -1361,7 +1370,7 @@ mod tests {
                     }
                 }";
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, _, system_room_id) = GraphDatabaseService::start(
             "app",
             &data_model,
             &secret,
@@ -1371,7 +1380,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let room_id = app.system_room_id;
+        let room_id = system_room_id;
         let mut param = Parameters::new();
         param.add("room_id", uid_encode(&room_id)).unwrap();
 

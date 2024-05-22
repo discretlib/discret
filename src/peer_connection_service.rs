@@ -379,11 +379,13 @@ mod tests {
         log: LogService,
         db: GraphDatabaseService,
         peer_service: PeerConnectionService,
+        verifying_key: Vec<u8>,
+        system_room_id: Uid,
     }
     impl Peer {
         async fn new(path: PathBuf, model: &str) -> Self {
             let event = EventService::new();
-            let db = GraphDatabaseService::start(
+            let (db, verifying_key, system_room_id) = GraphDatabaseService::start(
                 "app",
                 model,
                 &random32(),
@@ -406,6 +408,8 @@ mod tests {
                 log,
                 db,
                 peer_service,
+                verifying_key,
+                system_room_id,
             }
         }
     }
@@ -419,7 +423,7 @@ mod tests {
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;
 
-        let first_key = first_peer.db.verifying_key().clone();
+        let first_key = first_peer.verifying_key.clone();
 
         let event_fn: EventFn = Box::new(move |event| match event {
             Event::PeerConnected(id, _, _) => {

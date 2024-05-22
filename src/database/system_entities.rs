@@ -47,9 +47,6 @@ pub const BINARY_FIELD: &str = "_binary";
 pub const VERIFYING_KEY_FIELD: &str = "verifying_key";
 pub const SIGNATURE_FIELD: &str = "_signature";
 
-//name of the entity fields
-pub const AUTHORS_FIELD_SHORT: &str = "0";
-
 //names of some authentication fields used during auth validation
 pub const ROOM_ADMIN_FIELD: &str = "admin";
 pub const ROOM_ADMIN_FIELD_SHORT: &str = "32";
@@ -363,30 +360,11 @@ pub struct Beacon {
 
 #[cfg(test)]
 mod tests {
-
-    use std::{fs, path::PathBuf};
-
     use crate::security::Ed25519SigningKey;
 
     use crate::database::sqlite_database::prepare_connection;
 
     use super::*;
-    const DATA_PATH: &str = "test_data/database/system_entities/";
-    fn init_database_path() {
-        let path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path).unwrap();
-        let paths = fs::read_dir(path).unwrap();
-
-        for path in paths {
-            let dir = path.unwrap().path();
-            let paths = fs::read_dir(dir).unwrap();
-            for file in paths {
-                let files = file.unwrap().path();
-                // println!("Name: {}", files.display());
-                let _ = fs::remove_file(&files);
-            }
-        }
-    }
 
     #[test]
     fn peer() {

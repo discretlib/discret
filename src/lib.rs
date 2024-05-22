@@ -11,8 +11,19 @@ mod peer_connection_service;
 mod security;
 mod synchronisation;
 
-pub type Result<T> = std::result::Result<T, Error>;
+use database::{graph_database::GraphDatabaseService, query_language::parameter::Parameters};
+use event_service::EventService;
+use log_service::LogService;
+use peer_connection_service::PeerConnectionService;
+use security::{derive_key, MeetingSecret};
+use std::path::PathBuf;
 use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, Error>;
+pub use configuration::Configuration;
+pub use security::{
+    base64_decode, base64_encode, derive_pass_phrase, new_uid, uid_decode, uid_encode, Uid,
+};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -73,173 +84,118 @@ pub enum Error {
     ComputeDailyLog(String),
 }
 
-// lazy_static::lazy_static! {
-//     pub static ref LOGGED_USERS: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>> =
-//     Arc::new(Mutex::new(HashMap::new()));
-// }
+pub struct Discret {
+    db: GraphDatabaseService,
+    peers: PeerConnectionService,
+    log: LogService,
+    verifying_key: Vec<u8>,
+    system_room_id: Uid,
+}
+impl Discret {
+    pub async fn new(
+        app_key: &str,
+        datamodel: &str,
+        key_material: &[u8; 32],
+        data_folder: PathBuf,
+        configuration: Configuration,
+    ) -> Result<Self> {
+        let event_service = EventService::new();
+        let (db, verifying_key, system_room_id) = GraphDatabaseService::start(
+            app_key,
+            datamodel,
+            key_material,
+            data_folder.clone(),
+            configuration,
+            event_service.clone(),
+        )
+        .await?;
 
-// fn build_path(data_folder: impl Into<PathBuf>, file_name: &String) -> Result<PathBuf> {
-//     let mut path: PathBuf = data_folder.into();
-//     let subfolder = &file_name[0..2];
-//     path.push(subfolder);
-//     fs::create_dir_all(&path)?;
-//     path.push(file_name);
-//     Ok(path)
-// }
+        let meeting_secret_key =
+            derive_key(&format!("{}{}", "MeetingSecret", app_key,), key_material);
+        let meeting_secret = MeetingSecret::new(meeting_secret_key);
+        //let public_key = bincode::serialize(&meeting_secret.public_key())?;
 
-// pub struct Account {
-//     sign_key: Ed25519SigningKey,
-//     secret: [u8; 32],
-// }
-// impl Account {
-//     pub fn create(login: String, pass_phrase: String, data_folder: &str) -> Result<Account> {
-//         let secret = derive_pass_phrase(login, pass_phrase);
-//         Self::create_from_secret(secret, data_folder)
-//     }
+        let log = LogService::start();
+        let peers = PeerConnectionService::start(
+            meeting_secret,
+            db.clone(),
+            event_service.clone(),
+            log.clone(),
+            10,
+        );
 
-//     pub fn create_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account> {
-//         let file_name = Self::derive_account_file(&secret);
-//         let account_path = build_path(data_folder, &file_name)?;
-//         if account_path.exists() {
-//             return Err(Error::AccountExists);
-//         }
-//         File::create(account_path)?;
-//         let sign_key = Ed25519SigningKey::create_from(&secret);
+        Ok(Self {
+            db,
+            peers,
+            log,
+            verifying_key,
+            system_room_id,
+        })
+    }
 
-//         Ok(Self {
-//             sign_key,
-//             secret: Self::derive_secret(&secret),
-//         })
-//     }
+    ///
+    /// Deletion query
+    ///
+    pub async fn delete(&self, deletion: &str, param_opt: Option<Parameters>) -> Result<()> {
+        match self.db.delete(deletion, param_opt).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 
-//     pub fn login(login: String, pass_phrase: String, data_folder: &str) -> Result<Account> {
-//         let secret = derive_pass_phrase(login, pass_phrase);
-//         Self::login_from_secret(secret, data_folder)
-//     }
+    ///
+    /// mutate
+    ///
+    pub async fn mutate(&self, mutation: &str, param_opt: Option<Parameters>) -> Result<String> {
+        Ok(self.db.mutate(mutation, param_opt).await?)
+    }
 
-//     pub fn login_from_secret(secret: [u8; 32], data_folder: &str) -> Result<Account> {
-//         let file_name = Self::derive_account_file(&secret);
-//         let account_path = build_path(data_folder, &file_name)?;
-//         if !account_path.exists() {
-//             return Err(Error::InvalidAccount);
-//         }
-//         let sign_key = Ed25519SigningKey::create_from(&secret);
+    ///
+    /// GraphQL query
+    ///
+    pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
+        Ok(self.db.query(query, param_opt).await?)
+    }
 
-//         Ok(Self {
-//             sign_key,
-//             secret: Self::derive_secret(&secret),
-//         })
-//     }
+    ///
+    /// This is is your Public identity.
+    ///
+    /// It is derived from the provided key_material.
+    ///
+    /// Every data you create will be signed using the associated signing_key, and  
+    /// other peers will use this verifying key to ensure the integrity of the data
+    ///
+    pub fn verifying_key(&self) -> &Vec<u8> {
+        &self.verifying_key
+    }
 
-//     fn derive_account_file(secret: &[u8; 32]) -> String {
-//         const DERIVE_ACCOUNT_FILE_SEED: &str = "DERIVE_ACCOUNT_FILE_SEED";
-//         base64_encode(&cryptography::derive_key(DERIVE_ACCOUNT_FILE_SEED, secret))
-//     }
+    ///
+    /// This special room is used internally to store system data
+    /// you can use it to query and update the sys.* entities
+    ///
+    pub fn system_room_id(&self) -> &Uid {
+        &self.system_room_id
+    }
 
-//     fn derive_secret(secret: &[u8; 32]) -> [u8; 32] {
-//         const DERIVE_SECRET_SEED: &str = "DERIVE_SECRET_SEED";
-//         cryptography::derive_key(DERIVE_SECRET_SEED, secret)
-//     }
-// }
+    ///
+    /// Update the existing data model definition with a new one  
+    ///
+    /// returns the JSON representation of the updated datamodel
+    ///
+    /// can be usefull to create a data model editor
+    ///
+    pub async fn update_data_model(&self, datamodel: &str) -> Result<String> {
+        Ok(self.db.update_data_model(datamodel).await?)
+    }
 
-// // struct Application<'a> {
-// //     name: String,
-// //     data_model: DataModel,
-// //     graph_database: GraphDatabase<'a>,
-// //     database_path: PathBuf,
-// //     signing_key: Ed2519SigningKey,
-// // }
-// impl Application<'_> {
-//     pub fn new(
-//         name: &str,
-//         secret: &[u8; 32],
-//         data_folder: PathBuf,
-//         data_model: &str,
-//     ) -> Result<Self, Error> {
-//         let database_secret = derive_key(name, secret);
-//         let database_name = derive_key("DATABASE_NAME", &database_secret);
-//         let signature_key = derive_key("SIGNING_KEY", secret);
-//         let signing_key = Ed2519SigningKey::create_from(&signature_key);
-
-//         let database_path = build_path(data_folder, &base64_encode(&database_name))?;
-
-//         let data_model = DataModel::parse(data_model)?;
-//         let graph_database = GraphDatabase::new(
-//             &database_path,
-//             &database_secret,
-//             8192,
-//             false,
-//             4,
-//             1000,
-//             //   &data_model,
-//         )?;
-
-//         Ok(Self {
-//             name: name.to_string(),
-//             data_model,
-//             graph_database,
-//             database_path,
-//             signing_key,
-//         })
-//     }
-
-//     pub fn query(&self, query: &str, _params: Option<Parameters>) -> Result<String, Error> {
-//         let querytype = query.trim().split_once(' ');
-//         if let Some(e) = querytype {
-//             match e.0 {
-//                 "query" | "subscription" => {
-//                     println!("query");
-//                     let _query = Query::parse(query, &self.data_model)?;
-//                 }
-//                 "mutation" => {
-//                     println!("mutation");
-//                     let _mutation = Mutation::parse(query, &self.data_model)?;
-//                 }
-//                 "deletion" => {
-//                     let _deletion = Deletion::parse(query, &self.data_model)?;
-//                     println!("deletion")
-//                 }
-
-//                 _ => {
-//                     return Err(Error::ParsingError(
-//                         crate::database::query_language::Error::InvalidQuery(format!(
-//                             "Invalid Query {}",
-//                             query
-//                         )),
-//                     ))
-//                 }
-//             }
-//         } else {
-//             return Err(Error::ParsingError(
-//                 crate::database::query_language::Error::InvalidQuery(format!(
-//                     "Invalid Query {}",
-//                     query
-//                 )),
-//             ));
-//         }
-//         Ok("".to_string())
-//     }
-// }
-
-#[cfg(test)]
-mod tests {
-
-    const DATA_PATH: &str = "test/data/database/";
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn connect() {
-        // let secret = hash(b"not so secret");
-        // let data_model = "
-        // Person {
-        //     name : String,
-        //     surname : String,
-        //     parents : [Person],
-        //     age : Integer,
-        //     weight : Float,
-        //     is_human : Boolean
-        // }";
-        //    let _app = Application::new("my_new_app", &secret, DATA_PATH.into(), data_model).unwrap();
-
-        // app.query("query", None).unwrap();
+    ///
+    /// Provide a JSON representation of the datamode  
+    ///
+    /// the JSON contains the model plain text along with the internal datamodel representation
+    ///
+    /// Can be usefull to create a data model editor
+    ///
+    pub async fn data_model(&self) -> Result<String> {
+        Ok(self.db.datamodel().await?)
     }
 }

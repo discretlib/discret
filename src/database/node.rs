@@ -328,6 +328,8 @@ impl Node {
     ///
     /// Verify the existence of a specific Node
     ///
+    ///
+    #[cfg(test)]
     pub fn exist(id: &Uid, entity: &str, conn: &Connection) -> Result<bool> {
         let mut exists_stmt =
             conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;

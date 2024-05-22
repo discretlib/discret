@@ -584,11 +584,6 @@ impl Default for InsertEntity {
 #[cfg(test)]
 mod tests {
 
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
-
     use rusqlite::Connection;
     use serde::{Deserialize, Serialize};
 
@@ -601,17 +596,6 @@ mod tests {
     };
 
     use super::*;
-
-    const DATA_PATH: &str = "test_data/database/mutation_query";
-    fn init_database_path(file: &str) -> Result<PathBuf> {
-        let mut path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path)?;
-        path.push(file);
-        if Path::exists(&path) {
-            fs::remove_file(&path)?;
-        }
-        Ok(path)
-    }
 
     #[test]
     fn prepare_simple_scalar() {

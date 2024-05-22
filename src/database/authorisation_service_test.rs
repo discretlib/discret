@@ -245,7 +245,7 @@ mod tests {
         let data_model = "{Person{ name:String }}";
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -256,7 +256,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id).unwrap();
@@ -339,7 +339,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -350,7 +350,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
@@ -530,7 +530,7 @@ mod tests {
         let data_model = "{Person{name:String,}}";
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -541,7 +541,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
@@ -608,7 +608,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -619,7 +619,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
@@ -738,7 +738,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -749,7 +749,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
@@ -960,7 +960,7 @@ mod tests {
 
         //open a database, creates two rooms and close it
         let ids = {
-            let app = GraphDatabaseService::start(
+            let (app, verifying_key, _) = GraphDatabaseService::start(
                 "authorisation app",
                 data_model,
                 &secret,
@@ -971,7 +971,7 @@ mod tests {
             .await
             .unwrap();
 
-            let user_id = base64_encode(app.verifying_key());
+            let user_id = base64_encode(&verifying_key);
 
             let mut param = Parameters::default();
             param.add("user_id", user_id.clone()).unwrap();
@@ -1044,7 +1044,7 @@ mod tests {
             (room_person_id, room_pet_id)
         };
 
-        let app = GraphDatabaseService::start(
+        let (app, _, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -1127,7 +1127,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -1138,7 +1138,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
@@ -1351,7 +1351,7 @@ mod tests {
 
         let secret = random32();
         let path: PathBuf = DATA_PATH.into();
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "authorisation app",
             data_model,
             &secret,
@@ -1362,7 +1362,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();

@@ -101,7 +101,7 @@ mod tests {
         peer_connection_service::{
             connect_peers, listen_for_event, EventFn, Log, LogFn, PeerConnectionService,
         },
-        security::{base64_encode, random32, MeetingSecret},
+        security::{base64_encode, random32, MeetingSecret, Uid},
     };
 
     const DATA_PATH: &str = "test_data/synchronisation/peer_service/";
@@ -115,11 +115,13 @@ mod tests {
         log: LogService,
         db: GraphDatabaseService,
         peer_service: PeerConnectionService,
+        verifying_key: Vec<u8>,
+        system_room_id: Uid,
     }
     impl Peer {
         async fn new(path: PathBuf, model: &str) -> Self {
             let event = EventService::new();
-            let db = GraphDatabaseService::start(
+            let (db, verifying_key, system_room_id) = GraphDatabaseService::start(
                 "app",
                 model,
                 &random32(),
@@ -130,7 +132,6 @@ mod tests {
             .await
             .unwrap();
             let log = LogService::start();
-
             let peer_service = PeerConnectionService::start(
                 MeetingSecret::new(random32()),
                 db.clone(),
@@ -143,6 +144,8 @@ mod tests {
                 log,
                 db,
                 peer_service,
+                verifying_key,
+                system_room_id,
             }
         }
     }
@@ -156,8 +159,8 @@ mod tests {
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;
 
-        let first_user_id = base64_encode(first_peer.db.verifying_key());
-        let second_user_id = base64_encode(second_peer.db.verifying_key());
+        let first_user_id = base64_encode(&first_peer.verifying_key);
+        let second_user_id = base64_encode(&second_peer.verifying_key);
 
         let mut param = Parameters::default();
         param.add("first_id", first_user_id.clone()).unwrap();
@@ -199,7 +202,7 @@ mod tests {
 
         let room_id = room_insert.node_to_mutate.id.clone();
 
-        let first_key = first_peer.db.verifying_key().clone();
+        let first_key = first_peer.verifying_key.clone();
 
         let id = room_id;
         let event_fn: EventFn = Box::new(move |event| match event {
@@ -274,8 +277,8 @@ mod tests {
         let first_peer = Peer::new(path.clone(), model).await;
         let second_peer = Peer::new(path, model).await;
 
-        let first_user_id = base64_encode(first_peer.db.verifying_key());
-        let second_user_id = base64_encode(second_peer.db.verifying_key());
+        let first_user_id = base64_encode(&first_peer.verifying_key);
+        let second_user_id = base64_encode(&second_peer.verifying_key);
 
         let mut param = Parameters::default();
         param.add("first_id", first_user_id.clone()).unwrap();
@@ -316,7 +319,7 @@ mod tests {
         let room_insert = &room.mutate_entities[0];
         let room_id = room_insert.node_to_mutate.id.clone();
 
-        let first_key = first_peer.db.verifying_key().clone();
+        let first_key = first_peer.verifying_key.clone();
 
         let mut param = Parameters::default();
         param.add("room_id", base64_encode(&room_id)).unwrap();

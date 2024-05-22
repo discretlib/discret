@@ -22,6 +22,7 @@ pub struct DailyMutations {
     room_dates: HashMap<Uid, HashSet<i64>>,
 }
 impl DailyMutations {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self {
             ..Default::default()
@@ -257,31 +258,6 @@ pub struct DailyLog {
     pub need_recompute: bool,
 }
 impl DailyLog {
-    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        //println!("Writing daily");
-        let mut node_daily_stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO _daily_log (
-                    room_id,
-                    date,
-                    entry_number,
-                    daily_hash,
-                    history_hash,
-                    need_recompute
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            ",
-        )?;
-        node_daily_stmt.execute((
-            &self.room_id,
-            &self.date,
-            &self.entry_number,
-            &self.daily_hash,
-            &self.history_hash,
-            &self.need_recompute,
-        ))?;
-
-        Ok(())
-    }
-
     pub fn create_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE _daily_log (
@@ -426,17 +402,32 @@ impl DailyLog {
 
         Ok(id_date_list.into_iter().map(|a| a.0).collect())
     }
-}
 
-pub fn log_room_definition(
-    room_id: &Uid,
-    mdate: i64,
-    conn: &Connection,
-) -> Result<(), rusqlite::Error> {
-    let mut stmt =
-        conn.prepare_cached("INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)")?;
-    stmt.execute((room_id, mdate))?;
-    Ok(())
+    #[cfg(test)]
+    pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        //println!("Writing daily");
+        let mut node_daily_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO _daily_log (
+                    room_id,
+                    date,
+                    entry_number,
+                    daily_hash,
+                    history_hash,
+                    need_recompute
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ",
+        )?;
+        node_daily_stmt.execute((
+            &self.room_id,
+            &self.date,
+            &self.entry_number,
+            &self.daily_hash,
+            &self.history_hash,
+            &self.need_recompute,
+        ))?;
+
+        Ok(())
+    }
 }
 
 const ROOM_LOG_INSERT: &str = "INSERT OR REPLACE INTO _room_changelog(room_id, mdate) VALUES (?,?)";
@@ -567,7 +558,7 @@ mod tests {
         let event_service = EventService::new();
         let mut events = event_service.subcribe().await;
 
-        let app = GraphDatabaseService::start(
+        let (app, verifying_key, _) = GraphDatabaseService::start(
             "delete app",
             &data_model,
             &secret,
@@ -589,7 +580,7 @@ mod tests {
                 _ => {}
             }
         }
-        let user_id = base64_encode(app.verifying_key());
+        let user_id = base64_encode(&verifying_key);
 
         let mut param = Parameters::default();
         param.add("user_id", user_id.clone()).unwrap();
