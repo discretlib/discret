@@ -44,7 +44,7 @@ pub type QueryFn = Box<dyn FnOnce(&Connection) + Send + 'static>;
 pub fn create_connection(
     path: &PathBuf,
     secret: &[u8; 32],
-    cache_size_in_kb: u32,
+    cache_size_in_kb: usize,
     enable_memory_security: bool,
 ) -> Result<Connection> {
     let mut flags = rusqlite::OpenFlags::empty();
@@ -179,9 +179,9 @@ impl Database {
     pub fn start(
         path: &PathBuf,
         secret: &[u8; 32],
-        read_cache_size_in_kb: u32,
+        read_cache_size_in_kb: usize,
         read_parallelism: usize,
-        write_cache_size_in_kb: u32,
+        write_cache_size_in_kb: usize,
         write_buffer_size: usize,
         enable_memory_security: bool,
     ) -> Result<Self> {
@@ -219,7 +219,7 @@ impl DatabaseReader {
     pub fn start(
         path: &PathBuf,
         secret: &[u8; 32],
-        cache_size_in_kb: u32,
+        cache_size_in_kb: usize,
         parallelism: usize,
         enable_memory_security: bool,
     ) -> Result<Self> {
@@ -365,7 +365,7 @@ impl BufferedDatabaseWriter {
         buffer_size: usize,
         path: &PathBuf,
         secret: &[u8; 32],
-        write_cache_size: u32,
+        write_cache_size: usize,
         enable_memory_security: bool,
     ) -> Result<Self> {
         let conn = create_connection(path, secret, write_cache_size, enable_memory_security)?;

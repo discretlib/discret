@@ -11,6 +11,7 @@ use crate::{
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
     security::{MeetingSecret, Uid},
+    signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
         peer_outbound_service::{InboundQueryService, RemotePeerHandle},
@@ -48,6 +49,7 @@ impl PeerConnectionService {
         local_db: GraphDatabaseService,
         event_service: EventService,
         log_service: LogService,
+        verify_service: SignatureVerificationService,
         max_concurent_synchronisation: usize,
     ) -> Self {
         let (sender, mut connection_receiver) =
@@ -72,6 +74,7 @@ impl PeerConnectionService {
                                     &log_service,
                                     &peer_service,
                                     &lock_service,
+                                    &verify_service,
                                     local_event_broadcast.subscribe(),
                                     &mut peer_map,
                                 ).await;
@@ -125,6 +128,7 @@ impl PeerConnectionService {
         log_service: &LogService,
         peer_service: &PeerConnectionService,
         lock_service: &RoomLockService,
+        verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
         peer_map: &mut HashMap<Vec<u8>, HashSet<Vec<u8>>>,
     ) {
@@ -169,6 +173,7 @@ impl PeerConnectionService {
                     peer_service.clone(),
                     event_service.clone(),
                     inbound_query_service,
+                    verify_service.clone(),
                 );
             }
             PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
@@ -390,7 +395,7 @@ mod tests {
                 model,
                 &random32(),
                 path.clone(),
-                Configuration::default(),
+                &Configuration::default(),
                 event.clone(),
             )
             .await
@@ -401,6 +406,7 @@ mod tests {
                 db.clone(),
                 event.clone(),
                 log.clone(),
+                SignatureVerificationService::start(2),
                 10,
             );
             Self {

@@ -52,7 +52,9 @@ enum Message {
 ///
 #[derive(Clone)]
 pub struct GraphDatabaseService {
-    sender: mpsc::Sender<Message>,
+    peer_sender: mpsc::Sender<Message>,
+    //queue dedicated to user interaction
+    //  interactive_sender: mpsc::Sender<Message>,
     auth: AuthorisationService,
     db: Database,
 }
@@ -62,10 +64,13 @@ impl GraphDatabaseService {
         datamodel: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
-        configuration: Configuration,
+        configuration: &Configuration,
         event_service: EventService,
     ) -> Result<(Self, Vec<u8>, Uid)> {
-        let (sender, mut receiver) = mpsc::channel::<Message>(100);
+        let (peer_sender, mut peer_receiver) =
+            mpsc::channel::<Message>(configuration.parallel_room_synch);
+        //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
+
         let system_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
 
         let mut db = GraphDatabase::new(
@@ -83,7 +88,7 @@ impl GraphDatabaseService {
         let auth = db.auth_service.clone();
         let verifying_key = db.verifying_key.clone();
         tokio::spawn(async move {
-            while let Some(msg) = receiver.recv().await {
+            while let Some(msg) = peer_receiver.recv().await {
                 match msg {
                     Message::Query(query, parameters, reply) => {
                         let q = db.get_cached_query(&query);
@@ -169,7 +174,7 @@ impl GraphDatabaseService {
 
         Ok((
             GraphDatabaseService {
-                sender,
+                peer_sender,
                 auth,
                 db: database,
             },
@@ -188,9 +193,9 @@ impl GraphDatabaseService {
     ) -> Result<DeletionQuery> {
         let (reply, receive) = oneshot::channel::<Result<DeletionQuery>>();
         let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         let result = receive.await?;
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
         result
     }
 
@@ -207,11 +212,11 @@ impl GraphDatabaseService {
         let (reply, receive) = oneshot::channel::<Result<MutationQuery>>();
 
         let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
 
         let result = receive.await?;
 
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
 
         result
     }
@@ -237,7 +242,7 @@ impl GraphDatabaseService {
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         receive.await?
     }
 
@@ -272,7 +277,7 @@ impl GraphDatabaseService {
     pub async fn update_data_model(&self, datamodel: &str) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::DataModelUpdate(datamodel.to_string(), reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         let _ = receive.await?;
 
         self.datamodel().await
@@ -284,7 +289,7 @@ impl GraphDatabaseService {
     pub async fn datamodel(&self) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::DataModel(reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         receive.await?
     }
 
@@ -295,7 +300,7 @@ impl GraphDatabaseService {
     pub async fn add_full_nodes(&self, room_id: Uid, nodes: Vec<FullNode>) -> Result<Vec<Uid>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
         let msg = Message::FullNodeAdd(room_id, nodes, reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         receive.await?
     }
 
@@ -305,7 +310,7 @@ impl GraphDatabaseService {
     /// This will send an event that will trigger the peer synchronisation
     ///
     pub async fn compute_daily_log(&self) {
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
     }
 
     ///
@@ -459,7 +464,7 @@ impl GraphDatabaseService {
     pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>) -> Result<()> {
         let (send_response, receive_response) = oneshot::channel::<Result<()>>();
         let msg = Message::DeleteNodes(nodes, send_response);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         receive_response.await?
     }
 
@@ -489,7 +494,7 @@ impl GraphDatabaseService {
     pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>) -> Result<()> {
         let (reply, receive) = oneshot::channel::<Result<()>>();
         let msg = Message::DeleteEdges(edges, reply);
-        let _ = self.sender.send(msg).await;
+        let _ = self.peer_sender.send(msg).await;
         receive.await?
     }
 
@@ -593,9 +598,6 @@ impl GraphDatabaseService {
     ///
     pub async fn add_peer_nodes(&self, nodes: Vec<Node>) -> Result<()> {
         let (reply, receive) = oneshot::channel::<Result<WriteStmt>>();
-        for node in &nodes {
-            node.verify()?;
-        }
         let nodes = PeerNodes { nodes };
         self.db
             .writer
@@ -653,7 +655,7 @@ impl GraphDatabase {
         name: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
-        config: Configuration,
+        config: &Configuration,
         event_service: EventService,
     ) -> Result<Self> {
         let database_secret = derive_key(&name, key_material);
@@ -1100,7 +1102,7 @@ mod tests {
             &data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1146,7 +1148,7 @@ mod tests {
             &data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1206,7 +1208,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1227,7 +1229,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1249,7 +1251,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1276,7 +1278,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1298,7 +1300,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1321,7 +1323,7 @@ mod tests {
                 &data_model,
                 &secret,
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1345,7 +1347,7 @@ mod tests {
                 &data_model,
                 &random32(),
                 path,
-                Configuration::default(),
+                &Configuration::default(),
                 EventService::new(),
             )
             .await
@@ -1375,7 +1377,7 @@ mod tests {
             &data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await

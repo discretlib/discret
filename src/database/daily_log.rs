@@ -563,7 +563,7 @@ mod tests {
             &data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             event_service,
         )
         .await

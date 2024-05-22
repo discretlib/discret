@@ -1,15 +1,50 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+
+///
+/// Global configuration for the discret lib
+///
+/// Default configuration is defined to try to limit the RAM memory usage to about 1 Gb at worst
+///
 pub struct Configuration {
     ///
-    /// Default 8192
+    /// default: 8
+    /// number of room that can be synchronised in parallel
+    /// this comes at the cost of a potentially larger memory usage
+    ///
+    pub parallel_room_synch: usize,
+
+    /// Default:256
+    ///
+    /// maximum number of items that will be requested to a peer
+    ///
+    /// This has a direct impact on memory usage
+    ///
+    pub synchronisation_batch_size: usize,
+
+    ///
+    /// Default  256
+    ///
+    /// nodes size should be kept small enought to ensure fast synchronisation
+    ///
+    pub max_node_size_in_kp: usize,
+
+    ///
+    /// Default 4096
     /// set the maximum cache size for the reading threads. increasing it can improve performances
     /// each read threads defined in read_parallelism consume up to that amount
     ///
     /// Real max memory usage is read_cache_size_in_kb *read_parallelism
-    /// default memory usage is 32 Mb.
-    pub read_cache_size_in_kb: u32,
+    /// default memory usage is 16 Mb.
+    pub read_cache_size_in_kb: usize,
+
+    ///
+    /// default: 4
+    /// set the number of threads used by the signature verification service
+    /// Signature verification consumes a lot of CPU and is moved to its own threads to avoid blocking Tokio Threads
+    ///
+    pub signature_verification_parallelism: usize,
 
     ///
     /// Default: 4
@@ -24,10 +59,10 @@ pub struct Configuration {
     /// Default 2048
     /// set the maximum of cache size for the writing thread. increasing it may improvee performances
     ///
-    pub write_cache_size_in_kb: u32,
+    pub write_cache_size_in_kb: usize,
 
     ///
-    /// Default: 1000
+    /// Default: 1024
     ///
     /// Write queries are buffered while the database thread is working.
     /// When the database thread is ready, the buffer is sent and is processed in one single transaction
@@ -60,10 +95,14 @@ pub struct Configuration {
 impl Default for Configuration {
     fn default() -> Self {
         Self {
-            read_cache_size_in_kb: 8192,
+            parallel_room_synch: 8,
+            synchronisation_batch_size: 256,
+            max_node_size_in_kp: 256,
+            read_cache_size_in_kb: 4096,
+            signature_verification_parallelism: 4,
             read_parallelism: 4,
             write_cache_size_in_kb: 2048,
-            write_buffer_size: 1000,
+            write_buffer_size: 1024,
             enable_database_memory_security: false,
         }
     }

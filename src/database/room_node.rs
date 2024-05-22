@@ -44,8 +44,6 @@ impl RoomNode {
     /// validate signature and basic data consistency
     ///
     pub fn check_consistency(&self) -> Result<()> {
-        self.node.verify()?;
-
         //check user_admin consistency
         if self.user_admin_edges.len() != self.user_admin_nodes.len() {
             return Err(Error::InvalidNode(
@@ -53,7 +51,6 @@ impl RoomNode {
             ));
         }
         for user_admin_edge in &self.user_admin_edges {
-            user_admin_edge.verify()?;
             if !user_admin_edge.src.eq(&self.node.id) {
                 return Err(Error::InvalidNode(
                     "Invalid RoomNode user_admin edge src".to_string(),
@@ -64,13 +61,10 @@ impl RoomNode {
                 .iter()
                 .find(|user| user.node.id.eq(&user_admin_edge.dest));
 
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode has an invalid admin egde".to_string(),
-                    ))
-                }
+            if user_node.is_none() {
+                return Err(Error::InvalidNode(
+                    "RoomNode has an invalid admin egde".to_string(),
+                ));
             }
         }
 
@@ -81,7 +75,6 @@ impl RoomNode {
             ));
         }
         for admin_edge in &self.admin_edges {
-            admin_edge.verify()?;
             if !admin_edge.src.eq(&self.node.id) {
                 return Err(Error::InvalidNode(
                     "Invalid RoomNode admin edge src".to_string(),
@@ -92,13 +85,10 @@ impl RoomNode {
                 .iter()
                 .find(|user| user.node.id.eq(&admin_edge.dest));
 
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode has an invalid admin egde".to_string(),
-                    ))
-                }
+            if user_node.is_none() {
+                return Err(Error::InvalidNode(
+                    "RoomNode has an invalid admin egde".to_string(),
+                ));
             }
         }
 
@@ -109,7 +99,6 @@ impl RoomNode {
             ));
         }
         for auth_edge in &self.auth_edges {
-            auth_edge.verify()?;
             if !auth_edge.src.eq(&self.node.id) {
                 return Err(Error::InvalidNode(
                     "Invalid RoomNode authorisation edge src".to_string(),
@@ -243,7 +232,6 @@ impl AuthorisationNode {
     /// validate signature and basic data consistency
     ///
     pub fn check_consistency(&self) -> Result<()> {
-        self.node.verify()?;
         //check right consistency
         if self.right_edges.len() != self.right_nodes.len() {
             return Err(Error::InvalidNode(
@@ -251,7 +239,6 @@ impl AuthorisationNode {
             ));
         }
         for right_edge in &self.right_edges {
-            right_edge.verify()?;
             if !right_edge.src.eq(&self.node.id) {
                 return Err(Error::InvalidNode(
                     "Invalid AuthorisationNode Right edge source".to_string(),
@@ -262,13 +249,10 @@ impl AuthorisationNode {
                 .iter()
                 .find(|right| right.node.id.eq(&right_edge.dest));
 
-            match right_node {
-                Some(right) => right.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "AuthorisationNode has an invalid Right egde".to_string(),
-                    ))
-                }
+            if right_node.is_none() {
+                return Err(Error::InvalidNode(
+                    "AuthorisationNode has an invalid Right egde".to_string(),
+                ));
             }
         }
 
@@ -279,7 +263,6 @@ impl AuthorisationNode {
             ));
         }
         for user_edge in &self.user_edges {
-            user_edge.verify()?;
             if !user_edge.src.eq(&self.node.id) {
                 return Err(Error::InvalidNode(
                     "Invalid AuthorisationNode user edge source".to_string(),
@@ -290,13 +273,10 @@ impl AuthorisationNode {
                 .iter()
                 .find(|user| user.node.id.eq(&user_edge.dest));
 
-            match user_node {
-                Some(user) => user.node.verify()?,
-                None => {
-                    return Err(Error::InvalidNode(
-                        "AuthorisationNode has an invalid user egde".to_string(),
-                    ))
-                }
+            if user_node.is_none() {
+                return Err(Error::InvalidNode(
+                    "AuthorisationNode has an invalid user egde".to_string(),
+                ));
             }
         }
 
@@ -975,7 +955,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1066,7 +1046,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1136,7 +1116,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1277,7 +1257,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1291,7 +1271,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1517,7 +1497,7 @@ mod tests {
             "",
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1531,7 +1511,7 @@ mod tests {
             "",
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1704,7 +1684,7 @@ mod tests {
             "",
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1718,7 +1698,7 @@ mod tests {
             "",
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -1744,21 +1724,6 @@ mod tests {
             .unwrap();
 
         let room_insert = &room.mutate_entities[0];
-
-        let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id)
-            .await
-            .unwrap()
-            .unwrap();
-        //will invalidate the signature
-        node.node.mdate = 0;
-        //serialize and deserialize to get rid of the local_id
-        let ser = bincode::serialize(&node).unwrap();
-        let node: RoomNode = bincode::deserialize(&ser).unwrap();
-        second_app
-            .add_room_node(node.clone())
-            .await
-            .expect_err("invalid signature");
 
         let mut node = first_app
             .get_room_node(room_insert.node_to_mutate.id)

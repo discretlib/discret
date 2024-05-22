@@ -28,6 +28,7 @@ use crate::{
     log_service::LogService,
     peer_connection_service::PeerConnectionService,
     security::{base64_encode, random32, Uid},
+    signature_verification_service::SignatureVerificationService,
 };
 
 use super::{
@@ -119,6 +120,7 @@ impl LocalPeerService {
         peer_service: PeerConnectionService,
         event_service: EventService,
         inbound_query_service: InboundQueryService,
+        verify_service: SignatureVerificationService,
     ) {
         let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Uid>();
 
@@ -194,7 +196,8 @@ impl LocalPeerService {
                                     query_service.clone(),
                                     event_service.clone(),
                                     log_service.clone(),
-                                    lock_service.clone())
+                                    lock_service.clone(),
+                                    verify_service.clone())
                                     .await {
                                         log_service.error("LocalPeerService Lock".to_string(),e);
                                         break;
@@ -296,10 +299,11 @@ impl LocalPeerService {
         event_service: EventService,
         log_service: LogService,
         lock_service: RoomLockService,
+        verify_service: SignatureVerificationService,
     ) -> Result<(), crate::Error> {
         tokio::spawn(async move {
             acquired_lock.lock().await.insert(room.clone());
-            match Self::synchronise_room(room.clone(), &db, &query_service).await {
+            match Self::synchronise_room(room.clone(), &db, &query_service, &verify_service).await {
                 Ok(_) => {
                     event_service
                         .notify(EventServiceMessage::RoomSynchronized(room.clone()))
@@ -323,6 +327,7 @@ impl LocalPeerService {
         room_id: Uid,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<(), crate::Error> {
         let remote_room_def: Option<RoomDefinitionLog> =
             Self::query(query_service, Query::RoomDefinition(room_id)).await?;
@@ -332,7 +337,15 @@ impl LocalPeerService {
             return Err(crate::Error::RoomUnknow(base64_encode(&room_id)));
         }
         let remote_room = remote_room_def.unwrap();
-        Self::synchronise_room_definition(&remote_room, &local_room_def, db, query_service).await?;
+        Self::synchronise_room_definition(
+            &remote_room,
+            &local_room_def,
+            db,
+            query_service,
+            verify_service,
+        )
+        .await?;
+
         let peers = db.users_for_room(room_id).await?;
         let missing_peers = db.missing_peers(peers).await?;
 
@@ -341,9 +354,18 @@ impl LocalPeerService {
             Query::PeerNodes(room_id, missing_peers.into_iter().collect()),
         )
         .await?;
+        let peer_nodes: Vec<Node> = verify_service.verify_nodes(peer_nodes).await?;
         db.add_peer_nodes(peer_nodes).await?;
 
-        if Self::synchronise_room_data(&remote_room, &local_room_def, db, query_service).await? {
+        if Self::synchronise_room_data(
+            &remote_room,
+            &local_room_def,
+            db,
+            query_service,
+            verify_service,
+        )
+        .await?
+        {
             db.compute_daily_log().await;
         }
         Ok(())
@@ -354,6 +376,7 @@ impl LocalPeerService {
         local_room_def: &Option<RoomDefinitionLog>,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<(), crate::Error> {
         let load_room = match local_room_def {
             Some(local_room) => {
@@ -370,7 +393,10 @@ impl LocalPeerService {
             let node: Option<RoomNode> =
                 Self::query(query_service, Query::RoomNode(remote_room.room_id)).await?;
             match node {
-                Some(node) => db.add_room_node(node).await?,
+                Some(node) => {
+                    let node = verify_service.verify_room_node(node).await?;
+                    db.add_room_node(node).await?
+                }
                 None => {
                     return Err(crate::Error::RoomUnknow(base64_encode(
                         &remote_room.room_id,
@@ -387,6 +413,7 @@ impl LocalPeerService {
         local_room_def: &Option<RoomDefinitionLog>,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
         let sync_history = match local_room_def {
             Some(local_room) => {
@@ -402,9 +429,16 @@ impl LocalPeerService {
             None => true,
         };
         if sync_history {
-            Self::synchronise_history(remote_room.room_id, db, query_service).await
+            Self::synchronise_history(remote_room.room_id, db, query_service, verify_service).await
         } else {
-            Self::synchronise_last_day(remote_room, local_room_def, db, query_service).await
+            Self::synchronise_last_day(
+                remote_room,
+                local_room_def,
+                db,
+                query_service,
+                verify_service,
+            )
+            .await
         }
     }
 
@@ -412,6 +446,7 @@ impl LocalPeerService {
         room_id: Uid,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
         let remote_log: Vec<DailyLog> = Self::query(query_service, Query::RoomLog(room_id)).await?;
         let local_log = db.get_room_log(room_id).await?;
@@ -426,13 +461,29 @@ impl LocalPeerService {
             match local_log {
                 Some(local_log) => {
                     if !local_log.daily_hash.eq(&remote.daily_hash) {
-                        if Self::synchronise_day(room_id, remote.date, db, query_service).await? {
+                        if Self::synchronise_day(
+                            room_id,
+                            remote.date,
+                            db,
+                            query_service,
+                            verify_service,
+                        )
+                        .await?
+                        {
                             modified = true;
                         }
                     }
                 }
                 None => {
-                    if Self::synchronise_day(room_id, remote.date, db, query_service).await? {
+                    if Self::synchronise_day(
+                        room_id,
+                        remote.date,
+                        db,
+                        query_service,
+                        verify_service,
+                    )
+                    .await?
+                    {
                         modified = true;
                     }
                 }
@@ -446,6 +497,7 @@ impl LocalPeerService {
         local_room_def: &Option<RoomDefinitionLog>,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
         let sync_day = match local_room_def {
             Some(local_room) => {
@@ -467,6 +519,7 @@ impl LocalPeerService {
                 remote_room.last_data_date.unwrap(), //checked by sync_day
                 db,
                 query_service,
+                verify_service,
             )
             .await
         } else {
@@ -479,6 +532,7 @@ impl LocalPeerService {
         date: i64,
         db: &GraphDatabaseService,
         query_service: &QueryService,
+        verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
         let mut has_changes = false;
 
@@ -487,26 +541,28 @@ impl LocalPeerService {
             Self::query(query_service, Query::EdgeDeletionLog(room_id, date)).await?;
         if !edge_deletion.is_empty() {
             has_changes = true;
+            let edge_deletion = verify_service.verify_edge_log(edge_deletion).await?;
+            db.delete_edges(edge_deletion).await?;
         }
-        db.delete_edges(edge_deletion).await?;
 
         //node deletion
         let node_deletion: Vec<NodeDeletionEntry> =
             Self::query(query_service, Query::NodeDeletionLog(room_id, date)).await?;
         if !node_deletion.is_empty() {
             has_changes = true;
-        }
-        let max_deletion = 512;
-        let mut current = Vec::with_capacity(max_deletion);
-        for node_del in node_deletion {
-            current.push(node_del);
-            if current.len() == max_deletion {
-                db.delete_nodes(current).await?;
-                current = Vec::with_capacity(max_deletion);
+            let node_deletion = verify_service.verify_node_log(node_deletion).await?;
+            let max_deletion = 512;
+            let mut current = Vec::with_capacity(max_deletion);
+            for node_del in node_deletion {
+                current.push(node_del);
+                if current.len() == max_deletion {
+                    db.delete_nodes(current).await?;
+                    current = Vec::with_capacity(max_deletion);
+                }
             }
-        }
-        if !current.is_empty() {
-            db.delete_nodes(current).await?;
+            if !current.is_empty() {
+                db.delete_nodes(current).await?;
+            }
         }
 
         //node insertion
@@ -527,13 +583,15 @@ impl LocalPeerService {
             let (reply, mut receiver) =
                 mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
 
-            let db: GraphDatabaseService = db.clone();
+            let db = db.clone();
+            let verify_service = verify_service.clone();
             let room_id = room_id;
             let process_handle = tokio::spawn(async move {
                 while let Some(nodes) =
                     timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
                 {
                     let nodes = nodes?;
+                    let nodes = verify_service.verify_full_nodes(nodes).await?;
                     db.add_full_nodes(room_id, nodes).await?;
                 }
                 Ok::<(), crate::Error>(())

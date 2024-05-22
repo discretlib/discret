@@ -1030,9 +1030,6 @@ impl RoomAuthorisations {
     }
 
     pub fn validate_full_node(&self, node: &FullNode) -> bool {
-        if node.node.verify().is_err() {
-            return false;
-        }
         let required_right = match &node.old_verifying_key {
             Some(old_key) => match old_key.eq(&node.node.verifying_key) {
                 true => RightType::MutateSelf,
@@ -1088,9 +1085,6 @@ impl RoomAuthorisations {
         }
 
         for edge in &node.edges {
-            if edge.verify().is_err() {
-                return false;
-            }
             let required_right = match &node.old_verifying_key {
                 Some(old_key) => match old_key.eq(&edge.verifying_key) {
                     true => RightType::MutateSelf,
@@ -1125,9 +1119,6 @@ impl RoomAuthorisations {
                 continue;
             };
             let entity_name = &deletion.entity_name.clone().unwrap();
-            if deletion.verify().is_err() {
-                continue;
-            }
 
             let room = &deletion.room_id;
             let room = self.rooms.get(room);
@@ -1181,9 +1172,6 @@ impl RoomAuthorisations {
                 continue;
             };
             let entity_name = &deletion.entity_name.clone().unwrap();
-            if deletion.verify().is_err() {
-                continue;
-            }
 
             let room = &deletion.room_id;
             let room = self.rooms.get(room);

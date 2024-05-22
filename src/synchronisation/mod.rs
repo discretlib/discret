@@ -102,6 +102,7 @@ mod tests {
             connect_peers, listen_for_event, EventFn, Log, LogFn, PeerConnectionService,
         },
         security::{base64_encode, random32, MeetingSecret, Uid},
+        signature_verification_service::SignatureVerificationService,
     };
 
     const DATA_PATH: &str = "test_data/synchronisation/peer_service/";
@@ -126,7 +127,7 @@ mod tests {
                 model,
                 &random32(),
                 path.clone(),
-                Configuration::default(),
+                &Configuration::default(),
                 event.clone(),
             )
             .await
@@ -137,6 +138,7 @@ mod tests {
                 db.clone(),
                 event.clone(),
                 log.clone(),
+                SignatureVerificationService::start(2),
                 10,
             );
             Self {

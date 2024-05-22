@@ -673,7 +673,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await
@@ -688,7 +688,7 @@ mod tests {
             data_model,
             &secret,
             path,
-            Configuration::default(),
+            &Configuration::default(),
             EventService::new(),
         )
         .await

@@ -9,6 +9,7 @@ mod message;
 mod network;
 mod peer_connection_service;
 mod security;
+mod signature_verification_service;
 mod synchronisation;
 
 use database::{graph_database::GraphDatabaseService, query_language::parameter::Parameters};
@@ -16,6 +17,7 @@ use event_service::EventService;
 use log_service::LogService;
 use peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
+use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -105,10 +107,13 @@ impl Discret {
             datamodel,
             key_material,
             data_folder.clone(),
-            configuration,
+            &configuration,
             event_service.clone(),
         )
         .await?;
+
+        let signature_service =
+            SignatureVerificationService::start(configuration.signature_verification_parallelism);
 
         let meeting_secret_key =
             derive_key(&format!("{}{}", "MeetingSecret", app_key,), key_material);
@@ -121,6 +126,7 @@ impl Discret {
             db.clone(),
             event_service.clone(),
             log.clone(),
+            signature_service,
             10,
         );
 
