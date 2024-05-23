@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use discret::{derive_pass_phrase, Configuration, Discret, Parameters, ParametersAdd};
+use discret::{Configuration, Discret, Parameters, ParametersAdd};
 use rand::{rngs::OsRng, RngCore};
 const DATA_PATH: &str = "test_data/tests/";
 
@@ -18,8 +18,8 @@ async fn minimal() {
 
     let data_folder: PathBuf = DATA_PATH.into();
     let app = Discret::new(
-        "my app",
         datamodel,
+        "myappkey", //this key should be unique to your application and must never change once in production
         &key_material,
         data_folder,
         Configuration::default(),

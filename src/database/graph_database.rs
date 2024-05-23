@@ -654,17 +654,17 @@ impl GraphDatabase {
     pub async fn new(
         system_room_id: Uid,
         model: &str,
-        name: &str,
+        app_key: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
         config: &Configuration,
         event_service: EventService,
     ) -> Result<Self> {
-        let database_secret = derive_key(&name, key_material);
+        let signature_key = derive_key(&format!("{} SIGNING_KEY", app_key), key_material);
+
+        let database_secret = derive_key("DATABASE_SECRET", &signature_key);
 
         let database_name = derive_key("DATABASE_NAME", &database_secret);
-
-        let signature_key = derive_key("SIGNING_KEY", key_material);
 
         let signing_key = Ed25519SigningKey::create_from(&signature_key);
         let verifying_key = signing_key.export_verifying_key();

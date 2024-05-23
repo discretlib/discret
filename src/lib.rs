@@ -97,8 +97,8 @@ pub struct Discret {
 }
 impl Discret {
     pub async fn new(
-        app_key: &str,
         datamodel: &str,
+        app_key: &str,
         key_material: &[u8; 32],
         data_folder: PathBuf,
         configuration: Configuration,
