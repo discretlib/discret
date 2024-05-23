@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 
+use ed25519_dalek::VerifyingKey;
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
-use super::{node::Node, sqlite_database::Writeable, Error};
+use crate::{database::query::SingleQueryResult, Parameters, ParametersAdd, Uid};
+
+use super::{graph_database::GraphDatabaseService, node::Node, sqlite_database::Writeable, Error};
 
 pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
@@ -33,6 +37,9 @@ pub const ENTITY_RIGHT_ENT_SHORT: &str = "0.3";
 
 pub const PEER_ENT: &str = "sys.Peer";
 pub const PEER_ENT_SHORT: &str = "0.4";
+
+pub const ALLOWED_PEER_ENT: &str = "sys.AllowedPeer";
+pub const ALLOWED_PEER_ENT_SHORT: &str = "0.5";
 
 //name of the system fields
 pub const ID_FIELD: &str = "id";
@@ -102,8 +109,7 @@ sys{
 
     AllowedPeer{
         peer: sys.Peer,
-        beacons: [sys.Beacon],
-        enabled: Boolean,
+        enabled: Boolean default true,
     }
 
     AllowedHardware{
@@ -139,8 +145,34 @@ pub fn sys_room_entities() -> Vec<String> {
     ]
 }
 
-pub struct Peer {}
+#[derive(Serialize, Deserialize)]
+pub struct Peer {
+    id: String,
+    verifying_key: String,
+    meeting_pub_key: String,
+}
 impl Peer {
+    pub fn create(id: Uid, meeting_pub_key: String) -> Node {
+        let json = format!(
+            r#"{{ 
+                "meeting_pub_key": "{}" 
+            }}"#,
+            meeting_pub_key
+        );
+
+        let node = Node {
+            id,
+            room_id: None,
+            cdate: 0,
+            mdate: 0,
+            _entity: PEER_ENT_SHORT.to_string(),
+            _json: Some(json),
+            ..Default::default()
+        };
+
+        node
+    }
+
     pub fn get_missing(
         keys: HashSet<Vec<u8>>,
         conn: &Connection,
@@ -206,7 +238,7 @@ impl Peer {
         Ok(result)
     }
 
-    pub fn get(keys: Vec<Vec<u8>>, conn: &Connection) -> Result<Vec<Node>, Error> {
+    pub fn get_peers(keys: Vec<Vec<u8>>, conn: &Connection) -> Result<Vec<Node>, Error> {
         let it = &mut keys.iter().peekable();
         let mut result = Vec::with_capacity(keys.len());
 
@@ -278,6 +310,7 @@ impl Peer {
         Ok(result)
     }
 }
+
 pub struct PeerNodes {
     pub nodes: Vec<Node>,
 }
@@ -286,10 +319,10 @@ impl Writeable for PeerNodes {
         for node in &self.nodes {
             let mut exists_stmt =
                 conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
-            let esists: Option<i64> = exists_stmt
+            let exists: Option<i64> = exists_stmt
                 .query_row((node.id, &node._entity), |row| row.get(0))
                 .optional()?;
-            if esists.is_none() {
+            if exists.is_none() {
                 let mut insert_stmt = conn.prepare_cached(
                     "INSERT INTO _node ( 
                         id,
@@ -322,13 +355,72 @@ impl Writeable for PeerNodes {
         Ok(())
     }
 }
+
+#[derive(Serialize, Deserialize)]
 pub struct AllowedPeer {
     id: String,
-    verifying_key: String,
-    meeting_pub_key: String,
-    banned_until: i64,
-    beacons: Vec<Beacon>,
-    static_adress: Option<String>,
+    peer: Peer,
+    enabled: bool,
+}
+impl AllowedPeer {
+    pub async fn add(
+        room_id: &str,
+        public_key: &str,
+        db: &GraphDatabaseService,
+    ) -> Result<Self, Error> {
+        let query = "query {
+            result: sys.Peer(room_id=$room_id, meeting_pub_key=$public_key){
+                id
+                verifying_key
+                meeting_pub_key
+            }";
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id.to_string())?;
+        param.add("public_key", public_key.to_string())?;
+        let peer_str = db.query(query, Some(param)).await?;
+
+        let mut result: SingleQueryResult<Self> = serde_json::from_str(&peer_str)?;
+        if !result.result.is_empty() {
+            let res = result
+                .result
+                .pop()
+                .ok_or(Error::QueryParsing("Parsing 'Peer'".to_string()))?;
+            return Ok(res);
+        }
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id.to_string())?;
+        param.add("public_key", public_key.to_string())?;
+
+        db.mutate(
+            "mutation {
+                result: sys.Peer{
+                    room_id: $room_id
+                    meeting_pub_key: public_key
+                }",
+            Some(param),
+        )
+        .await?;
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id.to_string())?;
+        param.add("public_key", public_key.to_string())?;
+        let peer_str = db.query(query, Some(param)).await?;
+
+        let mut result: SingleQueryResult<Self> = serde_json::from_str(&peer_str)?;
+        if result.result.is_empty() {
+            Err(Error::QueryParsing(
+                "Could not find Peer just inserted".to_string(),
+            ))
+        } else {
+            let res = result
+                .result
+                .pop()
+                .ok_or(Error::QueryParsing("Parsing 'Peer'".to_string()))?;
+            Ok(res)
+        }
+    }
 }
 
 pub struct AllowedHardware {
@@ -353,6 +445,7 @@ pub struct ProposedInvitation {
     authorisation: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Beacon {
     id: String,
     address: String,
@@ -396,7 +489,7 @@ mod tests {
         assert_eq!(missing.len(), num_peer);
 
         let keys = missing.into_iter().collect();
-        let nodes = Peer::get(keys, &conn1).unwrap();
+        let nodes = Peer::get_peers(keys, &conn1).unwrap();
         assert_eq!(nodes.len(), num_peer);
 
         let mut pn = PeerNodes { nodes };

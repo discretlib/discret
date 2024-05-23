@@ -126,6 +126,7 @@ mod tests {
                 "app",
                 model,
                 &random32(),
+                &random32(),
                 path.clone(),
                 &Configuration::default(),
                 event.clone(),
@@ -134,13 +135,16 @@ mod tests {
             .unwrap();
             let log = LogService::start();
             let peer_service = PeerConnectionService::start(
+                verifying_key.clone(),
                 MeetingSecret::new(random32()),
+                system_room_id,
                 db.clone(),
                 event.clone(),
                 log.clone(),
                 SignatureVerificationService::start(2),
                 10,
-            );
+            )
+            .unwrap();
             Self {
                 event,
                 log,

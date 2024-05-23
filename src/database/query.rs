@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
+use serde::{Deserialize, Serialize};
 
 use crate::base64_decode;
 
@@ -19,6 +20,21 @@ use super::Result;
 pub struct Param {
     internal: bool,
     value: String,
+}
+
+///
+/// helper structure to parse the query result
+/// the query can only contain one query aliased with result
+/// the generic must me desialisable and contains the proper fields
+/// query {
+///     result: sys.Room{
+///         id
+///     }
+/// }
+///
+#[derive(Serialize, Deserialize)]
+pub struct SingleQueryResult<T> {
+    pub result: Vec<T>,
 }
 
 #[derive(Debug, Default)]

@@ -6,11 +6,15 @@ use std::{
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::{
-    database::graph_database::GraphDatabaseService,
+    base64_encode,
+    database::{
+        graph_database::GraphDatabaseService,
+        system_entities::{AllowedPeer, Peer},
+    },
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
-    security::{MeetingSecret, Uid},
+    security::{uid_encode, MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -18,6 +22,7 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
+    Parameters, ParametersAdd, Result,
 };
 
 pub enum PeerConnectionMessage {
@@ -45,23 +50,25 @@ pub struct PeerConnectionService {
 }
 impl PeerConnectionService {
     pub fn start(
+        verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
-        local_db: GraphDatabaseService,
-        event_service: EventService,
-        log_service: LogService,
+        system_room_id: Uid,
+        db: GraphDatabaseService,
+        events: EventService,
+        logs: LogService,
         verify_service: SignatureVerificationService,
         max_concurent_synchronisation: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let (sender, mut connection_receiver) =
             mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
         let (local_event_broadcast, _) = broadcast::channel::<LocalEvent>(16);
         let lock_service = RoomLockService::start(max_concurent_synchronisation);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
-
+        //let local_allowed_peer =    Self::init_local_peer(system_room_id, verifying_key, meeting_secret, &db)?;
         tokio::spawn(async move {
             let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
-            let mut event_receiver = event_service.subcribe().await;
+            let mut event_receiver = events.subcribe().await;
             loop {
                 tokio::select! {
                     msg = connection_receiver.recv() =>{
@@ -69,9 +76,9 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 Self::process_connection(
                                     msg,
-                                    &local_db,
-                                    &event_service,
-                                    &log_service,
+                                    &db,
+                                    &events,
+                                    &logs,
                                     &peer_service,
                                     &lock_service,
                                     &verify_service,
@@ -87,7 +94,7 @@ impl PeerConnectionService {
                     msg = event_receiver.recv() =>{
                         match msg{
                             Ok(event) => {
-                                Self::process_event(event, &local_event_broadcast, &log_service).await;
+                                Self::process_event(event, &local_event_broadcast, &logs).await;
                             },
                             Err(e) => match e {
                                 broadcast::error::RecvError::Closed => break,
@@ -98,7 +105,7 @@ impl PeerConnectionService {
                 }
             }
         });
-        ret
+        Ok(ret)
     }
 
     pub async fn disconnect(&self, verifying_key: Vec<u8>, hardware_id: Vec<u8>) {
@@ -253,7 +260,7 @@ impl AllowedConnection {
 pub use crate::{log_service::Log, security::random32};
 
 #[cfg(test)]
-pub type LogFn = Box<dyn Fn(Log) -> Result<(), String> + Send + 'static>;
+pub type LogFn = Box<dyn Fn(Log) -> std::result::Result<(), String> + Send + 'static>;
 
 #[cfg(test)]
 pub type EventFn = Box<dyn Fn(Event) -> bool + Send + 'static>;
@@ -265,12 +272,12 @@ pub async fn listen_for_event(
     remote_log_service: LogService,
     event_fn: EventFn,
     log_fn: LogFn,
-) -> Result<(), String> {
+) -> std::result::Result<(), String> {
     let mut events = event_service.subcribe().await;
     let mut log = log_service.subcribe().await;
     let mut remote_log = remote_log_service.subcribe().await;
 
-    let res: tokio::task::JoinHandle<Result<(), String>> = tokio::spawn(async move {
+    let res: tokio::task::JoinHandle<std::result::Result<(), String>> = tokio::spawn(async move {
         let mut success = false;
         let mut error = String::new();
         loop {
@@ -394,6 +401,7 @@ mod tests {
                 "app",
                 model,
                 &random32(),
+                &random32(),
                 path.clone(),
                 &Configuration::default(),
                 event.clone(),
@@ -402,13 +410,16 @@ mod tests {
             .unwrap();
             let log = LogService::start();
             let peer_service = PeerConnectionService::start(
+                verifying_key.clone(),
                 MeetingSecret::new(random32()),
+                system_room_id,
                 db.clone(),
                 event.clone(),
                 log.clone(),
                 SignatureVerificationService::start(2),
                 10,
-            );
+            )
+            .unwrap();
             Self {
                 event,
                 log,

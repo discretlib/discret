@@ -562,6 +562,7 @@ mod tests {
             "delete app",
             &data_model,
             &secret,
+            &random32(),
             path,
             &Configuration::default(),
             event_service,

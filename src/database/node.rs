@@ -329,7 +329,6 @@ impl Node {
     /// Verify the existence of a specific Node
     ///
     ///
-    #[cfg(test)]
     pub fn exist(id: &Uid, entity: &str, conn: &Connection) -> Result<bool> {
         let mut exists_stmt =
             conn.prepare_cached("SELECT 1 FROM _node WHERE id = ? AND _entity = ?")?;
@@ -423,7 +422,7 @@ impl Node {
                 &self.verifying_key,
                 &self._signature,
             ))?;
-            self._local_id = Some(conn.last_insert_rowid());
+            self._local_id = Some(rowid);
             if index {
                 if let Some(current) = node_fts_str {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
@@ -522,7 +521,38 @@ impl Node {
         Ok(())
     }
 }
-
+impl Writeable for Node {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT INTO _node ( 
+                id,
+                room_id,
+                cdate,
+                mdate,
+                _entity,
+                _json,
+                _binary,
+                verifying_key,
+                _signature
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )",
+        )?;
+        let rowid = insert_stmt.insert((
+            &self.id,
+            &self.room_id,
+            &self.cdate,
+            &self.mdate,
+            &self._entity,
+            &self._json,
+            &self._binary,
+            &self.verifying_key,
+            &self._signature,
+        ))?;
+        self._local_id = Some(rowid);
+        Ok(())
+    }
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeIdentifier {
     pub id: Uid,

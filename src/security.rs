@@ -476,7 +476,7 @@ mod tests {
     pub fn meeting_secret() {
         let peer1 = MeetingSecret::new(random32());
         let peer1_public = peer1.public_key();
-        let peer1_public = bincode::serialize(&peer1_public).unwrap();
+        let peer1_public = bincode::serialize(&peer1_public.as_bytes()).unwrap();
 
         let peer2 = MeetingSecret::new(random32());
         let peer2_public = peer2.public_key();

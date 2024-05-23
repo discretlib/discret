@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
 use super::mutation_query::MutationResult;
 use super::sqlite_database::WriteStmt;
-use super::system_entities::{self, Peer, PeerNodes};
+use super::system_entities::{self, Peer, PeerNodes, PEER_ENT_SHORT};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -64,6 +64,7 @@ impl GraphDatabaseService {
         app_key: &str,
         datamodel: &str,
         key_material: &[u8; 32],
+        public_key: &[u8; 32],
         data_folder: PathBuf,
         configuration: &Configuration,
         event_service: EventService,
@@ -76,6 +77,7 @@ impl GraphDatabaseService {
 
         let mut db = GraphDatabase::new(
             system_room_id,
+            public_key,
             datamodel,
             app_key,
             key_material,
@@ -583,7 +585,7 @@ impl GraphDatabaseService {
                     .db
                     .reader
                     .send_async(Box::new(move |conn| {
-                        let nodes_rs = Peer::get(list, conn);
+                        let nodes_rs = Peer::get_peers(list, conn);
                         let _ = reply.send(nodes_rs);
                     }))
                     .await;
@@ -653,6 +655,7 @@ struct GraphDatabase {
 impl GraphDatabase {
     pub async fn new(
         system_room_id: Uid,
+        public_key: &[u8; 32],
         model: &str,
         app_key: &str,
         key_material: &[u8; 32],
@@ -685,6 +688,12 @@ impl GraphDatabase {
         let deletion_cache = LruCache::new(NonZeroUsize::new(LRU_SIZE).unwrap());
 
         let data_model = DataModel::new();
+
+        let peer_uid = derive_uid("PEER_UID", public_key);
+
+        init_allowed_peers(&graph_database, peer_uid, public_key, &signing_key).await?;
+        // let allowed_peer_uid = derive_uid("ALLOWED_PEER_UID", &public_key);
+        // let peer_node = Peer::create(peer_uid, meeting_pub_key);
 
         let mut auth = RoomAuthorisations {
             signing_key,
@@ -1052,6 +1061,28 @@ impl GraphDatabase {
     }
 }
 
+async fn init_allowed_peers(
+    graph_database: &Database,
+    peer_uid: [u8; 16],
+    public_key: &[u8; 32],
+    signing_key: &Ed25519SigningKey,
+) -> Result<()> {
+    let (reply, receive) = oneshot::channel::<Result<bool>>();
+    graph_database
+        .reader
+        .send_async(Box::new(move |conn| {
+            let room_node = Node::exist(&peer_uid, PEER_ENT_SHORT, conn);
+            let _ = reply.send(room_node);
+        }))
+        .await?;
+    let exists = receive.await??;
+    Ok(if !exists {
+        let mut peer_node = Peer::create(peer_uid, base64_encode(public_key));
+        peer_node.sign(signing_key)?;
+        graph_database.writer.write(Box::new(peer_node)).await?;
+    })
+}
+
 struct QueryCacheEntry {
     parser: Arc<QueryParser>,
     prepared_query: Arc<PreparedQueries>,
@@ -1103,6 +1134,7 @@ mod tests {
             "selection app",
             &data_model,
             &secret,
+            &random32(),
             path,
             &Configuration::default(),
             EventService::new(),
@@ -1149,6 +1181,7 @@ mod tests {
             "delete app",
             &data_model,
             &secret,
+            &random32(),
             path,
             &Configuration::default(),
             EventService::new(),
@@ -1209,6 +1242,7 @@ mod tests {
                 "load data_model app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1230,6 +1264,7 @@ mod tests {
                 "load data_model app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1252,6 +1287,7 @@ mod tests {
                 "load data_model app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1279,6 +1315,7 @@ mod tests {
                 "app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1301,6 +1338,7 @@ mod tests {
                 "app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1324,6 +1362,7 @@ mod tests {
                 "another app",
                 &data_model,
                 &secret,
+                &random32(),
                 path,
                 &Configuration::default(),
                 EventService::new(),
@@ -1347,6 +1386,7 @@ mod tests {
             let (_, _, system_room_id) = GraphDatabaseService::start(
                 "another app",
                 &data_model,
+                &random32(),
                 &random32(),
                 path,
                 &Configuration::default(),
@@ -1378,6 +1418,7 @@ mod tests {
             "app",
             &data_model,
             &secret,
+            &random32(),
             path,
             &Configuration::default(),
             EventService::new(),
