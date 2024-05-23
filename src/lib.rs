@@ -12,7 +12,7 @@ mod security;
 mod signature_verification_service;
 mod synchronisation;
 
-use database::{graph_database::GraphDatabaseService, query_language::parameter::Parameters};
+use database::graph_database::GraphDatabaseService;
 use event_service::EventService;
 use log_service::LogService;
 use peer_connection_service::PeerConnectionService;
@@ -23,6 +23,7 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub use configuration::Configuration;
+pub use database::query_language::parameter::{Parameters, ParametersAdd};
 pub use security::{
     base64_decode, base64_encode, derive_pass_phrase, new_uid, uid_decode, uid_encode, Uid,
 };

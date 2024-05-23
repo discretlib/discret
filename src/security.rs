@@ -286,7 +286,7 @@ impl MeetingSecret {
 /// - parallelism count of 2
 /// - the login is used as a salt
 ///
-pub fn derive_pass_phrase(login: String, pass_phrase: String) -> [u8; 32] {
+pub fn derive_pass_phrase(login: &str, pass_phrase: &str) -> [u8; 32] {
     let password = pass_phrase.as_bytes();
     let salt = hash(login.as_bytes());
 
@@ -425,8 +425,8 @@ mod tests {
     use super::*;
     #[test]
     fn control_derive_pass_phrase() {
-        let login = "test".to_string();
-        let pass_phrase = "testphrase".to_string();
+        let login = "test";
+        let pass_phrase = "testphrase";
 
         let hashed = derive_pass_phrase(login, pass_phrase);
 

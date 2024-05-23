@@ -6,7 +6,7 @@ mod tests {
             PEER_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
             MODIFICATION_DATE_FIELD, SIGNATURE_FIELD, VERIFYING_KEY_FIELD,
         },
-        query_language::{data_model_parser::*, FieldType, Value},
+        query_language::{data_model_parser::*, FieldType, ParamValue},
     };
     use std::any::Any;
 
@@ -50,7 +50,7 @@ mod tests {
         let name = pet.fields.get("name").unwrap();
         assert_eq!(FieldType::String.type_id(), name.field_type.type_id());
         assert_eq!(false, name.nullable);
-        if let Some(Value::String(e)) = &name.default_value {
+        if let Some(ParamValue::String(e)) = &name.default_value {
             assert_eq!("John", e);
         }
 

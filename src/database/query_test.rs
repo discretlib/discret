@@ -62,7 +62,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -90,7 +90,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -131,7 +131,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -167,12 +167,12 @@ mod tests {
         )
         .unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
 
         let signing_key = Ed25519SigningKey::new();
 
@@ -201,7 +201,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -241,7 +241,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -251,6 +251,82 @@ mod tests {
             .read(&conn)
             .expect("result changes everytime, just test that it creates a valid query");
     }
+
+
+
+    #[test]
+    fn id() {
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "{
+            Person {
+                name : String
+            }
+        }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                Person {
+                    name : "hello"
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+    
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        let signing_key = Ed25519SigningKey::new();
+        mutation_query.sign_all(&signing_key).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        
+        let id = mutation_query.mutate_entities[0].node_to_mutate.id;
+        println!("{}", uid_encode(&id));
+         let query_parser = QueryParser::parse(
+            "
+            query sample{
+                Person(id=$id) {
+                    id
+                    name
+                    _entity
+                }
+            }
+            ",
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+   //     println!("{}", query.sql_queries[0].sql_query);
+        let mut param = Parameters::new();
+        param.add("id",  uid_encode(&id)).unwrap();
+
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql
+            .read(&conn)
+          .unwrap();
+
+        println!("{}",result);
+
+        
+    }
+
+
 
     #[test]
     fn entity() {
@@ -305,7 +381,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -336,7 +412,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -401,7 +477,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -432,7 +508,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -481,35 +557,35 @@ mod tests {
         param.add("name", "John".to_string()).unwrap();
         param.add("age", 42).unwrap();
 
-        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Silvie".to_string()).unwrap();
         param.add("age", 46).unwrap();
 
-        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Kevin".to_string()).unwrap();
         param.add("age", 22).unwrap();
 
-        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Sarah".to_string()).unwrap();
         param.add("age", 12).unwrap();
 
-        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let mut param = Parameters::new();
         param.add("name", "Leonore".to_string()).unwrap();
         param.add("age", 22).unwrap();
 
-        let mut mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -530,7 +606,7 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -557,7 +633,7 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -584,7 +660,7 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -612,7 +688,7 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -641,7 +717,7 @@ mod tests {
 
        // println!("{}", &query.sql_queries[0].sql_query);
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -701,9 +777,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -723,7 +799,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -756,7 +832,7 @@ mod tests {
         param.add("we", 100.0).unwrap();
         param.add("hum", false).unwrap();
 
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -804,9 +880,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -827,7 +903,7 @@ mod tests {
         let query = PreparedQueries::build(&query_parser).unwrap();
         let mut param = Parameters::new();
         param.add("name", "John".to_string()).unwrap();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -880,9 +956,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -904,7 +980,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -934,7 +1010,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -964,7 +1040,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1007,9 +1083,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1027,7 +1103,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1072,9 +1148,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1092,7 +1168,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1135,9 +1211,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1155,7 +1231,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1197,7 +1273,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1242,7 +1318,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1261,7 +1337,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries:  Arc::new(query),
@@ -1287,7 +1363,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1315,7 +1391,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1342,7 +1418,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1398,14 +1474,14 @@ mod tests {
         )
         .unwrap();
 
-        let  param = Parameters::new();
+        let mut param = Parameters::new();
     
 
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1431,7 +1507,7 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1464,7 +1540,7 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1518,14 +1594,12 @@ mod tests {
         )
         .unwrap();
 
-        let  param = Parameters::new();
-    
-
+        let mut param = Parameters::new();
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1544,7 +1618,7 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1570,7 +1644,7 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1629,14 +1703,12 @@ mod tests {
         )
         .unwrap();
 
-        let  param = Parameters::new();
-    
-
+        let mut param = Parameters::new();
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -1665,7 +1737,7 @@ mod tests {
 
        // println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1702,7 +1774,7 @@ mod tests {
 
        // println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1755,9 +1827,9 @@ mod tests {
         )
         .unwrap();
 
-        let  param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
 
@@ -1773,9 +1845,9 @@ mod tests {
             &data_model,
         )
         .unwrap();
-        let  param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
          mutation_query.write(&conn).unwrap();
         let q = & mutation_query.mutate_entities[0];
         let id = q.node_to_mutate.id;
@@ -1803,7 +1875,7 @@ mod tests {
         let mut param = Parameters::new();
         param.add("room_id", uid_encode(&id)).unwrap();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
          mutation_query.write(&conn).unwrap();
 
 
@@ -1838,7 +1910,7 @@ mod tests {
 
         //println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -1879,7 +1951,7 @@ mod tests {
 
         //println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),

@@ -837,7 +837,7 @@ impl GraphDatabase {
     pub async fn mutate(
         &mut self,
         mutation: Arc<MutationParser>,
-        parameters: Parameters,
+        mut parameters: Parameters,
         reply: Sender<Result<MutationQuery>>,
     ) {
         let auth_service = self.auth_service.clone();
@@ -845,7 +845,8 @@ impl GraphDatabase {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let mutation_query = MutationQuery::execute(&parameters, mutation.clone(), conn);
+                let mutation_query =
+                    MutationQuery::execute(&mut parameters, mutation.clone(), conn);
 
                 match mutation_query {
                     Ok(muta) => {
@@ -885,7 +886,7 @@ impl GraphDatabase {
         parameters: Parameters,
         reply: Sender<Result<String>>,
     ) {
-        let sql = Query {
+        let mut sql = Query {
             parameters,
             parser,
             sql_queries,
@@ -895,7 +896,6 @@ impl GraphDatabase {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                // let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
                 let res = sql.read(conn).map_err(Error::from);
                 let _ = reply.send(res);
             }))
@@ -918,7 +918,7 @@ impl GraphDatabase {
     pub async fn delete(
         &mut self,
         deletion: Arc<DeletionParser>,
-        parameters: Parameters,
+        mut parameters: Parameters,
         reply: Sender<Result<DeletionQuery>>,
     ) {
         let auth_service = self.auth_service.clone();
@@ -926,7 +926,7 @@ impl GraphDatabase {
             .graph_database
             .reader
             .send_async(Box::new(move |conn| {
-                let deletion_query = DeletionQuery::build(&parameters, deletion, conn);
+                let deletion_query = DeletionQuery::build(&mut parameters, deletion, conn);
                 match deletion_query {
                     Ok(del) => {
                         let query = AuthorisationMessage::Deletion(del, reply);

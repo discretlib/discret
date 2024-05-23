@@ -5,7 +5,7 @@ use crate::{security::base64_decode, database::query_language::VariableType};
 use super::{
     data_model_parser::{DataModel, Entity, Field},
     parameter::Variables,
-    Error, FieldType, FieldValue, Value,
+    Error, FieldType, FieldValue, ParamValue,
 };
 
 use pest::{iterators::{Pair, Pairs}, Parser};
@@ -78,7 +78,7 @@ impl EntityParams {
             fulltext_search: None,
             before: Vec::new(),
             after: Vec::new(),
-            first: FieldValue::Value(Value::Integer(0)),
+            first: FieldValue::Value(ParamValue::Integer(0)),
             order_by: Vec::new(),
             skip: None,
             nullable: HashSet::new()
@@ -235,27 +235,27 @@ impl EntityQuery {
 
                     },
                     FieldValue::Value(val) => match val{
-                        Value::Boolean(_) => {
+                        ParamValue::Boolean(_) => {
                             match field_type{
                                 FieldType::Boolean => {},
                                 _ => { return Err(Error::InvalidPagingValue(i, String::from("Boolean")))},
                             }
                         }
                         
-                        Value::Integer(_) => {
+                        ParamValue::Integer(_) => {
                             match field_type{
                                 FieldType::Integer => {},
                                 FieldType::Float => {},
                                 _ => { return Err(Error::InvalidPagingValue(i, String::from("Integer")))},
                             }
                         }
-                        Value::Float(_) => {
+                        ParamValue::Float(_) => {
                             match field_type{
                                 FieldType::Float => {},
                                 _ => { return Err(Error::InvalidPagingValue(i, String::from("Float")))},
                             }
                         }
-                        Value::String(s) => {
+                        ParamValue::String(s) => {
                             match field_type{
                                 FieldType::String => {},
                                 FieldType::Base64 => {
@@ -815,7 +815,7 @@ impl QueryParser {
                                 }
                                 Rule::unsigned_int => {
                                     let value = val.as_str();
-                                    parameters.first = FieldValue::Value(Value::Integer(value.parse()?));
+                                    parameters.first = FieldValue::Value(ParamValue::Integer(value.parse()?));
                                 }
                                 _=> unreachable!()
                             }
@@ -832,7 +832,7 @@ impl QueryParser {
                                 }
                                 Rule::unsigned_int => {
                                     let value = val.as_str();
-                                    parameters.skip = Some(FieldValue::Value(Value::Integer(value.parse()?)));
+                                    parameters.skip = Some(FieldValue::Value(ParamValue::Integer(value.parse()?)));
                                 }
                                 _=> unreachable!()
                             }
@@ -851,16 +851,16 @@ impl QueryParser {
                                 Rule::string => {
                                     let pair = val.into_inner().next().unwrap();
                                     let value = pair.as_str().replace("\\\"", "\"");
-                                    parameters.fulltext_search = Some(FieldValue::Value(Value::String(value.to_string())));
+                                    parameters.fulltext_search = Some(FieldValue::Value(ParamValue::String(value.to_string())));
                                 }
                                 _=> unreachable!()
                             }
                         }
 
                         Rule::before => {
-                        let values = pair.into_inner();
-                        let before = Self::parse_paging_params(values)?;
-                        parameters.before = before;
+                            let values = pair.into_inner();
+                            let before = Self::parse_paging_params(values)?;
+                            parameters.before = before;
                         }
 
                         Rule::after => {
@@ -982,6 +982,7 @@ impl QueryParser {
        
        
         let name = parsed_filters.name;
+        
         let value = match &parsed_filters.value {
             FieldValue::Variable(var) => {
                 if is_entity_field{
@@ -995,7 +996,7 @@ impl QueryParser {
             },
             FieldValue::Value(val) => {
                 match val{
-                    Value::Null => {
+                    ParamValue::Null => {
                         if field.nullable  | is_entity_field{
                             parsed_filters.value
                         } else {
@@ -1003,7 +1004,7 @@ impl QueryParser {
                         }
                     },
 
-                    Value::Boolean(_) => {
+                    ParamValue::Boolean(_) => {
                         if is_entity_field{
                             return Err(Error::InvalidEntityFilter(
                                 name
@@ -1022,14 +1023,14 @@ impl QueryParser {
                             }
                         }
                     },
-                    Value::Integer(i) => {
+                    ParamValue::Integer(i) => {
                         if is_entity_field{
                             return Err(Error::InvalidEntityFilter(
                                 name,
                             ))
                         } 
                         match field.field_type {
-                            FieldType::Float =>  FieldValue::Value(Value::Float(*i as f64)),  
+                            FieldType::Float =>  FieldValue::Value(ParamValue::Float(*i as f64)),  
                             FieldType::Integer =>  parsed_filters.value,  
                             _ => {
                                 return Err(Error::InvalidFieldType(
@@ -1040,7 +1041,7 @@ impl QueryParser {
                             }
                         }
                     },
-                    Value::Float(_) => {
+                    ParamValue::Float(_) => {
                         if is_entity_field{
                             return Err(Error::InvalidEntityFilter(
                                 name,
@@ -1057,18 +1058,23 @@ impl QueryParser {
                             }
                         }
                     },
-                    Value::String(s) => {
+                    ParamValue::String(s) => {
                         if is_entity_field{
                             return Err(Error::InvalidEntityFilter(
                                 name
                             ))
                         }
-                       
-                        match field.field_type {
-                            FieldType::String => parsed_filters.value,
+                        match field.field_type {   
+                            FieldType::String => {
+                                parsed_filters.value
+                            },
                             FieldType::Base64 => {
                                 validate_base64(s, &name)?;
-                                parsed_filters.value
+                                if field.is_system{
+                                    FieldValue::Value(ParamValue::Binary(s.clone()))
+                                } else {
+                                    parsed_filters.value
+                                }
                             }
                             _ => {
                                 return Err(Error::InvalidFieldType(
@@ -1079,6 +1085,8 @@ impl QueryParser {
                             }
                         }
                     }
+
+                   _=> unreachable!()
                     
                 }
             },
@@ -1148,23 +1156,23 @@ impl QueryParser {
         let field = match value_pair.as_rule(){
             Rule::boolean => {
                 let value = value_pair.as_str();
-                FieldValue::Value(Value::Boolean(value.parse()?))
+                FieldValue::Value(ParamValue::Boolean(value.parse()?))
             }
             Rule::float => {
                 let value = value_pair.as_str();
-                FieldValue::Value(Value::Float(value.parse()?))
+                FieldValue::Value(ParamValue::Float(value.parse()?))
             }
             Rule::integer => {
                 let value = value_pair.as_str();
-                FieldValue::Value(Value::Integer(value.parse()?))
+                FieldValue::Value(ParamValue::Integer(value.parse()?))
             }
             Rule::null => {
-                FieldValue::Value(Value::Null)
+                FieldValue::Value(ParamValue::Null)
             }
             Rule::string => {
                 let pair = value_pair.into_inner().next().unwrap();
                 let value = pair.as_str().replace("\\\"", "\"");
-                FieldValue::Value(Value::String(value))
+                FieldValue::Value(ParamValue::String(value))
             }
             Rule::variable => {
                 let value = &value_pair.as_str()[1..];

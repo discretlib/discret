@@ -8,7 +8,7 @@ use crate::{
 use super::{
     data_model_parser::{DataModel, Entity, Field},
     parameter::Variables,
-    Error, FieldType, Value,
+    Error, FieldType, ParamValue,
 };
 
 use pest::{
@@ -66,7 +66,7 @@ impl EntityMutation {
 #[derive(Debug, Clone)]
 pub enum MutationFieldValue {
     Variable(String),
-    Value(Value),
+    Value(ParamValue),
     Array(Vec<EntityMutation>),
     Entity(EntityMutation),
 }
@@ -90,7 +90,7 @@ impl MutationField {
             name: String::from(""),
             short_name: String::from(""),
             field_type: FieldType::Boolean,
-            field_value: MutationFieldValue::Value(Value::Boolean(true)),
+            field_value: MutationFieldValue::Value(ParamValue::Boolean(true)),
             is_default_filled: false,
         }
     }
@@ -512,7 +512,7 @@ impl MutationParser {
 
         let value = content_pair.as_str();
 
-        mutation_field.field_value = MutationFieldValue::Value(Value::Boolean(value.parse()?));
+        mutation_field.field_value = MutationFieldValue::Value(ParamValue::Boolean(value.parse()?));
         Ok(())
     }
 
@@ -534,7 +534,7 @@ impl MutationParser {
         mutation_field.field_type = field.field_type.clone();
 
         let value = content_pair.as_str();
-        mutation_field.field_value = MutationFieldValue::Value(Value::Float(value.parse()?));
+        mutation_field.field_value = MutationFieldValue::Value(ParamValue::Float(value.parse()?));
         Ok(())
     }
 
@@ -547,12 +547,12 @@ impl MutationParser {
             FieldType::Float => {
                 let value = content_pair.as_str();
                 mutation_field.field_value =
-                    MutationFieldValue::Value(Value::Float(value.parse()?));
+                    MutationFieldValue::Value(ParamValue::Float(value.parse()?));
             }
             FieldType::Integer => {
                 let value = content_pair.as_str();
                 mutation_field.field_value =
-                    MutationFieldValue::Value(Value::Integer(value.parse()?));
+                    MutationFieldValue::Value(ParamValue::Integer(value.parse()?));
             }
             _ => {
                 return Err(Error::InvalidFieldType(
@@ -576,11 +576,11 @@ impl MutationParser {
         let value = pair.as_str().replace("\\\"", "\"");
         match field.field_type {
             FieldType::String => {
-                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
+                mutation_field.field_value = MutationFieldValue::Value(ParamValue::String(value));
             }
             FieldType::Base64 => {
                 MutationParser::validate_base64(&value, &field.name)?;
-                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
+                mutation_field.field_value = MutationFieldValue::Value(ParamValue::String(value));
             }
             FieldType::Json => {
                 let v: std::result::Result<serde_json::Value, serde_json::Error> =
@@ -589,7 +589,7 @@ impl MutationParser {
                     return Err(Error::InvalidJson(value));
                 }
 
-                mutation_field.field_value = MutationFieldValue::Value(Value::String(value));
+                mutation_field.field_value = MutationFieldValue::Value(ParamValue::String(value));
             }
             _ => {
                 return Err(Error::InvalidFieldType(
@@ -606,11 +606,11 @@ impl MutationParser {
 
     fn parse_null_type(field: &Field, mutation_field: &mut MutationField) -> Result<(), Error> {
         if field.nullable {
-            mutation_field.field_value = MutationFieldValue::Value(Value::Null);
+            mutation_field.field_value = MutationFieldValue::Value(ParamValue::Null);
         } else {
             match field.field_type {
                 FieldType::Array(_) | FieldType::Entity(_) => {
-                    mutation_field.field_value = MutationFieldValue::Value(Value::Null);
+                    mutation_field.field_value = MutationFieldValue::Value(ParamValue::Null);
                 }
                 FieldType::Boolean
                 | FieldType::Float

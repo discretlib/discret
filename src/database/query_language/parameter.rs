@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::security::base64_decode;
 
-use super::{Error, Value, VariableType};
+use super::{Error, ParamValue, VariableType};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -53,118 +53,175 @@ impl Variables {
         }
         Ok(())
     }
-    pub fn validate_params(&self, params: &Parameters) -> Result<(), Error> {
+    pub fn validate_params(&self, params: &mut Parameters) -> Result<(), Error> {
         for var in &self.vars {
-            if let Some(p) = params.params.get(var.0) {
+            let var_name = var.0.to_string();
+
+            if let Some(p) = params.params.remove(&var_name) {
                 match var.1.var_type {
-                    VariableType::Boolean(nullable) => match p {
-                        Value::Boolean(_) => {}
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
+                    VariableType::Boolean(nullable) => {
+                        match p {
+                            ParamValue::Boolean(_) => {}
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "Boolean".to_string(),
+                                    format!("{:#?}", p),
+                                ));
                             }
                         }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "Boolean".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
-                    VariableType::String(nullable) => match p {
-                        Value::String(_) => {}
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
+                        params.params.insert(var_name, p);
+                    }
+                    VariableType::String(nullable) => {
+                        match p {
+                            ParamValue::String(_) => {}
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "String".to_string(),
+                                    format!("{:#?}", p),
+                                ));
                             }
                         }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "String".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
+                        params.params.insert(var_name, p);
+                    }
 
-                    VariableType::Integer(nullable) => match p {
-                        Value::Integer(_) => {}
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
+                    VariableType::Integer(nullable) => {
+                        match p {
+                            ParamValue::Integer(_) => {}
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "Integer".to_string(),
+                                    format!("{:#?}", p),
+                                ));
                             }
                         }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "Integer".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
 
-                    VariableType::Float(nullable) => match p {
-                        Value::Float(_) => {}
-                        Value::Integer(_) => {}
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
-                            }
-                        }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "Integer".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
+                        params.params.insert(var_name, p);
+                    }
 
-                    VariableType::Base64(nullable) => match p {
-                        Value::String(e) => {
-                            let decode = base64_decode(e.as_bytes());
-                            if decode.is_err() {
-                                return Err(Error::InvalidBase64(e.clone()));
+                    VariableType::Float(nullable) => {
+                        match p {
+                            ParamValue::Float(_) => {}
+                            ParamValue::Integer(_) => {}
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "Float".to_string(),
+                                    format!("{:#?}", p),
+                                ));
                             }
                         }
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
-                            }
-                        }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "Integer".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
+                        params.params.insert(var_name, p);
+                    }
 
-                    VariableType::Json(nullable) => match p {
-                        Value::String(s) => {
-                            let v: std::result::Result<serde_json::Value, serde_json::Error> =
-                                serde_json::from_str(s);
-                            if v.is_err() {
-                                return Err(Error::InvalidJson(s.clone()));
+                    VariableType::Base64(nullable) => {
+                        match &p {
+                            ParamValue::String(e) => {
+                                let decode = base64_decode(e.as_bytes());
+                                if decode.is_err() {
+                                    return Err(Error::InvalidBase64(e.clone()));
+                                }
+                            }
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "Base64".to_string(),
+                                    format!("{:#?}", p),
+                                ));
                             }
                         }
-                        Value::Null => {
-                            if !nullable {
-                                return Err(Error::NotNullable(var.0.to_string()));
-                            }
-                        }
-                        _ => {
-                            return Err(Error::ConflictingParameterType(
-                                var.0.to_string(),
-                                "String".to_string(),
-                                format!("{:#?}", p),
-                            ));
-                        }
-                    },
+                        params.params.insert(var_name, p);
+                    }
 
-                    VariableType::Invalid => {}
+                    VariableType::Binary(nullable) => {
+                        let bin_param = match &p {
+                            ParamValue::Binary(e) => {
+                                let decode = base64_decode(e.as_bytes());
+                                if decode.is_err() {
+                                    return Err(Error::InvalidBase64(e.clone()));
+                                }
+                                p
+                            }
+                            ParamValue::String(e) => {
+                                let decode = base64_decode(e.as_bytes());
+                                if decode.is_err() {
+                                    return Err(Error::InvalidBase64(e.clone()));
+                                }
+                                ParamValue::Binary(e.clone())
+                            }
+
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                                p
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "Binary".to_string(),
+                                    format!("{:#?}", p),
+                                ));
+                            }
+                        };
+                        params.params.insert(var_name, bin_param);
+                    }
+
+                    VariableType::Json(nullable) => {
+                        match &p {
+                            ParamValue::String(s) => {
+                                let v: std::result::Result<serde_json::Value, serde_json::Error> =
+                                    serde_json::from_str(s);
+                                if v.is_err() {
+                                    return Err(Error::InvalidJson(s.clone()));
+                                }
+                            }
+                            ParamValue::Null => {
+                                if !nullable {
+                                    return Err(Error::NotNullable(var.0.to_string()));
+                                }
+                            }
+                            _ => {
+                                return Err(Error::ConflictingParameterType(
+                                    var.0.to_string(),
+                                    "String".to_string(),
+                                    format!("{:#?}", p),
+                                ));
+                            }
+                        }
+                        params.params.insert(var_name, p);
+                    }
+
+                    VariableType::Invalid => {
+                        params.params.insert(var_name, p);
+                    }
                 }
             } else {
                 return Err(Error::MissingParameter(String::from(var.0)));
@@ -176,7 +233,7 @@ impl Variables {
 
 #[derive(Debug)]
 pub struct Parameters {
-    pub params: HashMap<String, Value>,
+    pub params: HashMap<String, ParamValue>,
 }
 pub trait ParametersAdd<T> {
     fn add(&mut self, key: &str, val: T) -> Result<(), Error>;
@@ -190,7 +247,8 @@ impl Default for Parameters {
 impl ParametersAdd<bool> for Parameters {
     fn add(&mut self, key: &str, value: bool) -> Result<(), Error> {
         self.exists_err(key)?;
-        self.params.insert(String::from(key), Value::Boolean(value));
+        self.params
+            .insert(String::from(key), ParamValue::Boolean(value));
         Ok(())
     }
 }
@@ -198,7 +256,8 @@ impl ParametersAdd<bool> for Parameters {
 impl ParametersAdd<i64> for Parameters {
     fn add(&mut self, key: &str, value: i64) -> Result<(), Error> {
         self.exists_err(key)?;
-        self.params.insert(String::from(key), Value::Integer(value));
+        self.params
+            .insert(String::from(key), ParamValue::Integer(value));
         Ok(())
     }
 }
@@ -206,7 +265,8 @@ impl ParametersAdd<i64> for Parameters {
 impl ParametersAdd<f64> for Parameters {
     fn add(&mut self, key: &str, value: f64) -> Result<(), Error> {
         self.exists_err(key)?;
-        self.params.insert(String::from(key), Value::Float(value));
+        self.params
+            .insert(String::from(key), ParamValue::Float(value));
         Ok(())
     }
 }
@@ -214,7 +274,8 @@ impl ParametersAdd<f64> for Parameters {
 impl ParametersAdd<String> for Parameters {
     fn add(&mut self, key: &str, value: String) -> Result<(), Error> {
         self.exists_err(key)?;
-        self.params.insert(String::from(key), Value::String(value));
+        self.params
+            .insert(String::from(key), ParamValue::String(value));
         Ok(())
     }
 }
@@ -238,7 +299,7 @@ impl Parameters {
 
     pub fn add_null(&mut self, key: &str) -> Result<(), Error> {
         self.exists_err(key)?;
-        self.params.insert(String::from(key), Value::Null);
+        self.params.insert(String::from(key), ParamValue::Null);
         Ok(())
     }
 
@@ -345,17 +406,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::Boolean(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, 1).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -363,11 +424,11 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
     }
 
@@ -378,17 +439,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::Float(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -396,16 +457,16 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name, 1.23).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
 
         param = Parameters::new();
         param.add(name, 123).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("Integer params will be casted to float");
     }
 
@@ -416,17 +477,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::Integer(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -434,16 +495,16 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name, 1.23).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("Floats ARE NOT cast to integer");
 
         param = Parameters::new();
         param.add(name, 123).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
     }
 
@@ -454,17 +515,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::String(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -472,11 +533,11 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name, "hello".to_string()).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
     }
 
@@ -487,17 +548,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::Base64(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -505,21 +566,21 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param.add(name, "0123456789ABCDEF".to_string()).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
 
         param = Parameters::new();
         param.add(name, "0123456789abcdef".to_string()).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect("param has the right type");
 
         param = Parameters::new();
         param.add(name, "+^%".to_string()).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param is not an base64 string");
     }
 
@@ -530,17 +591,17 @@ mod tests {
         let mut vars = Variables::new();
         vars.add(name, VariableType::Json(false)).unwrap();
         let mut param = Parameters::new();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has a missing value");
 
         param = Parameters::new();
         param.add(name, true).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param has the wrong type");
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param)
+        vars.validate_params(&mut param)
             .expect_err("param cannot be null");
 
         vars = Variables::new();
@@ -548,22 +609,23 @@ mod tests {
 
         param = Parameters::new();
         param.add_null(name).unwrap();
-        vars.validate_params(&param).expect("param can be null");
+        vars.validate_params(&mut param).expect("param can be null");
 
         param = Parameters::new();
         param
             .add(name, r#"  "param":"value"  "#.to_string())
             .unwrap();
-        vars.validate_params(&param).expect_err("not a valid JSON");
+        vars.validate_params(&mut param)
+            .expect_err("not a valid JSON");
 
         param = Parameters::new();
         param
             .add(name, r#"{  "param":"value"  }"#.to_string())
             .unwrap();
-        vars.validate_params(&param).expect("valid json");
+        vars.validate_params(&mut param).expect("valid json");
 
         param = Parameters::new();
         param.add(name, "[0,1,2]".to_string()).unwrap();
-        vars.validate_params(&param).expect("valid json");
+        vars.validate_params(&mut param).expect("valid json");
     }
 }

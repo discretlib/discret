@@ -36,7 +36,7 @@ pub struct DeletionQuery {
 }
 impl DeletionQuery {
     pub fn build(
-        parameters: &Parameters,
+        parameters: &mut Parameters,
         deletion: Arc<DeletionParser>,
         conn: &rusqlite::Connection,
     ) -> Result<Self> {
@@ -174,9 +174,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -194,7 +194,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -225,7 +225,7 @@ mod tests {
         .unwrap();
         let deletion = Arc::new(deletion);
 
-        let mut delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
+        let mut delete = DeletionQuery::build(&mut param, deletion, &conn).unwrap();
         delete.delete(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -243,7 +243,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -282,9 +282,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -302,7 +302,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -338,7 +338,7 @@ mod tests {
         .unwrap();
         let deletion = Arc::new(deletion);
 
-        let mut delete = DeletionQuery::build(&param, deletion, &conn).unwrap();
+        let mut delete = DeletionQuery::build(&mut param, deletion, &conn).unwrap();
         delete.delete(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -356,7 +356,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),

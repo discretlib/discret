@@ -14,18 +14,19 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub enum FieldValue {
     Variable(String),
-    Value(Value),
+    Value(ParamValue),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Value {
+pub enum ParamValue {
     Boolean(bool),
     Integer(i64),
     Float(f64),
     String(String),
+    Binary(String),
     Null,
 }
-impl Value {
+impl ParamValue {
     pub fn as_boolean(&self) -> Option<bool> {
         if let Self::Boolean(e) = self {
             Some(*e)
@@ -60,17 +61,18 @@ impl Value {
 
     pub fn as_serde_json_value(&self) -> Result<serde_json::Value, Error> {
         match self {
-            Value::Boolean(v) => Ok(serde_json::Value::Bool(*v)),
-            Value::Integer(v) => Ok(serde_json::Value::Number(Number::from(*v))),
-            Value::Float(v) => {
+            ParamValue::Boolean(v) => Ok(serde_json::Value::Bool(*v)),
+            ParamValue::Integer(v) => Ok(serde_json::Value::Number(Number::from(*v))),
+            ParamValue::Float(v) => {
                 let number = Number::from_f64(*v);
                 match number {
                     Some(e) => Ok(serde_json::Value::Number(e)),
                     None => Err(Error::InvalidFloat(*v)),
                 }
             }
-            Value::String(v) => Ok(serde_json::Value::String(String::from(v))),
-            Value::Null => Ok(serde_json::Value::Null),
+            ParamValue::String(v) => Ok(serde_json::Value::String(String::from(v))),
+            ParamValue::Binary(v) => Ok(serde_json::Value::String(String::from(v))),
+            ParamValue::Null => Ok(serde_json::Value::Null),
         }
     }
 }
@@ -83,6 +85,7 @@ pub enum VariableType {
     Json(bool),
     Integer(bool),
     String(bool),
+    Binary(bool),
     Invalid,
 }
 impl fmt::Display for VariableType {
@@ -107,57 +110,6 @@ impl fmt::Display for FieldType {
         write!(f, "{:?}", self)
     }
 }
-
-// #[derive(Debug)]
-// pub struct ParsingError {
-//     start: usize,
-//     end: usize,
-//     fragment: String,
-//     msg: String,
-// }
-// impl ParsingError {
-//     pub fn pest_parsing_error(msg: String) -> Self {
-//         Self {
-//             start: 0,
-//             end: 0,
-//             fragment: "".to_string(),
-//             msg,
-//         }
-//     }
-
-//     pub fn conflicting_variable_type(
-//         defined_type: &VariableType,
-//         new_type: &VariableType,
-//         fragment: String,
-//         start: usize,
-//         end: usize,
-//     ) -> Self {
-//         let msg = format!(
-//             "allready defined as a '{}' and is conflicting with a field that requires '{}'",
-//             defined_type, new_type
-//         );
-//         Self {
-//             start,
-//             end,
-//             fragment,
-//             msg,
-//         }
-//     }
-// }
-
-// impl fmt::Display for ParsingError {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         if self.start == 0 {
-//             write!(f, "{}", self.fragment)
-//         } else {
-//             write!(
-//                 f,
-//                 "'{}' {}. Position: {}-{}",
-//                 self.fragment, self.msg, self.start, self.end
-//             )
-//         }
-//     }
-// }
 
 #[derive(Error, Debug)]
 pub enum Error {

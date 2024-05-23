@@ -7,7 +7,7 @@ use crate::{
     security::base64_decode,
 };
 
-use super::{Error, FieldType, Value, VariableType};
+use super::{Error, FieldType, ParamValue, VariableType};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
@@ -578,7 +578,7 @@ impl DataModel {
                                     match field.field_type {
                                         FieldType::Boolean => {
                                             field.default_value =
-                                                Some(Value::Boolean(value.parse()?))
+                                                Some(ParamValue::Boolean(value.parse()?))
                                         }
                                         _ => {
                                             return Err(Error::InvalidDefaultValue(
@@ -593,7 +593,8 @@ impl DataModel {
                                     let value = value_pair.as_str();
                                     match field.field_type {
                                         FieldType::Float => {
-                                            field.default_value = Some(Value::Float(value.parse()?))
+                                            field.default_value =
+                                                Some(ParamValue::Float(value.parse()?))
                                         }
                                         _ => {
                                             return Err(Error::InvalidDefaultValue(
@@ -609,11 +610,12 @@ impl DataModel {
                                     let value = value_pair.as_str();
                                     match field.field_type {
                                         FieldType::Float => {
-                                            field.default_value = Some(Value::Float(value.parse()?))
+                                            field.default_value =
+                                                Some(ParamValue::Float(value.parse()?))
                                         }
                                         FieldType::Integer => {
                                             field.default_value =
-                                                Some(Value::Integer(value.parse()?))
+                                                Some(ParamValue::Integer(value.parse()?))
                                         }
                                         _ => {
                                             return Err(Error::InvalidDefaultValue(
@@ -631,14 +633,14 @@ impl DataModel {
                                     match field.field_type {
                                         FieldType::String => {
                                             field.default_value =
-                                                Some(Value::String(value.to_string()))
+                                                Some(ParamValue::String(value.to_string()))
                                         }
                                         FieldType::Base64 => {
                                             let decode = base64_decode(value.as_bytes());
                                             if decode.is_err() {
                                                 return Err(Error::InvalidBase64(value));
                                             }
-                                            field.default_value = Some(Value::String(value))
+                                            field.default_value = Some(ParamValue::String(value))
                                         }
                                         FieldType::Json => {
                                             let v: std::result::Result<
@@ -649,7 +651,7 @@ impl DataModel {
                                                 return Err(Error::InvalidJson(value.to_string()));
                                             }
                                             field.default_value =
-                                                Some(Value::String(value.to_string()))
+                                                Some(ParamValue::String(value.to_string()))
                                         }
                                         _ => {
                                             return Err(Error::InvalidDefaultValue(
@@ -962,7 +964,7 @@ pub struct Field {
     pub name: String,
     pub short_name: String,
     pub field_type: FieldType,
-    pub default_value: Option<Value>,
+    pub default_value: Option<ParamValue>,
     pub nullable: bool,
     pub deprecated: bool,
     pub mutable: bool,
@@ -990,7 +992,13 @@ impl Field {
     pub fn get_variable_type(&self) -> VariableType {
         match self.field_type {
             FieldType::Array(_) | FieldType::Entity(_) => VariableType::Invalid,
-            FieldType::Base64 => VariableType::Base64(self.nullable),
+            FieldType::Base64 => {
+                if self.is_system {
+                    VariableType::Binary(self.nullable)
+                } else {
+                    VariableType::Base64(self.nullable)
+                }
+            }
             FieldType::Boolean => VariableType::Boolean(self.nullable),
             FieldType::Integer => VariableType::Integer(self.nullable),
             FieldType::Float => VariableType::Float(self.nullable),
@@ -1001,7 +1009,13 @@ impl Field {
     pub fn get_variable_type_non_nullable(&self) -> VariableType {
         match self.field_type {
             FieldType::Array(_) | FieldType::Entity(_) => VariableType::Invalid,
-            FieldType::Base64 => VariableType::Base64(false),
+            FieldType::Base64 => {
+                if self.is_system {
+                    VariableType::Binary(false)
+                } else {
+                    VariableType::Base64(false)
+                }
+            }
             FieldType::Boolean => VariableType::Boolean(false),
             FieldType::Integer => VariableType::Integer(false),
             FieldType::Float => VariableType::Float(false),

@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
 
+use crate::base64_decode;
+
 use super::query_language::query_parser::{
     Direction, EntityParams, EntityQuery, Function, QueryField, QueryFieldType,
 };
 use super::query_language::{parameter::Parameters, query_parser::QueryParser};
-use super::query_language::{FieldType, FieldValue, Value};
+use super::query_language::{FieldType, FieldValue, ParamValue};
 use super::system_entities::{
     ID_FIELD, PEER_FIELD, ROOM_FIELD, ROOM_ID_FIELD, VERIFYING_KEY_FIELD,
 };
@@ -73,21 +75,24 @@ impl SingleQuery {
                 let para = params.params.get(&var.value);
                 if let Some(val) = para {
                     match val {
-                        Value::Boolean(e) => {
+                        ParamValue::Boolean(e) => {
                             v.push(Box::new(*e));
                         }
-                        Value::Float(e) => {
+                        ParamValue::Float(e) => {
                             v.push(Box::new(*e));
                         }
-                        Value::Integer(e) => {
+                        ParamValue::Integer(e) => {
                             v.push(Box::new(*e));
                         }
-                        Value::Null => {
+                        ParamValue::Null => {
                             let null: Option<String> = None;
                             v.push(Box::new(null));
                         }
-                        Value::String(e) => {
+                        ParamValue::String(e) => {
                             v.push(Box::new(e.clone()));
+                        }
+                        ParamValue::Binary(e) => {
+                            v.push(Box::new(base64_decode(e.as_bytes())?));
                         }
                     }
                 } else {
@@ -452,7 +457,7 @@ fn get_fields(
                     ));
                 } else if let Some(val) = &field.field.default_value {
                     let default = match val {
-                        Value::String(s) => prepared_query.add_param(String::from(s), true),
+                        ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
                         _ => unreachable!(),
                     };
                     q.push_str(&format!(
@@ -475,11 +480,12 @@ fn get_fields(
                     q.push_str(&format!("'{}', {}", &field.name(), &field.field.short_name,));
                 } else if let Some(val) = &field.field.default_value {
                     let default = match val {
-                        Value::Boolean(b) => b.to_string(),
-                        Value::Integer(i) => i.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::String(s) => prepared_query.add_param(String::from(s), true),
-                        Value::Null => unreachable!(),
+                        ParamValue::Boolean(b) => b.to_string(),
+                        ParamValue::Integer(i) => i.to_string(),
+                        ParamValue::Float(f) => f.to_string(),
+                        ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                        ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                        ParamValue::Null => unreachable!(),
                     };
                     q.push_str(&format!(
                         "'{}',Ifnull({},{})",
@@ -506,11 +512,12 @@ fn get_fields(
 
                 if let Some(val) = &field.field.default_value {
                     let default = match val {
-                        Value::Boolean(b) => b.to_string(),
-                        Value::Integer(i) => i.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::String(s) => prepared_query.add_param(String::from(s), true),
-                        Value::Null => unreachable!(),
+                        ParamValue::Boolean(b) => b.to_string(),
+                        ParamValue::Integer(i) => i.to_string(),
+                        ParamValue::Float(f) => f.to_string(),
+                        ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                        ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                        ParamValue::Null => unreachable!(),
                     };
                     q.push_str(&format!(
                         "'{}', Ifnull({},{}",
@@ -631,11 +638,12 @@ fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t:
             let value = match &filter.value {
                 FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
                 FieldValue::Value(val) => match val {
-                    Value::Boolean(bool) => bool.to_string(),
-                    Value::Integer(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::String(s) => prepared_query.add_param(String::from(s), true),
-                    Value::Null => {
+                    ParamValue::Boolean(bool) => bool.to_string(),
+                    ParamValue::Integer(i) => i.to_string(),
+                    ParamValue::Float(f) => f.to_string(),
+                    ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Null => {
                         match filter.operation.as_str() {
                             "=" => operation = String::from("is"),
                             "!=" => operation = String::from("is not"),
@@ -696,11 +704,12 @@ fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t:
             let value = match &filter.value {
                 FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
                 FieldValue::Value(val) => match val {
-                    Value::Boolean(bool) => bool.to_string(),
-                    Value::Integer(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::String(s) => prepared_query.add_param(String::from(s), true),
-                    Value::Null => {
+                    ParamValue::Boolean(bool) => bool.to_string(),
+                    ParamValue::Integer(i) => i.to_string(),
+                    ParamValue::Float(f) => f.to_string(),
+                    ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Null => {
                         match filter.operation.as_str() {
                             "=" => operation = String::from("is"),
                             "!=" => operation = String::from("is not"),
@@ -739,11 +748,12 @@ fn get_having_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t
         let value = match &filter.value {
             FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
             FieldValue::Value(val) => match val {
-                Value::Boolean(bool) => bool.to_string(),
-                Value::Integer(i) => i.to_string(),
-                Value::Float(f) => f.to_string(),
-                Value::String(s) => prepared_query.add_param(String::from(s), true),
-                Value::Null => {
+                ParamValue::Boolean(bool) => bool.to_string(),
+                ParamValue::Integer(i) => i.to_string(),
+                ParamValue::Float(f) => f.to_string(),
+                ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                ParamValue::Null => {
                     match filter.operation.as_str() {
                         "=" => operation = String::from("is"),
                         "!=" => operation = String::from("is not"),
@@ -823,7 +833,7 @@ pub fn get_search_filter(
         let value = match query {
             FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
             FieldValue::Value(val) => match val {
-                Value::String(s) => prepared_query.add_param(String::from(s), true),
+                ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
                 _ => unreachable!(),
             },
         };
@@ -860,11 +870,12 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> St
             let value = match value {
                 FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
                 FieldValue::Value(val) => match val {
-                    Value::Boolean(bool) => bool.to_string(),
-                    Value::Integer(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::String(s) => prepared_query.add_param(String::from(s), true),
-                    Value::Null => String::from("null"),
+                    ParamValue::Boolean(bool) => bool.to_string(),
+                    ParamValue::Integer(i) => i.to_string(),
+                    ParamValue::Float(f) => f.to_string(),
+                    ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                    ParamValue::Null => String::from("null"),
                 },
             };
 
@@ -887,11 +898,12 @@ pub fn get_paging(params: &EntityParams, prepared_query: &mut SingleQuery) -> St
         let value = match value {
             FieldValue::Variable(var) => prepared_query.add_param(String::from(var), false),
             FieldValue::Value(val) => match val {
-                Value::Boolean(bool) => bool.to_string(),
-                Value::Integer(i) => i.to_string(),
-                Value::Float(f) => f.to_string(),
-                Value::String(s) => prepared_query.add_param(String::from(s), true),
-                Value::Null => String::from("null"),
+                ParamValue::Boolean(bool) => bool.to_string(),
+                ParamValue::Integer(i) => i.to_string(),
+                ParamValue::Float(f) => f.to_string(),
+                ParamValue::String(s) => prepared_query.add_param(String::from(s), true),
+                ParamValue::Binary(s) => prepared_query.add_param(String::from(s), true),
+                ParamValue::Null => String::from("null"),
             },
         };
 
@@ -1026,12 +1038,14 @@ pub struct Query {
     pub sql_queries: Arc<PreparedQueries>,
 }
 impl Query {
-    pub fn read(&self, conn: &rusqlite::Connection) -> Result<String> {
+    pub fn read(&mut self, conn: &rusqlite::Connection) -> Result<String> {
         let mut result_string = String::new();
         result_string.push('{');
         result_string.push('\n');
 
-        self.parser.variables.validate_params(&self.parameters)?;
+        self.parser
+            .variables
+            .validate_params(&mut self.parameters)?;
 
         let quer = &self.sql_queries.sql_queries;
         for i in 0..quer.len() {

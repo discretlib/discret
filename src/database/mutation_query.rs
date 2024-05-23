@@ -91,7 +91,7 @@ impl MutationQuery {
     }
 
     pub fn execute(
-        parameters: &Parameters,
+        parameters: &mut Parameters,
         mutation_parser: Arc<MutationParser>,
         conn: &rusqlite::Connection,
     ) -> Result<MutationQuery> {
@@ -116,7 +116,7 @@ impl MutationQuery {
         Ok(match &id_field.field_value {
             MutationFieldValue::Variable(var) => {
                 let value = parameters.params.get(var).unwrap();
-
+                println!("base64");
                 match value.as_string() {
                     Some(e) => Some(base64_decode(e.as_bytes())?),
                     None => None,
@@ -403,15 +403,15 @@ impl MutationQuery {
                 "mutation query and InsertEntity result lenght are not equal",
             )));
         }
-        let mut vec = Vec::new();
+
+        let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         for i in 0..mutas.len() {
             let ent_mut = &mutas[i];
             let insert_entity = &inserts[i];
-            let js = insert_entity.to_json(ent_mut)?;
-            vec.push(js);
+            insert_entity.to_json(ent_mut, &mut map)?;
         }
 
-        Ok(serde_json::Value::Array(vec))
+        Ok(serde_json::Value::Object(map))
     }
 
     pub fn sign_all(&mut self, signing_key: &impl SigningKey) -> Result<()> {
@@ -490,14 +490,19 @@ impl InsertEntity {
         Ok(())
     }
 
-    pub fn to_json(&self, mutation: &EntityMutation) -> Result<serde_json::Value> {
-        let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        Self::fill_json(self, mutation, &mut map)?;
+    pub fn to_json(
+        &self,
+        mutation: &EntityMutation,
+        map: &mut serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let mut internal: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        Self::fill_json(self, mutation, &mut internal)?;
 
-        let mut final_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        final_map.insert(String::from(&self.name), serde_json::Value::Object(map));
-
-        Ok(serde_json::Value::Object(final_map))
+        map.insert(
+            String::from(&self.name),
+            serde_json::Value::Object(internal),
+        );
+        Ok(())
     }
 
     fn fill_json(
@@ -643,7 +648,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
         assert_eq!(1, mutation_query.mutate_entities.len());
@@ -685,7 +690,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
         // println!("{}", serde_json::to_string_pretty(&js).unwrap());
@@ -731,7 +736,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
         // println!("{}", serde_json::to_string_pretty(&js).unwrap());
@@ -793,7 +798,7 @@ mod tests {
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mutation_query = MutationQuery::execute(&param, mutation.clone(), &conn).unwrap();
+        let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
         // println!("{}", serde_json::to_string_pretty(&js).unwrap());
@@ -837,12 +842,12 @@ mod tests {
         )
         .unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let insert_entity = &mutation_query.mutate_entities[0];
@@ -878,7 +883,7 @@ mod tests {
         .unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         //  println!("{:#?}", mutation_query);
         mutation_query.write(&conn).unwrap();
 
@@ -899,7 +904,7 @@ mod tests {
 
         let query = PreparedQueries::build(&query_parser).unwrap();
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
@@ -964,12 +969,12 @@ mod tests {
         )
         .unwrap();
 
-        let param = Parameters::new();
+        let mut param = Parameters::new();
         let conn = Connection::open_in_memory().unwrap();
         prepare_connection(&conn).unwrap();
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         #[derive(Serialize, Deserialize)]
@@ -1034,7 +1039,7 @@ mod tests {
         let parser = Arc::new(query_parser);
 
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: parser.clone(),
             sql_queries: sql_queries.clone(),
@@ -1078,11 +1083,11 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: parser.clone(),
             sql_queries: sql_queries.clone(),
@@ -1135,11 +1140,11 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: parser.clone(),
             sql_queries: sql_queries.clone(),
@@ -1192,11 +1197,11 @@ mod tests {
         thread::sleep(time::Duration::from_millis(2));
 
         let mutation = Arc::new(mutation);
-        let mut mutation_query = MutationQuery::execute(&param, mutation, &conn).unwrap();
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
         mutation_query.write(&conn).unwrap();
 
         let param = Parameters::new();
-        let sql = Query {
+        let mut sql = Query {
             parameters: param,
             parser: parser.clone(),
             sql_queries: sql_queries.clone(),
