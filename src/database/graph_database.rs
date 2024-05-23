@@ -4,6 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::mutation_query::MutationResult;
 use super::sqlite_database::WriteStmt;
 use super::system_entities::{self, Peer, PeerNodes};
 use super::{
@@ -225,13 +226,14 @@ impl GraphDatabaseService {
     /// GraphQL mutation query
     /// returns a json string
     ///
-    pub async fn mutate(&self, mutation: &str, param_opt: Option<Parameters>) -> Result<String> {
+    pub async fn mutate(
+        &self,
+        mutation: &str,
+        param_opt: Option<Parameters>,
+    ) -> Result<MutationResult> {
         let raw = self.mutate_raw(mutation, param_opt).await;
         match raw {
-            Ok(query) => match query.to_json() {
-                Ok(value) => serde_json::to_string(&value).map_err(Error::from),
-                Err(e) => Err(e),
-            },
+            Ok(query) => query.result(),
             Err(e) => Err(e),
         }
     }

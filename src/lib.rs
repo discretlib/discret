@@ -23,10 +23,11 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub use configuration::Configuration;
-pub use database::query_language::parameter::{Parameters, ParametersAdd};
-pub use security::{
-    base64_decode, base64_encode, derive_pass_phrase, new_uid, uid_decode, uid_encode, Uid,
+pub use database::{
+    mutation_query::MutationResult,
+    query_language::parameter::{Parameters, ParametersAdd},
 };
+pub use security::{base64_decode, base64_encode, derive_pass_phrase, Uid};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -153,7 +154,11 @@ impl Discret {
     ///
     /// mutate
     ///
-    pub async fn mutate(&self, mutation: &str, param_opt: Option<Parameters>) -> Result<String> {
+    pub async fn mutate(
+        &self,
+        mutation: &str,
+        param_opt: Option<Parameters>,
+    ) -> Result<MutationResult> {
         Ok(self.db.mutate(mutation, param_opt).await?)
     }
 

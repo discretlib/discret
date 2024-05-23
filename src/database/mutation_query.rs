@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::{
     date_utils::now,
-    security::{base64_decode, base64_encode, default_uid, uid_from, SigningKey, Uid},
+    security::{base64_decode, base64_encode, default_uid, uid_encode, uid_from, SigningKey, Uid},
 };
 
 use super::{
@@ -116,7 +116,6 @@ impl MutationQuery {
         Ok(match &id_field.field_value {
             MutationFieldValue::Variable(var) => {
                 let value = parameters.params.get(var).unwrap();
-                println!("base64");
                 match value.as_string() {
                     Some(e) => Some(base64_decode(e.as_bytes())?),
                     None => None,
@@ -414,12 +413,60 @@ impl MutationQuery {
         Ok(serde_json::Value::Object(map))
     }
 
+    pub fn result(&self) -> Result<MutationResult> {
+        let mutas = &self.mutation_parser.mutations;
+        let inserts = &self.mutate_entities;
+
+        if mutas.len() != inserts.len() {
+            return Err(Error::Query(String::from(
+                "mutation query and InsertEntity result lenght are not equal",
+            )));
+        }
+
+        let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        let mut ids = Vec::new();
+        for i in 0..mutas.len() {
+            let ent_mut = &mutas[i];
+            let insert_entity = &inserts[i];
+            ids.push(Self::get_id_tree(insert_entity));
+            insert_entity.to_json(ent_mut, &mut map)?;
+        }
+
+        let json = serde_json::to_string_pretty(&serde_json::Value::Object(map))?;
+
+        Ok(MutationResult { ids, json })
+    }
+
+    pub fn get_id_tree(insert_entity: &InsertEntity) -> IdTree {
+        let mut idtree = IdTree {
+            uid: uid_encode(&insert_entity.node_to_mutate.id),
+            childs: Vec::new(),
+        };
+        for sub in &insert_entity.sub_nodes {
+            for sub in sub.1 {
+                idtree.childs.push(Self::get_id_tree(sub));
+            }
+        }
+        idtree
+    }
+
     pub fn sign_all(&mut self, signing_key: &impl SigningKey) -> Result<()> {
         for insert in &mut self.mutate_entities {
             insert.sign_all(signing_key)?;
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub struct MutationResult {
+    pub ids: Vec<IdTree>,
+    pub json: String,
+}
+#[derive(Debug)]
+pub struct IdTree {
+    pub uid: String,
+    pub childs: Vec<IdTree>,
 }
 
 #[derive(Debug)]

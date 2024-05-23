@@ -52,10 +52,10 @@ impl ParamValue {
     }
 
     pub fn as_string(&self) -> Option<&String> {
-        if let Self::String(e) = self {
-            Some(e)
-        } else {
-            None
+        match self {
+            ParamValue::String(e) => Some(e),
+            ParamValue::Binary(e) => Some(e),
+            _ => None,
         }
     }
 

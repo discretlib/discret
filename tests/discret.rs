@@ -2,17 +2,7 @@ use std::path::PathBuf;
 
 use discret::{derive_pass_phrase, Configuration, Discret, Parameters, ParametersAdd};
 use rand::{rngs::OsRng, RngCore};
-use serde::{Deserialize, Serialize};
 const DATA_PATH: &str = "test_data/tests/";
-
-#[derive(Serialize, Deserialize)]
-struct Result {
-    result: Id,
-}
-#[derive(Serialize, Deserialize)]
-struct Id {
-    id: String,
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn minimal() {
@@ -37,7 +27,7 @@ async fn minimal() {
     .await
     .unwrap();
 
-    let mutation = app
+    let mut_result = app
         .mutate(
             r#"mutation {
                 result: Greetings{
@@ -49,15 +39,14 @@ async fn minimal() {
         .await
         .unwrap();
 
-    let res: Result = serde_json::from_str(&mutation).unwrap();
-    println!("'{}'", &res.result.id);
+    let id = &mut_result.ids[0].uid;
+
     let mut params = Parameters::new();
-    params.add("id", res.result.id).unwrap();
+    params.add("id", id.clone()).unwrap();
     let result = app
         .query(
             "query {
                 Greetings(id=$id){
-                    
                     message
                 }
             }",
@@ -66,9 +55,9 @@ async fn minimal() {
         .await
         .unwrap();
 
-    println!("{:#?}", result);
-    // assert_eq!(
-    //     result,
-    //     "{\n\"Greetings\":[{\"message\":\"Hello World\"}]\n}"
-    // )
+    //println!("{:#?}", result);
+    assert_eq!(
+        result,
+        "{\n\"Greetings\":[{\"message\":\"Hello World\"}]\n}"
+    )
 }
