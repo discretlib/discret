@@ -1,226 +1,18 @@
 #[cfg(test)]
 mod tests {
 
-    use std::{collections::HashMap, fs, path::PathBuf};
+    use std::{fs, path::PathBuf};
 
     use crate::{
         configuration::Configuration,
         database::{
-            authorisation_service::*,
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
-            room::{Authorisation, EntityRight, RightType, Room, User},
         },
         date_utils::now,
         event_service::EventService,
-        security::{base64_encode, new_uid, random32, uid_decode, Ed25519SigningKey},
+        security::{base64_encode, random32, uid_decode},
     };
-
-    #[test]
-    fn room_admins() {
-        let valid_date: i64 = 10000;
-        let mut user1 = User {
-            verifying_key: random32().to_vec(),
-            date: valid_date,
-            enabled: true,
-        };
-
-        let mut room = Room::default();
-        assert!(!room.is_admin(&user1.verifying_key, valid_date));
-
-        room.add_admin_user(user1.clone()).unwrap();
-        assert!(room.is_admin(&user1.verifying_key, valid_date));
-
-        //invalid before valid_date
-        assert!(!room.is_admin(&user1.verifying_key, valid_date - 1));
-
-        user1.date = valid_date - 100;
-        room.add_admin_user(user1.clone())
-            .expect_err("Cannot add a  user admin definition before the last date");
-
-        user1.date = valid_date + 1000;
-        user1.enabled = false;
-        room.add_admin_user(user1.clone()).unwrap();
-
-        //user is valid beetween valid_date and valid_date+1000
-        assert!(room.is_admin(&user1.verifying_key, valid_date + 10));
-
-        //user is disabled
-        assert!(!room.is_admin(&user1.verifying_key, user1.date));
-    }
-
-    #[test]
-    fn room_user_admins() {
-        let valid_date: i64 = 10000;
-        let mut user1 = User {
-            verifying_key: random32().to_vec(),
-            date: valid_date,
-            enabled: true,
-        };
-
-        let mut room = Room::default();
-        assert!(!room.is_user_admin(&user1.verifying_key, valid_date));
-
-        room.add_user_admin_user(user1.clone()).unwrap();
-        assert!(room.is_user_admin(&user1.verifying_key, valid_date));
-
-        //invalid before valid_date
-        assert!(!room.is_user_admin(&user1.verifying_key, valid_date - 1));
-
-        user1.date = valid_date - 100;
-        room.add_user_admin_user(user1.clone())
-            .expect_err("Cannot add a  user admin definition before the last date");
-
-        user1.date = valid_date + 1000;
-        user1.enabled = false;
-        room.add_user_admin_user(user1.clone()).unwrap();
-
-        //user is valid beetween valid_date and valid_date+1000
-        assert!(room.is_user_admin(&user1.verifying_key, valid_date + 10));
-
-        //user is disabled
-        assert!(!room.is_user_admin(&user1.verifying_key, user1.date));
-    }
-
-    #[test]
-    fn entity_right() {
-        let user_valid_date: i64 = 1000;
-        let user1 = User {
-            verifying_key: random32().to_vec(),
-            date: user_valid_date,
-            enabled: true,
-        };
-
-        let mut room = Room::default();
-        room.add_admin_user(user1.clone()).unwrap();
-        room.add_user_admin_user(user1.clone()).unwrap();
-
-        let mut auth = Authorisation::default();
-        auth.add_user(user1.clone()).unwrap();
-        assert!(auth.is_user_valid_at(&user1.verifying_key, user_valid_date));
-        assert!(!auth.is_user_valid_at(&user1.verifying_key, user_valid_date - 1));
-
-        let ent_date: i64 = 100;
-        let entity = "Person";
-        let person_right = EntityRight::new(ent_date, entity.to_string(), true, true);
-
-        auth.add_right(person_right).unwrap();
-
-        let person_right = EntityRight::new(ent_date - 1, entity.to_string(), true, true);
-
-        auth.add_right(person_right)
-            .expect_err("Cannot insert a right before an existing one");
-        let last_date = ent_date + 1000;
-        let person_right = EntityRight::new(last_date, entity.to_string(), false, false);
-        auth.add_right(person_right.clone()).unwrap();
-
-        room.add_auth(auth).unwrap();
-
-        //user is invalid at this date
-
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            ent_date,
-            &RightType::MutateSelf
-        ));
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            ent_date,
-            &RightType::MutateAll
-        ));
-
-        //user is valid at this date
-        assert!(room.can(
-            &user1.verifying_key,
-            entity,
-            user_valid_date,
-            &RightType::MutateSelf
-        ));
-        assert!(room.can(
-            &user1.verifying_key,
-            entity,
-            user_valid_date,
-            &RightType::MutateAll
-        ));
-
-        //the last right disable it all
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            last_date,
-            &RightType::MutateSelf
-        ));
-        assert!(!room.can(
-            &user1.verifying_key,
-            entity,
-            last_date,
-            &RightType::MutateAll
-        ));
-    }
-
-    #[test]
-    fn get_room_for_user() {
-        let user_valid_date: i64 = 1000;
-        let user1 = User {
-            verifying_key: random32().to_vec(),
-            date: user_valid_date,
-            enabled: true,
-        };
-
-        let user2 = User {
-            verifying_key: random32().to_vec(),
-            date: user_valid_date,
-            enabled: true,
-        };
-
-        let user3 = User {
-            verifying_key: random32().to_vec(),
-            date: user_valid_date,
-            enabled: true,
-        };
-
-        let mut room = Room {
-            id: new_uid(),
-            ..Default::default()
-        };
-        room.add_admin_user(user1.clone()).unwrap();
-        room.add_user_admin_user(user2.clone()).unwrap();
-
-        let mut auth = Authorisation::default();
-        auth.add_user(user3.clone()).unwrap();
-
-        room.add_auth(auth).unwrap();
-
-        let mut room_auth = RoomAuthorisations {
-            signing_key: Ed25519SigningKey::new(),
-            rooms: HashMap::new(),
-        };
-
-        room_auth.add_room(room);
-
-        let room_list = room_auth.rooms_for_user(&random32().to_vec(), user_valid_date);
-        assert_eq!(0, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user1.verifying_key, user_valid_date);
-        assert_eq!(1, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user2.verifying_key, user_valid_date);
-        assert_eq!(1, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user3.verifying_key, user_valid_date);
-        assert_eq!(1, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user1.verifying_key, 0);
-        assert_eq!(0, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user2.verifying_key, 0);
-        assert_eq!(0, room_list.len());
-
-        let room_list = room_auth.rooms_for_user(&user3.verifying_key, 0);
-        assert_eq!(0, room_list.len());
-    }
 
     const DATA_PATH: &str = "test_data/database/authorisation_service_test/";
     fn init_database_path() {
@@ -269,18 +61,13 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
+
                         authorisations:[{
                             name:"what"
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -297,18 +84,12 @@ mod tests {
                         admin{
                             enabled
                         }
-                        user_admin{
-                            enabled
-                        }
                         authorisations{
                             name 
                             rights{
                                 entity
                                 mutate_self
                                 mutate_all
-                            }
-                            users{
-                                enabled
                             }
                         }
                     }
@@ -317,9 +98,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let expected = "{\n\"sys.Room\":[{\"admin\":[{\"enabled\":true}],\"user_admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}],\"users\":[{\"enabled\":true}]}]}]\n}";
+        //println!("{:#?}", result);
+        let expected = "{\n\"sys.Room\":[{\"admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
-        // println!("{:#?}", result);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -364,18 +145,12 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{
                                 entity:"ns.Person"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -446,18 +221,12 @@ mod tests {
                     admin: [{
                         verif_key:$user_id
                     }]
-                    user_admin: [{
-                        verif_key:$user_id
-                    }]
                     authorisations:[{
                         name:"admin"
                         rights:[{
                             entity:"ns.Pet"
                             mutate_self:true
                             mutate_all:true
-                        }]
-                        users: [{
-                            verif_key:$user_id
                         }]
                     }]
                 }
@@ -635,18 +404,12 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -804,48 +567,6 @@ mod tests {
         param.add("auth_id", auth_id.clone()).unwrap();
         param.add("user_id", user_id.clone()).unwrap();
 
-        app.mutate_raw(
-            r#"mutation mut {
-                sys.Room{
-                    id:$room_id
-                    authorisations:[{
-                        id: $auth_id
-                        users: [{
-                            verif_key:$user_id
-                        }]
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect_err("user_id is not allowed to insert new users");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-        param.add("user_id", user_id.clone()).unwrap();
-
-        app.mutate_raw(
-            r#"mutation mut {
-                sys.Room{
-                    id:$room_id
-                    user_admin: [{
-                        verif_key:$user_id
-                    }]
-                    authorisations:[{
-                        id:$auth_id
-                        users: [{
-                            verif_key:$user_id
-                        }]
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .unwrap();
-
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         param.add("auth_id", auth_id.clone()).unwrap();
@@ -887,68 +608,6 @@ mod tests {
         )
         .await
         .expect("can disable another user");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-        param.add("user_id", user_id.clone()).unwrap();
-        app.mutate_raw(
-            r#"mutation mut {
-                sys.Room{
-                    id:$room_id
-                    authorisations:[{
-                        id:$auth_id
-                        users: [{
-                            verif_key:$user_id
-                            enabled:false
-                        }]
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect("can disable itself in an authorisation");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("user_id", user_id.clone()).unwrap();
-        app.mutate_raw(
-            r#"mutation mut {
-                sys.Room{
-                    id:$room_id
-                    user_admin: [{
-                        verif_key:$user_id
-                        enabled:false
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect("can disable itself from user_admin");
-
-        let mut param = Parameters::default();
-        param.add("room_id", room_id.clone()).unwrap();
-        param.add("auth_id", auth_id.clone()).unwrap();
-        app.mutate_raw(
-            r#"mutation mut {
-                sys.Room{
-                    id:$room_id
-                    authorisations:[{
-                        id:$auth_id
-                        users: [{
-                            verifying_key:"cAH9ZO7FMgNhdaEpVLQbmQMb8gI-92d-b6wtTQbSLsw"
-                            enabled:true
-                        }]
-                        
-                    }]
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect_err("cannot mutate user anymore");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -989,18 +648,12 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1023,18 +676,12 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{
                                 entity:"Pet"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1158,9 +805,7 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
+
                         authorisations:[{
                             name:"admin"
                             rights:[{
@@ -1168,9 +813,6 @@ mod tests {
                                 mutate_self:true
                                 mutate_all:true
                             }]       
-                            users: [{
-                                verif_key:$user_id
-                            }]
                         }]
                     }
                 }"#,
@@ -1383,9 +1025,6 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{
@@ -1393,12 +1032,8 @@ mod tests {
                                 mutate_self:true
                                 mutate_all:true
                             }]
-                            users: [{
-                                verif_key:$user_id
-                            }]
                         }]
                     }
-
                 }"#,
                 Some(param),
             )

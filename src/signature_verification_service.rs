@@ -105,14 +105,6 @@ impl SignatureVerificationService {
             user.node.verify()?;
         }
 
-        for edge in &node.user_admin_edges {
-            edge.verify()?;
-        }
-
-        for user in &node.user_admin_nodes {
-            user.node.verify()?;
-        }
-
         for edge in &node.auth_edges {
             edge.verify()?;
         }
@@ -131,6 +123,14 @@ impl SignatureVerificationService {
             }
             for right in &auth.right_nodes {
                 right.node.verify()?;
+            }
+
+            for edge in &auth.user_admin_edges {
+                edge.verify()?;
+            }
+
+            for user in &auth.user_admin_nodes {
+                user.node.verify()?;
             }
         }
         Ok(node)

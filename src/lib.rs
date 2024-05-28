@@ -1,4 +1,4 @@
-//! Discret: Write local first, peer to peer application (P2P) using a GraphQL inspired API
+//! Discret: Create local first, peer to peer application (P2P) using a GraphQL inspired API
 //!
 //!
 //! Creating an application requires a few steps

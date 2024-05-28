@@ -18,11 +18,11 @@ use super::{
     mutation_query::{InsertEntity, MutationQuery},
     node::NodeDeletionEntry,
     room::*,
-    room_node::{parse_room_node, prepare_new_room, prepare_room_with_history, RoomNode},
+    room_node::{prepare_new_room, prepare_room_with_history, RoomNode},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
     system_entities::{
-        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
-        ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT, ROOM_USER_ADMIN_FIELD,
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_ADMIN_FIELD, AUTH_USER_FIELD, ID_FIELD,
+        MODIFICATION_DATE_FIELD, ROOM_ADMIN_FIELD, ROOM_AUTHORISATION_FIELD, ROOM_ENT,
     },
     Error, Result,
 };
@@ -241,7 +241,7 @@ impl AuthorisationService {
             }
             AuthorisationMessage::RoomNodeWrite(res, query) => match res {
                 Ok(_) => {
-                    match parse_room_node(&query.room) {
+                    match query.room.parse() {
                         Ok(room) => {
                             auth.add_room(room.clone());
                             event_service
@@ -598,7 +598,7 @@ impl RoomAuthorisations {
             id: room_id,
             mdate: 0,
             admins: HashMap::new(),
-            user_admins: HashMap::new(),
+
             authorisations: HashMap::new(),
         };
 
@@ -607,6 +607,7 @@ impl RoomAuthorisations {
             mdate: 0,
             users: HashMap::new(),
             rights: HashMap::new(),
+            user_admins: HashMap::new(),
         };
         let vkey = self.signing_key.export_verifying_key();
         auth.add_user(User {
@@ -636,24 +637,25 @@ impl RoomAuthorisations {
 
         if !insert_entity.edge_deletions.is_empty() {
             return Err(Error::CannotRemove(
-                "authorisations".to_string(),
+                "sys.Authorisations".to_string(),
                 ROOM_ENT.to_string(),
             ));
         }
 
         let mut room = match &node_insert.old_node {
             Some(old_node) => {
-                if let Some(room) = self.rooms.get(&old_node.id) {
-                    if !room.is_admin(verifying_key, node_insert.date) {
-                        return Err(Error::AuthorisationRejected(
-                            node_insert.entity.clone(),
-                            base64_encode(&old_node.id),
-                        ));
-                    }
-                    room.clone()
-                } else {
-                    return Err(Error::UnknownRoom(base64_encode(&old_node.id)));
+                let room = self
+                    .rooms
+                    .get(&old_node.id)
+                    .ok_or(Error::UnknownRoom(base64_encode(&old_node.id)))?;
+
+                if !room.is_admin(verifying_key, node_insert.date) {
+                    return Err(Error::AuthorisationRejected(
+                        node_insert.entity.clone(),
+                        base64_encode(&old_node.id),
+                    ));
                 }
+                room.clone()
             }
             None => {
                 if node_insert.node.is_none() {
@@ -661,7 +663,7 @@ impl RoomAuthorisations {
                     return Ok(None);
                 }
                 if node_insert.room_id.is_some() {
-                    return Err(Error::ForbiddenRoomId("_Room".to_string()));
+                    return Err(Error::ForbiddenRoomId("sys.Room".to_string()));
                 }
 
                 let room = Room {
@@ -672,17 +674,16 @@ impl RoomAuthorisations {
             }
         };
 
-        let mut need_room_mutation = false;
-        let mut need_user_mutation = false;
+        let mut need_room_admin = false;
 
         for entry in &mut insert_entity.sub_nodes {
             match entry.0.as_str() {
                 ROOM_ADMIN_FIELD => {
-                    need_room_mutation = true;
+                    need_room_admin = true;
                     for insert_entity in entry.1 {
                         if !insert_entity.edge_deletions.is_empty() {
                             return Err(Error::CannotRemove(
-                                "_UserAuth".to_string(),
+                                "sys.UserAuth".to_string(),
                                 ROOM_ENT.to_string(),
                             ));
                         }
@@ -695,7 +696,7 @@ impl RoomAuthorisations {
                         let node_insert = &insert_entity.node_to_mutate;
                         if let Some(node) = &node_insert.node {
                             if node_insert.room_id.is_some() {
-                                return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
+                                return Err(Error::ForbiddenRoomId("sys.UserAuth".to_string()));
                             }
                             if let Some(json) = &node._json {
                                 let user = user_from_json(json, node.mdate)?;
@@ -704,41 +705,13 @@ impl RoomAuthorisations {
                         }
                     }
                 }
-                ROOM_USER_ADMIN_FIELD => {
-                    need_room_mutation = true;
-                    for insert_entity in entry.1 {
-                        if !insert_entity.edge_deletions.is_empty() {
-                            return Err(Error::CannotRemove(
-                                "_UserAuth".to_string(),
-                                ROOM_ENT.to_string(),
-                            ));
-                        }
-                        if insert_entity.node_to_mutate.node.is_none()
-                            || insert_entity.node_to_mutate.old_node.is_some()
-                        {
-                            return Err(Error::UpdateNotAllowed());
-                        }
 
-                        let node_insert = &insert_entity.node_to_mutate;
-                        if let Some(node) = &node_insert.node {
-                            if node_insert.room_id.is_some() {
-                                return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
-                            }
-                            if let Some(json) = &node._json {
-                                let user = user_from_json(json, node.mdate)?;
-                                room.add_user_admin_user(user)?;
-                            }
-                        }
-                    }
-                }
                 ROOM_AUTHORISATION_FIELD => {
                     for auth in entry.1 {
-                        let rigigt = self.validate_authorisation_mutation(&mut room, auth)?;
-                        if rigigt.0 {
-                            need_room_mutation = true;
-                        }
-                        if rigigt.1 {
-                            need_user_mutation = true;
+                        let need_mut =
+                            self.validate_authorisation_mutation(&mut room, auth, verifying_key)?;
+                        if need_mut {
+                            need_room_admin = true;
                         }
                     }
                 }
@@ -746,9 +719,9 @@ impl RoomAuthorisations {
             }
         }
         //check if user can mutate the room
-        if need_room_mutation {
+        if need_room_admin {
             //   println!("need_room_mutation {}", need_room_mutation);
-            if !room.is_admin(verifying_key, now()) {
+            if !room.is_admin(verifying_key, insert_entity.node_to_mutate.date) {
                 return Err(Error::AuthorisationRejected(
                     node_insert.entity.clone(),
                     base64_encode(&room.id),
@@ -756,15 +729,6 @@ impl RoomAuthorisations {
             }
         }
 
-        if need_user_mutation {
-            //     println!("need_user_mutation {}", need_user_mutation);
-            if !room.is_user_admin(verifying_key, now()) {
-                return Err(Error::AuthorisationRejected(
-                    node_insert.entity.clone(),
-                    base64_encode(&room.id),
-                ));
-            }
-        }
         Ok(Some(room))
     }
 
@@ -772,19 +736,20 @@ impl RoomAuthorisations {
         &self,
         room: &mut Room,
         insert_entity: &mut InsertEntity,
-    ) -> Result<(bool, bool)> {
+        verifying_key: &Vec<u8>,
+    ) -> Result<bool> {
         if !insert_entity.edge_deletions.is_empty() {
             return Err(Error::CannotRemove(
-                "_Authorisation".to_string(),
+                "sys.Authorisation".to_string(),
                 ROOM_ENT.to_string(),
             ));
         }
 
         let node_insert = &insert_entity.node_to_mutate;
         if node_insert.room_id.is_some() {
-            return Err(Error::ForbiddenRoomId("_Authorisation".to_string()));
+            return Err(Error::ForbiddenRoomId("sys.Authorisation".to_string()));
         }
-        //verify that the passed authentication belongs to the room
+        //verify that the passed authorisation belongs to the room
         let authorisation = match &node_insert.node {
             Some(_) => match room.get_auth_mut(&node_insert.id) {
                 Some(au) => au,
@@ -808,18 +773,18 @@ impl RoomAuthorisations {
             },
         };
 
-        let mut need_user_mutation = false;
-        let mut need_room_mutation = false;
+        let mut need_user_admin = false;
+        let mut need_room_admin = false;
 
         for entry in &insert_entity.sub_nodes {
             match entry.0.as_str() {
                 AUTH_RIGHTS_FIELD => {
-                    need_room_mutation = true;
+                    need_room_admin = true;
 
                     for insert_entity in entry.1 {
                         if !insert_entity.edge_deletions.is_empty() {
                             return Err(Error::CannotRemove(
-                                "_Rights".to_string(),
+                                "sys.UserAuth".to_string(),
                                 ROOM_ENT.to_string(),
                             ));
                         }
@@ -829,7 +794,7 @@ impl RoomAuthorisations {
                             return Err(Error::UpdateNotAllowed());
                         }
                         if node_insert.room_id.is_some() {
-                            return Err(Error::ForbiddenRoomId("_Rights".to_string()));
+                            return Err(Error::ForbiddenRoomId("sys.UserAuth".to_string()));
                         }
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
@@ -840,11 +805,11 @@ impl RoomAuthorisations {
                     }
                 }
                 AUTH_USER_FIELD => {
-                    need_user_mutation = true;
+                    need_user_admin = true;
                     for insert_entity in entry.1 {
                         if !insert_entity.edge_deletions.is_empty() {
                             return Err(Error::CannotRemove(
-                                "_UserAuth".to_string(),
+                                "sys.UserAuth".to_string(),
                                 ROOM_ENT.to_string(),
                             ));
                         }
@@ -855,7 +820,7 @@ impl RoomAuthorisations {
                         }
                         let node_insert = &insert_entity.node_to_mutate;
                         if node_insert.room_id.is_some() {
-                            return Err(Error::ForbiddenRoomId("_UserAuth".to_string()));
+                            return Err(Error::ForbiddenRoomId("sys.UserAuth".to_string()));
                         }
                         if let Some(node) = &node_insert.node {
                             if let Some(json) = &node._json {
@@ -865,11 +830,42 @@ impl RoomAuthorisations {
                         }
                     }
                 }
+                AUTH_USER_ADMIN_FIELD => {
+                    need_room_admin = true;
+                    for insert_entity in entry.1 {
+                        if !insert_entity.edge_deletions.is_empty() {
+                            return Err(Error::CannotRemove(
+                                "sys.UserAuth".to_string(),
+                                ROOM_ENT.to_string(),
+                            ));
+                        }
+                        if insert_entity.node_to_mutate.node.is_none()
+                            || insert_entity.node_to_mutate.old_node.is_some()
+                        {
+                            return Err(Error::UpdateNotAllowed());
+                        }
+
+                        let node_insert = &insert_entity.node_to_mutate;
+                        if node_insert.room_id.is_some() {
+                            return Err(Error::ForbiddenRoomId("sys.UserAuth".to_string()));
+                        }
+                        if let Some(node) = &node_insert.node {
+                            if let Some(json) = &node._json {
+                                let user = user_from_json(json, node.mdate)?;
+                                authorisation.add_user_admin(user)?;
+                            }
+                        }
+                    }
+                }
                 _ => unreachable!(),
             }
         }
-
-        Ok((need_room_mutation, need_user_mutation))
+        if need_user_admin {
+            if !authorisation.can_admin_users(verifying_key, insert_entity.node_to_mutate.date) {
+                need_room_admin = true;
+            }
+        }
+        Ok(need_room_admin)
     }
 
     pub fn rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
@@ -910,7 +906,7 @@ impl RoomAuthorisations {
 
     pub const LOAD_QUERY: &'static str = "
         query LOAD_ROOMS{
-            sys.Room{
+            sys.Room {
                 id
                 mdate
                 room_id
@@ -919,12 +915,8 @@ impl RoomAuthorisations {
                     verifying_key
                     enabled
                 }
-                user_admin (order_by(mdate desc)) {
-                    mdate
-                    verifying_key
-                    enabled
-                }
-                authorisations{
+               
+                authorisations(nullable(rights, users, user_admin)){
                     id
                     mdate
                     rights(order_by(mdate desc)){
@@ -934,6 +926,11 @@ impl RoomAuthorisations {
                         mutate_all
                     }
                     users(order_by(mdate desc)){
+                        mdate
+                        verifying_key
+                        enabled
+                    }
+                    user_admin (order_by(mdate desc)) {
                         mdate
                         verifying_key
                         enabled
@@ -952,6 +949,7 @@ impl RoomAuthorisations {
             .unwrap()
             .as_array()
             .unwrap();
+        
         for room_value in rooms {
             let room_map = room_value.as_object().unwrap();
 
@@ -978,23 +976,12 @@ impl RoomAuthorisations {
                 mdate,
                 authorisations,
                 admins: HashMap::new(),
-                user_admins: HashMap::new(),
             };
 
             let admin_array = room_map.get(ROOM_ADMIN_FIELD).unwrap().as_array().unwrap();
             for value in admin_array {
                 let user = load_user_from_json(value)?;
                 room.add_admin_user(user)?;
-            }
-
-            let user_admin_array = room_map
-                .get(ROOM_USER_ADMIN_FIELD)
-                .unwrap()
-                .as_array()
-                .unwrap();
-            for value in user_admin_array {
-                let user = load_user_from_json(value)?;
-                room.add_user_admin_user(user)?;
             }
 
             self.add_room(room);

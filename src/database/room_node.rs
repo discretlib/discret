@@ -10,18 +10,13 @@ use crate::database::{
     node::Node,
     room::{Authorisation, EntityRight, Room, User},
     system_entities::{
-        AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_FIELD_SHORT,
-        ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_ALL_SHORT,
+        AUTHORISATION_ENT_SHORT, AUTH_RIGHTS_FIELD_SHORT, AUTH_USER_ADMIN_FIELD_SHORT,
+        AUTH_USER_FIELD_SHORT, ENTITY_RIGHT_ENT_SHORT, RIGHT_ENTITY_SHORT, RIGHT_MUTATE_ALL_SHORT,
         RIGHT_MUTATE_SELF_SHORT, ROOM_ADMIN_FIELD_SHORT, ROOM_AUTHORISATION_FIELD_SHORT,
-        ROOM_ENT_SHORT, ROOM_USER_ADMIN_FIELD_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT,
-        USER_VERIFYING_KEY_SHORT,
+        ROOM_ENT_SHORT, USER_AUTH_ENT_SHORT, USER_ENABLED_SHORT, USER_VERIFYING_KEY_SHORT,
     },
     Error, Result,
 };
-
-//
-// The following code handle the room Database representation and manipulations used during synchronisation
-//
 
 ///
 /// room database definition that is used for data synchronisation
@@ -32,10 +27,6 @@ pub struct RoomNode {
     pub last_modified: i64,
     pub admin_edges: Vec<Edge>,
     pub admin_nodes: Vec<UserNode>,
-
-    pub user_admin_edges: Vec<Edge>,
-    pub user_admin_nodes: Vec<UserNode>,
-
     pub auth_edges: Vec<Edge>,
     pub auth_nodes: Vec<AuthorisationNode>,
 }
@@ -44,30 +35,6 @@ impl RoomNode {
     /// validate signature and basic data consistency
     ///
     pub fn check_consistency(&self) -> Result<()> {
-        //check user_admin consistency
-        if self.user_admin_edges.len() != self.user_admin_nodes.len() {
-            return Err(Error::InvalidNode(
-                "RoomNode user_admin edge and node have different size".to_string(),
-            ));
-        }
-        for user_admin_edge in &self.user_admin_edges {
-            if !user_admin_edge.src.eq(&self.node.id) {
-                return Err(Error::InvalidNode(
-                    "Invalid RoomNode user_admin edge src".to_string(),
-                ));
-            }
-            let user_node = self
-                .user_admin_nodes
-                .iter()
-                .find(|user| user.node.id.eq(&user_admin_edge.dest));
-
-            if user_node.is_none() {
-                return Err(Error::InvalidNode(
-                    "RoomNode has an invalid admin egde".to_string(),
-                ));
-            }
-        }
-
         //check admin consistency
         if self.admin_edges.len() != self.admin_nodes.len() {
             return Err(Error::InvalidNode(
@@ -138,14 +105,6 @@ impl RoomNode {
             a.write(conn)?;
         }
 
-        for a in &self.user_admin_edges {
-            a.write(conn)?;
-        }
-
-        for a in &mut self.user_admin_nodes {
-            a.write(conn)?;
-        }
-
         for a in &self.auth_edges {
             a.write(conn)?;
         }
@@ -178,19 +137,6 @@ impl RoomNode {
             }
         }
 
-        let mut user_admin_edges = Edge::get_edges(id, ROOM_USER_ADMIN_FIELD_SHORT, conn)?;
-        //user insertion order is mandatory
-        user_admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
-
-        let mut user_admin_nodes = Vec::new();
-        for edge in &user_admin_edges {
-            let user_opt = UserNode::read(conn, &edge.dest)?;
-            if let Some(user) = user_opt {
-                last_modified = max(last_modified, user.node.mdate);
-                user_admin_nodes.push(user);
-            }
-        }
-
         let auth_edges = Edge::get_edges(id, ROOM_AUTHORISATION_FIELD_SHORT, conn)?;
         let mut auth_nodes = Vec::new();
         for edge in &auth_edges {
@@ -206,11 +152,32 @@ impl RoomNode {
             last_modified,
             admin_edges,
             admin_nodes,
-            user_admin_edges,
-            user_admin_nodes,
             auth_edges,
             auth_nodes,
         }))
+    }
+
+    ///
+    /// Parse RoomNode into a Room
+    ///
+    pub fn parse(&self) -> Result<Room> {
+        let mut room = Room {
+            id: self.node.id,
+            mdate: self.node.mdate,
+            ..Default::default()
+        };
+
+        for user in &self.admin_nodes {
+            let user = user.parse()?;
+            room.add_admin_user(user)?;
+        }
+
+        for auth in &self.auth_nodes {
+            let authorisation = auth.parse()?;
+            room.add_auth(authorisation)?;
+        }
+
+        Ok(room)
     }
 }
 
@@ -225,11 +192,13 @@ pub struct AuthorisationNode {
     pub right_nodes: Vec<EntityRightNode>,
     pub user_edges: Vec<Edge>,
     pub user_nodes: Vec<UserNode>,
+    pub user_admin_edges: Vec<Edge>,
+    pub user_admin_nodes: Vec<UserNode>,
     pub need_update: bool,
 }
 impl AuthorisationNode {
     ///
-    /// validate signature and basic data consistency
+    /// validate basic data consistency
     ///
     pub fn check_consistency(&self) -> Result<()> {
         //check right consistency
@@ -280,6 +249,30 @@ impl AuthorisationNode {
             }
         }
 
+        //check right consistency
+        if self.user_admin_edges.len() != self.user_admin_nodes.len() {
+            return Err(Error::InvalidNode(
+                "AuthorisationNode Rights edges and nodes have different size".to_string(),
+            ));
+        }
+        for user_admin_edge in &self.user_admin_edges {
+            if !user_admin_edge.src.eq(&self.node.id) {
+                return Err(Error::InvalidNode(
+                    "Invalid AuthorisationNode Right edge source".to_string(),
+                ));
+            }
+            let user_admin_node = self
+                .user_admin_nodes
+                .iter()
+                .find(|right| right.node.id.eq(&user_admin_edge.dest));
+
+            if user_admin_node.is_none() {
+                return Err(Error::InvalidNode(
+                    "AuthorisationNode has an invalid Right egde".to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
@@ -298,6 +291,15 @@ impl AuthorisationNode {
         for u in &mut self.user_nodes {
             u.write(conn)?;
         }
+
+        for a in &self.user_admin_edges {
+            a.write(conn)?;
+        }
+
+        for a in &mut self.user_admin_nodes {
+            a.write(conn)?;
+        }
+
         Ok(())
     }
 
@@ -334,6 +336,19 @@ impl AuthorisationNode {
             }
         }
 
+        let mut user_admin_edges = Edge::get_edges(id, AUTH_USER_ADMIN_FIELD_SHORT, conn)?;
+        //user insertion order is mandatory
+        user_admin_edges.sort_by(|a, b| b.cdate.cmp(&a.cdate));
+
+        let mut user_admin_nodes = Vec::new();
+        for edge in &user_admin_edges {
+            let user_opt = UserNode::read(conn, &edge.dest)?;
+            if let Some(user) = user_opt {
+                last_modified = max(last_modified, user.node.mdate);
+                user_admin_nodes.push(user);
+            }
+        }
+
         Ok(Some(Self {
             node,
             last_modified,
@@ -341,8 +356,34 @@ impl AuthorisationNode {
             right_nodes,
             user_edges,
             user_nodes,
+            user_admin_edges,
+            user_admin_nodes,
             need_update: true,
         }))
+    }
+
+    pub fn parse(&self) -> Result<Authorisation> {
+        let mut authorisation = Authorisation {
+            id: self.node.id,
+            mdate: self.node.mdate,
+            ..Default::default()
+        };
+        for right_node in &self.right_nodes {
+            let entity_right = right_node.parse()?;
+            authorisation.add_right(entity_right)?;
+        }
+
+        for user_node in &self.user_nodes {
+            let user = user_node.parse()?;
+            authorisation.add_user(user)?;
+        }
+
+        for user in &self.user_admin_nodes {
+            let user = user.parse()?;
+            //println!("{}", base64_encode(&user.verifying_key));
+            authorisation.add_user_admin(user)?;
+        }
+        Ok(authorisation)
     }
 }
 
@@ -360,6 +401,7 @@ impl UserNode {
         }
         Ok(())
     }
+
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, USER_AUTH_ENT_SHORT, conn)?;
         if node.is_none() {
@@ -367,6 +409,44 @@ impl UserNode {
         }
         let node = *node.unwrap();
         Ok(Some(Self { node }))
+    }
+
+    fn parse(&self) -> Result<User> {
+        let json = &self.node._json.as_ref().ok_or(Error::InvalidNode(
+            "Invalid UserNode: empty Json".to_string(),
+        ))?;
+
+        let user_json: serde_json::Value = serde_json::from_str(json)?;
+        let user_map = user_json.as_object().ok_or(Error::InvalidNode(
+            "Invalid UserNode node: invalid object".to_string(),
+        ))?;
+
+        let verifying_key = user_map
+            .get(USER_VERIFYING_KEY_SHORT)
+            .ok_or(Error::InvalidNode(
+                "Invalid UserNode node: missing 'verifying_key'".to_string(),
+            ))?;
+        let verifying_key = verifying_key.as_str().ok_or(Error::InvalidNode(
+            "Invalid UserNode node: 'verifying_key' is not a String".to_string(),
+        ))?;
+        let verifying_key = base64_decode(verifying_key.as_bytes())?;
+
+        let enabled = match user_map.get(USER_ENABLED_SHORT) {
+            Some(v) => v.as_bool().ok_or(Error::InvalidNode(
+                "Invalid UserNode node: 'enabled' is not a boolean".to_string(),
+            ))?,
+            None => true,
+        };
+
+        let date = self.node.mdate;
+
+        let user = User {
+            verifying_key,
+            date,
+            enabled,
+        };
+
+        Ok(user)
     }
 }
 
@@ -381,6 +461,7 @@ impl EntityRightNode {
         }
         Ok(())
     }
+
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
         let node = Node::get(id, ENTITY_RIGHT_ENT_SHORT, conn)?;
         if node.is_none() {
@@ -388,6 +469,50 @@ impl EntityRightNode {
         }
         let node = *node.unwrap();
         Ok(Some(Self { node }))
+    }
+
+    pub fn parse(&self) -> Result<EntityRight> {
+        let json = self.node._json.as_ref().ok_or(Error::InvalidNode(
+            "Invalid EntityRight node: empty json".to_string(),
+        ))?;
+
+        let right_json: serde_json::Value = serde_json::from_str(json)?;
+
+        let right_map = right_json.as_object().ok_or(Error::InvalidNode(
+            "Invalid EntityRight node: invalid Json Object".to_string(),
+        ))?;
+
+        let entity = right_map.get(RIGHT_ENTITY_SHORT).ok_or(Error::InvalidNode(
+            "Invalid EntityRight node: no Entity field".to_string(),
+        ))?;
+        let entity = entity
+            .as_str()
+            .ok_or(Error::InvalidNode(
+                "Invalid EntityRight node: Entity is not a string".to_string(),
+            ))?
+            .to_string();
+
+        let mutate_self = right_map
+            .get(RIGHT_MUTATE_SELF_SHORT)
+            .ok_or(Error::InvalidNode(
+                "Invalid EntityRight node: no mutate_self field".to_string(),
+            ))?;
+        let mutate_self = mutate_self.as_bool().ok_or(Error::InvalidNode(
+            "Invalid EntityRight node: mutate_self is not a boolean ".to_string(),
+        ))?;
+
+        let mutate_all = right_map
+            .get(RIGHT_MUTATE_ALL_SHORT)
+            .ok_or(Error::InvalidNode(
+                "Invalid EntityRight node: no mutate_all field".to_string(),
+            ))?;
+        let mutate_all = mutate_all.as_bool().ok_or(Error::InvalidNode(
+            "Invalid EntityRight node: mutate_all is not a boolean ".to_string(),
+        ))?;
+
+        let entity_right = EntityRight::new(self.node.mdate, entity, mutate_self, mutate_all);
+
+        Ok(entity_right)
     }
 }
 
@@ -449,80 +574,13 @@ pub fn prepare_room_with_history(
         if admin_node.is_none() {
             match room.is_admin(&new_admin.node.verifying_key, new_admin.node.mdate) {
                 true => {
-                    let user = parse_user_node(new_admin)?;
+                    let user = new_admin.parse()?;
                     room.add_admin_user(user)?;
                     need_update = true;
                 }
                 false => {
                     return Err(Error::InvalidNode(
                         "RoomNode Administrator is not authorised".to_string(),
-                    ))
-                }
-            }
-        }
-    }
-
-    //ensure that existing user_admin edges exists in the room_node
-    for old_edge in &old_room_node.user_admin_edges {
-        let user_admin_edge = &room_node
-            .user_admin_edges
-            .iter()
-            .find(|edge| edge.eq(&old_edge));
-        if user_admin_edge.is_none() {
-            room_node.user_admin_edges.push(old_edge.clone());
-        }
-    }
-    room_node
-        .user_admin_edges
-        .sort_by(|a, b| a.cdate.cmp(&b.cdate));
-
-    for old_user in &old_room_node.user_admin_nodes {
-        let user_admin_node = room_node
-            .user_admin_nodes
-            .iter_mut()
-            .find(|user| user.node.id.eq(&old_user.node.id));
-
-        match user_admin_node {
-            Some(user) => match user.node.eq(&old_user.node) {
-                true => user.node._local_id = old_user.node._local_id,
-                false => {
-                    return Err(Error::InvalidNode(
-                        "Invalid RoomNode, User Administrator nodes cannot be mutated ".to_string(),
-                    ))
-                }
-            },
-            None => {
-                room_node.user_admin_nodes.push(old_user.clone());
-            }
-        }
-    }
-    room_node
-        .user_admin_nodes
-        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
-
-    //
-    //
-    // Find new admins and add them to the cloned room
-    // the cloned room will be then used to validate every other room update
-    //
-    for new_user_admin in &room_node.user_admin_nodes {
-        let user_admin_node = old_room_node
-            .user_admin_nodes
-            .iter()
-            .find(|user| user.node.id.eq(&new_user_admin.node.id));
-        if user_admin_node.is_none() {
-            match room.is_admin(
-                &new_user_admin.node.verifying_key,
-                new_user_admin.node.mdate,
-            ) {
-                true => {
-                    let user = parse_user_node(new_user_admin)?;
-                    room.add_user_admin_user(user)?;
-                    need_update = true;
-                }
-                false => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode User Administrator is not authorised".to_string(),
                     ))
                 }
             }
@@ -592,8 +650,7 @@ pub fn prepare_room_with_history(
         }
     }
 
-    //parse room node to ensure that the json defintion is valid
-    parse_room_node(room_node)?;
+    room_node.parse()?;
 
     Ok(need_update)
 }
@@ -602,22 +659,13 @@ pub fn prepare_room_with_history(
 /// validate the new room by checking its rights and parsing it to validate json
 ///
 pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
-    let room = parse_room_node(room_node)?;
+    let room = room_node.parse()?;
 
     //verify rights
     for admin in &room_node.admin_nodes {
         if !room.is_admin(&admin.node.verifying_key, admin.node.mdate) {
             return Err(Error::InvalidNode(
                 "New RoomNode Administrator not authorised".to_string(),
-            ));
-        }
-    }
-
-    for user_admin in &room_node.user_admin_nodes {
-        //println!("{}", base64_encode(&user_admin.node._verifying_key));
-        if !room.is_admin(&user_admin.node.verifying_key, user_admin.node.mdate) {
-            return Err(Error::InvalidNode(
-                "New RoomNode User Administrator not authorised".to_string(),
             ));
         }
     }
@@ -639,6 +687,15 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
                         ));
                     }
                 }
+
+                for user_admin in &auth.user_admin_nodes {
+                    //println!("{}", base64_encode(&user_admin.node._verifying_key));
+                    if !room.is_admin(&user_admin.node.verifying_key, user_admin.node.mdate) {
+                        return Err(Error::InvalidNode(
+                            "New RoomNode User Administrator not authorised".to_string(),
+                        ));
+                    }
+                }
             }
             false => {
                 return Err(Error::InvalidNode(
@@ -656,6 +713,80 @@ fn prepare_auth_with_history(
     new_auth: &mut AuthorisationNode,
 ) -> Result<bool> {
     let mut need_update = false;
+
+    //clone the existing auth to add new admins and check the reast of the authorisations
+    let mut authorisation = room
+        .authorisations
+        .get(&old_auth.node.id)
+        .expect("the old auth is extracted from the passed room")
+        .clone();
+
+    //ensure that existing user_admin edges exists in the auth_node
+    for old_edge in &old_auth.user_admin_edges {
+        let user_admin_edge = &new_auth
+            .user_admin_edges
+            .iter()
+            .find(|edge| edge.eq(&old_edge));
+        if user_admin_edge.is_none() {
+            new_auth.user_admin_edges.push(old_edge.clone());
+        }
+    }
+    new_auth
+        .user_admin_edges
+        .sort_by(|a, b| a.cdate.cmp(&b.cdate));
+
+    for old_user in &old_auth.user_admin_nodes {
+        let user_admin_node = new_auth
+            .user_admin_nodes
+            .iter_mut()
+            .find(|user| user.node.id.eq(&old_user.node.id));
+
+        match user_admin_node {
+            Some(user) => match user.node.eq(&old_user.node) {
+                true => user.node._local_id = old_user.node._local_id,
+                false => {
+                    return Err(Error::InvalidNode(
+                        "Invalid RoomNode, User Administrator nodes cannot be mutated ".to_string(),
+                    ))
+                }
+            },
+            None => {
+                new_auth.user_admin_nodes.push(old_user.clone());
+            }
+        }
+    }
+    new_auth
+        .user_admin_nodes
+        .sort_by(|a, b| a.node.mdate.cmp(&b.node.mdate));
+
+    //
+    //
+    // Find new admins and add them to the cloned room
+    // the cloned room will be then used to validate every other room update
+    //
+    for new_user_admin in &new_auth.user_admin_nodes {
+        let user_admin_node = old_auth
+            .user_admin_nodes
+            .iter()
+            .find(|user| user.node.id.eq(&new_user_admin.node.id));
+        if user_admin_node.is_none() {
+            match room.is_admin(
+                &new_user_admin.node.verifying_key,
+                new_user_admin.node.mdate,
+            ) {
+                true => {
+                    let user = new_user_admin.parse()?;
+                    authorisation.add_user_admin(user)?;
+                    need_update = true;
+                }
+                false => {
+                    return Err(Error::InvalidNode(
+                        "RoomNode User Administrator is not authorised".to_string(),
+                    ))
+                }
+            }
+        }
+    }
 
     //ensure that existing user edges and nodes are included in the new Authorisation
     for old_edge in &old_auth.user_edges {
@@ -700,7 +831,7 @@ fn prepare_auth_with_history(
             .find(|user| user.node.id.eq(&new_user.node.id));
 
         if user_node.is_none() {
-            match room.is_user_admin(&new_user.node.verifying_key, new_user.node.mdate) {
+            match authorisation.can_admin_users(&new_user.node.verifying_key, new_user.node.mdate) {
                 true => {
                     need_update = true;
                 }
@@ -757,7 +888,7 @@ fn prepare_auth_with_history(
             .find(|user| user.node.id.eq(&new_right.node.id));
 
         if right_node.is_none() {
-            match room.is_user_admin(&new_right.node.verifying_key, new_right.node.mdate) {
+            match room.is_admin(&new_right.node.verifying_key, new_right.node.mdate) {
                 true => {
                     need_update = true;
                 }
@@ -773,144 +904,22 @@ fn prepare_auth_with_history(
 }
 
 fn prepare_new_auth(room: &Room, new_auth: &AuthorisationNode) -> Result<()> {
+    let authorisation = new_auth.parse()?;
     for new_user in &new_auth.user_nodes {
-        if !room.is_user_admin(&new_user.node.verifying_key, new_user.node.mdate) {
+        if !authorisation.can_admin_users(&new_user.node.verifying_key, new_user.node.mdate) {
             return Err(Error::InvalidNode(
                 "RoomNode Authorisation new user is not authorised".to_string(),
             ));
         }
     }
     for new_right in &new_auth.right_nodes {
-        if !room.is_user_admin(&new_right.node.verifying_key, new_right.node.mdate) {
+        if !room.is_admin(&new_right.node.verifying_key, new_right.node.mdate) {
             return Err(Error::InvalidNode(
                 "RoomNode Authorisation new Right is not authorised".to_string(),
             ));
         }
     }
     Ok(())
-}
-///
-/// Parse RoomNode into a Room
-///
-pub fn parse_room_node(room_node: &RoomNode) -> Result<Room> {
-    let mut room = Room {
-        id: room_node.node.id,
-        mdate: room_node.node.mdate,
-        ..Default::default()
-    };
-
-    for user in &room_node.admin_nodes {
-        let user = parse_user_node(user)?;
-        room.add_admin_user(user)?;
-    }
-
-    for user in &room_node.user_admin_nodes {
-        let user = parse_user_node(user)?;
-        //println!("{}", base64_encode(&user.verifying_key));
-        room.add_user_admin_user(user)?;
-    }
-
-    for auth in &room_node.auth_nodes {
-        let mut authorisation = Authorisation {
-            id: auth.node.id,
-            mdate: auth.node.mdate,
-            ..Default::default()
-        };
-        for right_node in &auth.right_nodes {
-            let entity_right = parse_entity_right_node(right_node)?;
-            authorisation.add_right(entity_right)?;
-        }
-
-        for user_node in &auth.user_nodes {
-            let user = parse_user_node(user_node)?;
-            authorisation.add_user(user)?;
-        }
-        room.add_auth(authorisation)?;
-    }
-
-    Ok(room)
-}
-
-fn parse_user_node(user_node: &UserNode) -> Result<User> {
-    let user_json: serde_json::Value = match &user_node.node._json {
-        Some(json) => serde_json::from_str(json)?,
-        None => return Err(Error::InvalidNode("Invalid UserAuth node".to_string())),
-    };
-
-    if !user_json.is_object() {
-        return Err(Error::InvalidNode("Invalid UserAuth node".to_string()));
-    }
-    let user_map = user_json.as_object().unwrap();
-    let verifying_key = match user_map.get(USER_VERIFYING_KEY_SHORT) {
-        Some(v) => match v.as_str() {
-            Some(v) => base64_decode(v.as_bytes())?,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let enabled = match user_map.get(USER_ENABLED_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let date = user_node.node.mdate;
-
-    let user = User {
-        verifying_key,
-        date,
-        enabled,
-    };
-
-    Ok(user)
-}
-
-fn parse_entity_right_node(entity_right_node: &EntityRightNode) -> Result<EntityRight> {
-    let right_json: serde_json::Value = match &entity_right_node.node._json {
-        Some(json) => serde_json::from_str(json)?,
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    if !right_json.is_object() {
-        return Err(Error::InvalidNode("Invalid EntityRight node".to_string()));
-    }
-    let right_map = right_json.as_object().unwrap();
-
-    let entity = match right_map.get(RIGHT_ENTITY_SHORT) {
-        Some(v) => match v.as_str() {
-            Some(v) => v.to_string(),
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let mutate_self = match right_map.get(RIGHT_MUTATE_SELF_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let mutate_all = match right_map.get(RIGHT_MUTATE_ALL_SHORT) {
-        Some(v) => match v.as_bool() {
-            Some(v) => v,
-            None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-        },
-        None => return Err(Error::InvalidNode("Invalid EntityRight node".to_string())),
-    };
-
-    let entity_right = EntityRight::new(
-        entity_right_node.node.mdate,
-        entity,
-        mutate_self,
-        mutate_all,
-    );
-
-    Ok(entity_right)
 }
 
 #[cfg(test)]
@@ -974,9 +983,7 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
+                        
                         authorisations:[{
                             name:"admin"
                             rights:[{
@@ -985,6 +992,10 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
+                                verif_key:$user_id
+                            }]
+
+                            user_admin: [{
                                 verif_key:$user_id
                             }]
                         }]
@@ -1008,9 +1019,6 @@ mod tests {
         // println!("{:#?}", node);
         assert_eq!(1, node.admin_edges.len());
         assert_eq!(1, node.admin_edges.len());
-
-        assert_eq!(1, node.user_admin_edges.len());
-        assert_eq!(1, node.user_admin_nodes.len());
 
         assert_eq!(1, node.auth_edges.len());
         assert_eq!(1, node.auth_nodes.len());
@@ -1066,18 +1074,13 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
+
                         authorisations:[{
                             name:"admin"
                             rights:[{
                                 entity:"Person"
                                 mutate_self:true
                                 mutate_all:true
-                            }]
-                            users: [{
-                                verif_key:$user_id
                             }]
                         }]
                     }
@@ -1095,7 +1098,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let room = parse_room_node(&node).unwrap();
+        let room = node.parse().unwrap();
         assert!(room.can(&verifying_key, "Person", now(), &RightType::MutateAll));
         assert!(!room.can(&verifying_key, "Persons", now(), &RightType::MutateAll));
     }
@@ -1133,21 +1136,14 @@ mod tests {
         let room = app
             .mutate_raw(
                 r#"mutation mut {
-                    sys.Room{
+                    sys.Room {
                         admin: [{
-                            verif_key:$user_id
-                        }]
-                        user_admin: [{
                             verif_key:$user_id
                         }]
                         authorisations:[{
                             name:"admin"
-                            users: [{
-                                verif_key:$user_id
-                            }]
                         }]
                     }
-
                 }"#,
                 Some(param),
             )
@@ -1292,9 +1288,7 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
+
                         authorisations:[{
                             name:"admin"
                             rights:[{
@@ -1303,6 +1297,9 @@ mod tests {
                                 mutate_all:true
                             }]
                             users: [{
+                                verif_key:$user_id
+                            }]
+                            user_admin: [{
                                 verif_key:$user_id
                             }]
                         }]
@@ -1534,9 +1531,6 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                     }
                 }"#,
                 Some(param),
@@ -1568,10 +1562,6 @@ mod tests {
                         admin: [{
                             verif_key:$second_user
                         }]
-                        user_admin: [{
-                            verif_key:$second_user
-                        }]
-                       
                     }
                 }"#,
                 Some(param),
@@ -1589,11 +1579,7 @@ mod tests {
                             id: $room_id
                             admin: [{
                                 verif_key:$second_user
-                            }]
-                            user_admin: [{
-                                verif_key:$second_user
-                            }]
-                           
+                            }]                           
                         }
                     }"#,
                 Some(param),
@@ -1623,11 +1609,7 @@ mod tests {
                     id: $room_id
                     admin: [{
                         verif_key:$third_user
-                    }]
-                    user_admin: [{
-                        verif_key:$third_user
-                    }]
-                   
+                    }]                   
                 }
             }"#,
                 Some(param),
@@ -1648,10 +1630,6 @@ mod tests {
                     admin: [{
                         verif_key:$third_user
                     }]
-                    user_admin: [{
-                        verif_key:$third_user
-                    }]
-                   
                 }
             }"#,
                 Some(param),
@@ -1722,9 +1700,6 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                     }
                 }"#,
                 Some(param),
@@ -1733,21 +1708,6 @@ mod tests {
             .unwrap();
 
         let room_insert = &room.mutate_entities[0];
-
-        let mut node = first_app
-            .get_room_node(room_insert.node_to_mutate.id)
-            .await
-            .unwrap()
-            .unwrap();
-        //will trigger a consistency error
-        node.user_admin_nodes = Vec::new();
-        //serialize and deserialize to get rid of the local_id
-        let ser = bincode::serialize(&node).unwrap();
-        let node: RoomNode = bincode::deserialize(&ser).unwrap();
-        second_app
-            .add_room_node(node.clone())
-            .await
-            .expect_err("consistency error");
 
         let bad_signing = Ed25519SigningKey::create_from(&random32());
         let mut node = first_app

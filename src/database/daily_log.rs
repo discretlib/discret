@@ -593,9 +593,6 @@ mod tests {
                         admin: [{
                             verif_key:$user_id
                         }]
-                        user_admin: [{
-                            verif_key:$user_id
-                        }]
                         authorisations:[{
                             name:"admin"
                             rights:[{

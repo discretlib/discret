@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use ed25519_dalek::VerifyingKey;
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -57,16 +56,16 @@ pub const SIGNATURE_FIELD: &str = "_signature";
 //names of some authentication fields used during auth validation
 pub const ROOM_ADMIN_FIELD: &str = "admin";
 pub const ROOM_ADMIN_FIELD_SHORT: &str = "32";
-pub const ROOM_USER_ADMIN_FIELD: &str = "user_admin";
-pub const ROOM_USER_ADMIN_FIELD_SHORT: &str = "33";
 pub const ROOM_AUTHORISATION_FIELD: &str = "authorisations";
-pub const ROOM_AUTHORISATION_FIELD_SHORT: &str = "34";
+pub const ROOM_AUTHORISATION_FIELD_SHORT: &str = "33";
 
 //names of some authentication fields used during auth validation
 pub const AUTH_RIGHTS_FIELD: &str = "rights";
 pub const AUTH_RIGHTS_FIELD_SHORT: &str = "33";
 pub const AUTH_USER_FIELD: &str = "users";
 pub const AUTH_USER_FIELD_SHORT: &str = "34";
+pub const AUTH_USER_ADMIN_FIELD: &str = "user_admin";
+pub const AUTH_USER_ADMIN_FIELD_SHORT: &str = "35";
 
 pub const USER_VERIFYING_KEY_SHORT: &str = "32";
 pub const USER_ENABLED_SHORT: &str = "33";
@@ -80,7 +79,6 @@ sys{
     // Entities for the authorisation model
     Room {
         admin: [sys.UserAuth],
-        user_admin: [sys.UserAuth],
         authorisations:[sys.Authorisation]
     }
     
@@ -88,6 +86,7 @@ sys{
         name: String,
         rights:[sys.EntityRight] ,
         users:[sys.UserAuth],
+        user_admin: [sys.UserAuth],
     }
     
     UserAuth{

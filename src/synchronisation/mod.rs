@@ -180,9 +180,7 @@ mod tests {
                     admin: [{
                         verif_key:$first_id
                     }]
-                    user_admin: [{
-                        verif_key:$first_id
-                    }]
+
                     authorisations:[{
                         name:"admin"
                         rights:[{
@@ -191,8 +189,6 @@ mod tests {
                             mutate_all:false
                         }]
                         users: [{
-                            verif_key:$first_id
-                        },{
                             verif_key:$second_id
                         }]
                     }]
@@ -298,9 +294,6 @@ mod tests {
                     admin: [{
                         verif_key:$first_id
                     }]
-                    user_admin: [{
-                        verif_key:$first_id
-                    }]
                     authorisations:[{
                         name:"admin"
                         rights:[{
@@ -309,8 +302,6 @@ mod tests {
                             mutate_all:false
                         }]
                         users: [{
-                            verif_key:$first_id
-                        },{
                             verif_key:$second_id
                         }]
                     }]

@@ -7,10 +7,13 @@ use crate::security::{base64_decode, uid_decode, Uid};
 
 use super::{
     system_entities::{
-        self, AUTH_RIGHTS_FIELD, AUTH_USER_FIELD, ID_FIELD, MODIFICATION_DATE_FIELD,
+        self, AUTH_RIGHTS_FIELD, AUTH_USER_ADMIN_FIELD, AUTH_USER_FIELD, ID_FIELD,
+        MODIFICATION_DATE_FIELD,
     },
     Error, Result,
 };
+
+pub const WILDCARD_ENTITY: &str = "*";
 
 ///
 /// Room is the root of the authorisation model
@@ -27,7 +30,6 @@ pub struct Room {
     pub id: Uid,
     pub mdate: i64,
     pub admins: HashMap<Vec<u8>, Vec<User>>,
-    pub user_admins: HashMap<Vec<u8>, Vec<User>>,
     pub authorisations: HashMap<Uid, Authorisation>,
 }
 
@@ -68,45 +70,8 @@ impl Room {
         }
     }
 
-    pub fn add_user_admin_user(&mut self, user: User) -> Result<()> {
-        let entry = self
-            .user_admins
-            .entry(user.verifying_key.clone())
-            .or_default();
-
-        if let Some(last_user) = entry.last() {
-            if last_user.date > user.date {
-                return Err(Error::InvalidUserDate());
-            }
-        }
-        entry.push(user);
-        Ok(())
-    }
-
-    pub fn is_user_admin(&self, user: &Vec<u8>, date: i64) -> bool {
-        if let Some(val) = self.user_admins.get(user) {
-            let user_opt = val.iter().rev().find(|&user| user.date <= date);
-            match user_opt {
-                Some(user) => user.enabled,
-                None => false,
-            }
-        } else {
-            false
-        }
-    }
-
     pub fn is_user_valid_at(&self, verifying_key: &Vec<u8>, date: i64) -> bool {
         if let Some(users) = self.admins.get(verifying_key) {
-            println!("have");
-            let user_opt = users.iter().rev().find(|&user| user.date <= date);
-            if let Some(user) = user_opt {
-                if user.enabled {
-                    return true;
-                }
-            }
-        }
-
-        if let Some(users) = self.user_admins.get(verifying_key) {
             let user_opt = users.iter().rev().find(|&user| user.date <= date);
             if let Some(user) = user_opt {
                 if user.enabled {
@@ -133,14 +98,6 @@ impl Room {
             }
         }
 
-        for entry in &self.user_admins {
-            for u in entry.1 {
-                if user.eq(&u.verifying_key) {
-                    return true;
-                }
-            }
-        }
-
         for entry in &self.authorisations {
             let auth = entry.1;
             if auth.has_user(user) {
@@ -151,9 +108,12 @@ impl Room {
     }
 
     pub fn can(&self, user: &Vec<u8>, entity: &str, date: i64, right: &RightType) -> bool {
+        let user_valid = self.is_admin(user, date);
         for entry in &self.authorisations {
             let auth = entry.1;
-            if auth.is_user_valid_at(user, date) && auth.can(entity, date, right) {
+            let valid = user_valid || auth.is_user_valid_at(user, date);
+
+            if valid && auth.can(entity, date, right) {
                 return true;
             }
         }
@@ -163,11 +123,6 @@ impl Room {
     pub fn users(&self) -> HashSet<Vec<u8>> {
         let mut user_set = HashSet::new();
         for users in &self.admins {
-            for user in users.1 {
-                user_set.insert(user.verifying_key.clone());
-            }
-        }
-        for users in &self.user_admins {
             for user in users.1 {
                 user_set.insert(user.verifying_key.clone());
             }
@@ -191,6 +146,7 @@ pub struct Authorisation {
     pub mdate: i64,
     pub users: HashMap<Vec<u8>, Vec<User>>,
     pub rights: HashMap<String, Vec<EntityRight>>,
+    pub user_admins: HashMap<Vec<u8>, Vec<User>>,
 }
 
 impl Authorisation {
@@ -207,6 +163,21 @@ impl Authorisation {
         Ok(())
     }
 
+    pub fn add_user_admin(&mut self, user: User) -> Result<()> {
+        let entry = self
+            .user_admins
+            .entry(user.verifying_key.clone())
+            .or_default();
+
+        if let Some(last_user) = entry.last() {
+            if last_user.date > user.date {
+                return Err(Error::InvalidUserDate());
+            }
+        }
+        entry.push(user);
+        Ok(())
+    }
+
     pub fn get_right_at(&self, entity: &str, date: i64) -> Option<&EntityRight> {
         match self.rights.get(entity) {
             Some(entries) => entries.iter().rev().find(|&cred| cred.valid_from <= date),
@@ -215,7 +186,19 @@ impl Authorisation {
     }
 
     pub fn has_user(&self, user: &Vec<u8>) -> bool {
-        self.users.get(user).is_some()
+        self.users.contains_key(user) || self.user_admins.contains_key(user)
+    }
+
+    pub fn can_admin_users(&self, user: &Vec<u8>, date: i64) -> bool {
+        if let Some(val) = self.user_admins.get(user) {
+            let user_opt = val.iter().rev().find(|&user| user.date <= date);
+            match user_opt {
+                Some(user) => user.enabled,
+                None => false,
+            }
+        } else {
+            false
+        }
     }
 
     pub fn add_user(&mut self, user: User) -> Result<()> {
@@ -230,7 +213,7 @@ impl Authorisation {
     }
 
     pub fn is_user_valid_at(&self, user: &Vec<u8>, date: i64) -> bool {
-        if let Some(val) = self.users.get(user) {
+        let user_valid = if let Some(val) = self.users.get(user) {
             let user_opt = val.iter().rev().find(|&user| user.date <= date);
             match user_opt {
                 Some(user) => user.enabled,
@@ -238,7 +221,19 @@ impl Authorisation {
             }
         } else {
             false
-        }
+        };
+
+        let admin_valid = if let Some(val) = self.user_admins.get(user) {
+            let user_opt = val.iter().rev().find(|&user| user.date <= date);
+            match user_opt {
+                Some(user) => user.enabled,
+                None => false,
+            }
+        } else {
+            false
+        };
+
+        return user_valid || admin_valid;
     }
 
     pub fn can(&self, entity: &str, date: i64, right: &RightType) -> bool {
@@ -247,12 +242,24 @@ impl Authorisation {
                 RightType::MutateSelf => entity_right.mutate_self,
                 RightType::MutateAll => entity_right.mutate_all,
             },
-            None => false,
+            None => match self.get_right_at(WILDCARD_ENTITY, date) {
+                Some(entity_right) => match right {
+                    RightType::MutateSelf => entity_right.mutate_self,
+                    RightType::MutateAll => entity_right.mutate_all,
+                },
+                None => false,
+            },
         }
     }
 
     pub fn get_users(&self, user_set: &mut HashSet<Vec<u8>>) {
         for entry in &self.users {
+            for user in entry.1 {
+                user_set.insert(user.verifying_key.clone());
+            }
+        }
+
+        for entry in &self.user_admins {
             for user in entry.1 {
                 user_set.insert(user.verifying_key.clone());
             }
@@ -322,7 +329,10 @@ impl fmt::Display for RightType {
 }
 
 pub fn load_auth_from_json(value: &serde_json::Value) -> Result<Authorisation> {
-    let auth_map = value.as_object().unwrap();
+    let auth_map = value
+        .as_object()
+        .ok_or(Error::InvalidJsonObject("authorisation".to_string()))?;
+
     let id = uid_decode(auth_map.get(ID_FIELD).unwrap().as_str().unwrap())?;
 
     let mdate = auth_map
@@ -330,41 +340,54 @@ pub fn load_auth_from_json(value: &serde_json::Value) -> Result<Authorisation> {
         .unwrap()
         .as_i64()
         .unwrap();
+
     let mut authorisation = Authorisation {
         id,
         mdate,
         users: HashMap::new(),
         rights: HashMap::new(),
+        user_admins: HashMap::new(),
     };
 
-    let user_array = auth_map.get(AUTH_USER_FIELD).unwrap().as_array().unwrap();
-    for user_value in user_array {
-        let user = load_user_from_json(user_value)?;
-        authorisation.add_user(user)?;
+    let user_array = auth_map.get(AUTH_USER_FIELD).unwrap();
+    if let Some(user_array) = user_array.as_array() {
+        for user_value in user_array {
+            let user = load_user_from_json(user_value)?;
+            authorisation.add_user(user)?;
+        }
     }
 
-    let right_array = auth_map.get(AUTH_RIGHTS_FIELD).unwrap().as_array().unwrap();
-    for right_value in right_array {
-        let right_map = right_value.as_object().unwrap();
-        let valid_from = right_map.get("mdate").unwrap().as_i64().unwrap();
-
-        let entity = right_map
-            .get("entity")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        let mutate_self = right_map.get("mutate_self").unwrap().as_bool().unwrap();
-        let mutate_all = right_map.get("mutate_all").unwrap().as_bool().unwrap();
-        let right = EntityRight {
-            valid_from,
-            entity,
-            mutate_self,
-            mutate_all,
-        };
-        authorisation.add_right(right)?;
+    let user_admin_array = auth_map.get(AUTH_USER_ADMIN_FIELD).unwrap();
+    if let Some(user_admin_array) = user_admin_array.as_array() {
+        for user_value in user_admin_array {
+            let user = load_user_from_json(user_value)?;
+            authorisation.add_user_admin(user)?;
+        }
     }
 
+    let right_array = auth_map.get(AUTH_RIGHTS_FIELD).unwrap();
+    if let Some(right_array) = right_array.as_array() {
+        for right_value in right_array {
+            let right_map = right_value.as_object().unwrap();
+            let valid_from = right_map.get("mdate").unwrap().as_i64().unwrap();
+
+            let entity = right_map
+                .get("entity")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mutate_self = right_map.get("mutate_self").unwrap().as_bool().unwrap();
+            let mutate_all = right_map.get("mutate_all").unwrap().as_bool().unwrap();
+            let right = EntityRight {
+                valid_from,
+                entity,
+                mutate_self,
+                mutate_all,
+            };
+            authorisation.add_right(right)?;
+        }
+    }
     Ok(authorisation)
 }
 
@@ -396,14 +419,16 @@ pub fn user_from_json(json: &str, date: i64) -> Result<User> {
     let value: serde_json::Value = serde_json::from_str(json)?;
     let map = value
         .as_object()
-        .ok_or(Error::InvalidJsonObject("User".to_string()))?;
+        .ok_or(Error::InvalidJsonObject("sys.UserAuth".to_string()))?;
 
-    let verifying_key = map
-        .get(system_entities::USER_VERIFYING_KEY_SHORT)
-        .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
-    let verifying_key = verifying_key
-        .as_str()
-        .ok_or(Error::MissingJsonField("User.verifying_key".to_string()))?;
+    let verifying_key =
+        map.get(system_entities::USER_VERIFYING_KEY_SHORT)
+            .ok_or(Error::MissingJsonField(
+                "sys.UserAuth.verifying_key".to_string(),
+            ))?;
+    let verifying_key = verifying_key.as_str().ok_or(Error::MissingJsonField(
+        "sys.UserAuth.verifying_key".to_string(),
+    ))?;
     let verifying_key = base64_decode(verifying_key.as_bytes())?;
 
     let enabled = match map.get(system_entities::USER_ENABLED_SHORT) {
@@ -423,31 +448,33 @@ pub fn entity_right_from_json(valid_from: i64, json: &str) -> Result<EntityRight
 
     let map = value
         .as_object()
-        .ok_or(Error::InvalidJsonObject("EntityRight".to_string()))?;
+        .ok_or(Error::InvalidJsonObject("sys.EntityRight".to_string()))?;
 
     let entity = map
         .get(system_entities::RIGHT_ENTITY_SHORT)
-        .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
-    let entity = entity
-        .as_str()
-        .ok_or(Error::MissingJsonField("EntityRight.entity".to_string()))?;
+        .ok_or(Error::MissingJsonField(
+            "sys.EntityRight.entity".to_string(),
+        ))?;
+    let entity = entity.as_str().ok_or(Error::MissingJsonField(
+        "sys.EntityRight.entity".to_string(),
+    ))?;
 
     let mutate_self =
         map.get(system_entities::RIGHT_MUTATE_SELF_SHORT)
             .ok_or(Error::MissingJsonField(
-                "EntityRight.mutate_self".to_string(),
+                "sys.EntityRight.mutate_self".to_string(),
             ))?;
     let mutate_self = mutate_self.as_bool().ok_or(Error::MissingJsonField(
-        "EntityRight.mutate_self".to_string(),
+        "sys.EntityRight.mutate_self".to_string(),
     ))?;
 
     let mutate_all =
         map.get(system_entities::RIGHT_MUTATE_ALL_SHORT)
             .ok_or(Error::MissingJsonField(
-                "EntityRight.mutate_self".to_string(),
+                "sys.EntityRight.mutate_self".to_string(),
             ))?;
     let mutate_all = mutate_all.as_bool().ok_or(Error::MissingJsonField(
-        "EntityRight.mutate_self".to_string(),
+        "sys.EntityRight.mutate_self".to_string(),
     ))?;
 
     Ok(EntityRight::new(
@@ -456,4 +483,360 @@ pub fn entity_right_from_json(valid_from: i64, json: &str) -> Result<EntityRight
         mutate_self,
         mutate_all,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::collections::{HashMap, HashSet};
+
+    use crate::{
+        database::{
+            authorisation_service::*,
+            room::{Authorisation, EntityRight, RightType, Room, User},
+        },
+        security::{new_uid, random32, Ed25519SigningKey},
+    };
+    #[test]
+    fn room_admins() {
+        let valid_date: i64 = 10000;
+        let mut user1 = User {
+            verifying_key: random32().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
+
+        let mut room = Room::default();
+        assert!(!room.is_admin(&user1.verifying_key, valid_date));
+
+        room.add_admin_user(user1.clone()).unwrap();
+        assert!(room.is_admin(&user1.verifying_key, valid_date));
+
+        //invalid before valid_date
+        assert!(!room.is_admin(&user1.verifying_key, valid_date - 1));
+
+        user1.date = valid_date - 100;
+        room.add_admin_user(user1.clone())
+            .expect_err("Cannot add a  user admin definition before the last date");
+
+        user1.date = valid_date + 1000;
+        user1.enabled = false;
+        room.add_admin_user(user1.clone()).unwrap();
+
+        //user is valid beetween valid_date and valid_date+1000
+        assert!(room.is_admin(&user1.verifying_key, valid_date + 10));
+
+        //user is disabled
+        assert!(!room.is_admin(&user1.verifying_key, user1.date));
+
+        assert!(room.has_user(&user1.verifying_key));
+
+        assert!(room.is_user_valid_at(&user1.verifying_key, valid_date));
+        assert!(!room.is_user_valid_at(&user1.verifying_key, valid_date - 1));
+
+        assert_eq!(1, room.users().len());
+    }
+
+    #[test]
+    fn authorisation_users() {
+        let valid_date: i64 = 10000;
+        let mut user1 = User {
+            verifying_key: random32().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
+
+        let mut auth: Authorisation = Authorisation::default();
+        auth.add_right(EntityRight {
+            valid_from: 0,
+            entity: "*".to_string(),
+            mutate_self: true,
+            mutate_all: true,
+        })
+        .unwrap();
+
+        auth.add_user(user1.clone()).unwrap();
+
+        assert!(!auth.can_admin_users(&user1.verifying_key, valid_date));
+
+        assert!(auth.can("anything", valid_date, &RightType::MutateAll));
+        assert!(auth.can("anything", valid_date - 1, &RightType::MutateAll));
+
+        let mut user_set = HashSet::new();
+        auth.get_users(&mut user_set);
+
+        assert_eq!(1, user_set.len());
+        assert!(auth.has_user(&user1.verifying_key));
+
+        assert!(!auth.is_user_valid_at(&user1.verifying_key, valid_date - 1));
+        assert!(auth.is_user_valid_at(&user1.verifying_key, valid_date));
+        assert!(auth.is_user_valid_at(&user1.verifying_key, valid_date + 1));
+
+        user1.date = 0;
+        auth.add_user(user1.clone())
+            .expect_err("cannot insert before an existing one");
+    }
+
+    #[test]
+    fn authorisation_user_admins() {
+        let valid_date: i64 = 10000;
+        let mut user1 = User {
+            verifying_key: random32().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
+
+        let mut auth: Authorisation = Authorisation::default();
+        auth.add_right(EntityRight {
+            valid_from: 0,
+            entity: "*".to_string(),
+            mutate_self: true,
+            mutate_all: true,
+        })
+        .unwrap();
+
+        auth.add_user_admin(user1.clone()).unwrap();
+
+        assert!(auth.can_admin_users(&user1.verifying_key, valid_date));
+
+        assert!(auth.can("anything", valid_date, &RightType::MutateAll));
+        assert!(auth.can("anything", valid_date - 1, &RightType::MutateAll));
+
+        let mut user_set = HashSet::new();
+        auth.get_users(&mut user_set);
+
+        assert_eq!(1, user_set.len());
+        assert!(auth.has_user(&user1.verifying_key));
+
+        assert!(!auth.is_user_valid_at(&user1.verifying_key, valid_date - 1));
+        assert!(auth.is_user_valid_at(&user1.verifying_key, valid_date));
+        assert!(auth.is_user_valid_at(&user1.verifying_key, valid_date + 1));
+
+        user1.date = 0;
+        auth.add_user_admin(user1.clone())
+            .expect_err("cannot insert before an existing one");
+    }
+
+    #[test]
+    fn room_auth() {
+        let valid_date: i64 = 10000;
+        let user = User {
+            verifying_key: random32().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
+
+        let mut auth: Authorisation = Authorisation {
+            id: new_uid(),
+            ..Default::default()
+        };
+        auth.add_right(EntityRight {
+            valid_from: 0,
+            entity: "*".to_string(),
+            mutate_self: true,
+            mutate_all: true,
+        })
+        .unwrap();
+        let mut room = Room::default();
+        assert!(!room.is_admin(&user.verifying_key, valid_date));
+
+        room.add_admin_user(user.clone()).unwrap();
+        //  auth.add_user_admin(user1.clone()).unwrap();
+        room.add_auth(auth.clone()).unwrap();
+        room.add_auth(auth.clone())
+            .expect_err("cannot insert twice");
+        assert!(room.can(
+            &user.verifying_key,
+            "any",
+            valid_date,
+            &RightType::MutateAll
+        ));
+
+        let user2 = User {
+            verifying_key: random32().to_vec(),
+            date: valid_date,
+            enabled: true,
+        };
+
+        let mut auth: Authorisation = Authorisation {
+            id: new_uid(),
+            ..Default::default()
+        };
+
+        auth.add_user(user2.clone()).unwrap();
+        auth.add_user_admin(User {
+            verifying_key: user.verifying_key.clone(),
+            date: valid_date,
+            enabled: false,
+        })
+        .unwrap();
+        auth.add_right(EntityRight {
+            valid_from: 0,
+            entity: "Person".to_string(),
+            mutate_self: true,
+            mutate_all: true,
+        })
+        .unwrap();
+
+        room.add_auth(auth).unwrap();
+
+        assert!(!room.can(
+            &user2.verifying_key,
+            "any",
+            valid_date,
+            &RightType::MutateAll
+        ));
+
+        assert!(room.can(
+            &user2.verifying_key,
+            "Person",
+            valid_date,
+            &RightType::MutateAll
+        ));
+        assert!(room.has_user(&user2.verifying_key));
+
+        assert!(room.is_user_valid_at(&user2.verifying_key, valid_date));
+        assert!(!room.is_user_valid_at(&user2.verifying_key, valid_date - 1));
+
+        assert_eq!(2, room.users().len());
+    }
+
+    #[test]
+    fn entity_right() {
+        let user_valid_date: i64 = 1000;
+        let user1 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let mut room = Room::default();
+        room.add_admin_user(user1.clone()).unwrap();
+
+        let mut auth = Authorisation::default();
+        auth.add_user(user1.clone()).unwrap();
+        assert!(auth.is_user_valid_at(&user1.verifying_key, user_valid_date));
+        assert!(!auth.is_user_valid_at(&user1.verifying_key, user_valid_date - 1));
+
+        let ent_date: i64 = 100;
+        let entity = "Person";
+        let person_right = EntityRight::new(ent_date, entity.to_string(), true, true);
+
+        auth.add_right(person_right).unwrap();
+
+        let person_right = EntityRight::new(ent_date - 1, entity.to_string(), true, true);
+
+        auth.add_right(person_right)
+            .expect_err("Cannot insert a right before an existing one");
+        let last_date = ent_date + 1000;
+        let person_right = EntityRight::new(last_date, entity.to_string(), false, false);
+        auth.add_right(person_right.clone()).unwrap();
+
+        room.add_auth(auth).unwrap();
+
+        //user is invalid at this date
+
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            ent_date,
+            &RightType::MutateSelf
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            ent_date,
+            &RightType::MutateAll
+        ));
+
+        //user is valid at this date
+        assert!(room.can(
+            &user1.verifying_key,
+            entity,
+            user_valid_date,
+            &RightType::MutateSelf
+        ));
+        assert!(room.can(
+            &user1.verifying_key,
+            entity,
+            user_valid_date,
+            &RightType::MutateAll
+        ));
+
+        //the last right disable it all
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            last_date,
+            &RightType::MutateSelf
+        ));
+        assert!(!room.can(
+            &user1.verifying_key,
+            entity,
+            last_date,
+            &RightType::MutateAll
+        ));
+    }
+
+    #[test]
+    fn get_room_for_user() {
+        let user_valid_date: i64 = 1000;
+        let user1 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let user2 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let user3 = User {
+            verifying_key: random32().to_vec(),
+            date: user_valid_date,
+            enabled: true,
+        };
+
+        let mut room = Room {
+            id: new_uid(),
+            ..Default::default()
+        };
+        room.add_admin_user(user1.clone()).unwrap();
+
+        let mut auth = Authorisation::default();
+        auth.add_user_admin(user2.clone()).unwrap();
+        auth.add_user(user3.clone()).unwrap();
+
+        room.add_auth(auth).unwrap();
+
+        let mut room_auth = RoomAuthorisations {
+            signing_key: Ed25519SigningKey::new(),
+            rooms: HashMap::new(),
+        };
+
+        room_auth.add_room(room);
+
+        let room_list = room_auth.rooms_for_user(&random32().to_vec(), user_valid_date);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user1.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user2.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user3.verifying_key, user_valid_date);
+        assert_eq!(1, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user1.verifying_key, 0);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user2.verifying_key, 0);
+        assert_eq!(0, room_list.len());
+
+        let room_list = room_auth.rooms_for_user(&user3.verifying_key, 0);
+        assert_eq!(0, room_list.len());
+    }
 }
