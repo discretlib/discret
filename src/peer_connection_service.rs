@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::{
@@ -27,7 +28,7 @@ use crate::{
 
 pub enum PeerConnectionMessage {
     NewPeer(
-        Vec<u8>,
+        ConnectionInfo,
         mpsc::Sender<Answer>,
         mpsc::Receiver<Answer>,
         mpsc::Sender<QueryProtocol>,
@@ -40,6 +41,15 @@ pub enum PeerConnectionMessage {
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
+
+#[derive(Serialize, Deserialize)]
+pub struct ConnectionInfo {
+    pub endpoint_id: Uid,
+    pub connnection_id: Uid,
+    pub verifying_key: Vec<u8>,
+    pub hardware_key: Option<[u8; 32]>,
+    pub hardware_name: Option<String>,
+}
 
 ///
 /// Handle the creation and removal of peers
@@ -141,7 +151,7 @@ impl PeerConnectionService {
     ) {
         match msg {
             PeerConnectionMessage::NewPeer(
-                hardware_id,
+                connection_info,
                 answer_sender,
                 answer_receiver,
                 query_sender,
@@ -153,7 +163,7 @@ impl PeerConnectionService {
 
                 let inbound_query_service = InboundQueryService::start(
                     RemotePeerHandle {
-                        hardware_id: hardware_id.clone(),
+                        hardware_id: connection_info.verifying_key.clone(),
                         db: local_db.clone(),
                         allowed_room: HashSet::new(),
                         reply: answer_sender,
@@ -170,7 +180,7 @@ impl PeerConnectionService {
                 LocalPeerService::start(
                     event_receiver,
                     local_event_broadcast,
-                    hardware_id,
+                    connection_info.verifying_key.clone(),
                     verifying_key.clone(),
                     local_db.clone(),
                     lock_service.clone(),
@@ -337,6 +347,8 @@ pub async fn listen_for_event(
 
 #[cfg(test)]
 pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnectionService) {
+    use crate::security::new_uid;
+
     let (peer1_answer_s, peer1_answer_r) = mpsc::channel::<Answer>(100);
     let (peer1_query_s, peer1_query_r) = mpsc::channel::<QueryProtocol>(100);
     let (peer1_event_s, peer1_event_r) = mpsc::channel::<RemoteEvent>(100);
@@ -345,10 +357,18 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     let (peer2_query_s, peer2_query_r) = mpsc::channel::<QueryProtocol>(100);
     let (peer2_event_s, peer2_event_r) = mpsc::channel::<RemoteEvent>(100);
 
+    let info1 = ConnectionInfo {
+        endpoint_id: new_uid(),
+        connnection_id: new_uid(),
+        verifying_key: random32().to_vec(),
+        hardware_key: None,
+        hardware_name: None,
+    };
+
     let _ = peer1
         .sender
         .send(PeerConnectionMessage::NewPeer(
-            random32().to_vec(),
+            info1,
             peer2_answer_s,
             peer1_answer_r,
             peer2_query_s,
@@ -358,10 +378,17 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
         ))
         .await;
 
+    let info1 = ConnectionInfo {
+        endpoint_id: new_uid(),
+        connnection_id: new_uid(),
+        verifying_key: random32().to_vec(),
+        hardware_key: None,
+        hardware_name: None,
+    };
     let _ = peer2
         .sender
         .send(PeerConnectionMessage::NewPeer(
-            random32().to_vec(),
+            info1,
             peer1_answer_s,
             peer2_answer_r,
             peer1_query_s,

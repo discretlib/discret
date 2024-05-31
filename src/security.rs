@@ -1,9 +1,8 @@
 use std::env;
 
+use crate::date_utils::now;
 use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
-
-use crate::date_utils::now;
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use sysinfo::{Networks, System};
@@ -206,23 +205,9 @@ impl VerifyingKey for Ed2519VerifyingKey {
     }
 }
 
-///
-/// generate self signed certificate to be used by the QUIC protocol
-/// self signed certificates are safe to use because this library does not relies on the certificate authority architecture to ensure privacy and encryption
-///
-pub fn generate_self_signed_certificate() -> (rustls::Certificate, rustls::PrivateKey) {
-    let mut param = rcgen::CertificateParams::new(vec!["".into()]);
-    param.alg = &rcgen::PKCS_ED25519;
-
-    let cert = rcgen::Certificate::from_params(param).unwrap();
-
-    let key = cert.serialize_private_key_der();
-    let signing_key = rustls::PrivateKey(key);
-
-    let cert = cert.serialize_der().unwrap();
-    let verifying_key = rustls::Certificate(cert);
-
-    (verifying_key, signing_key)
+pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
+    let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec!["".into()]).unwrap();
+    cert
 }
 
 pub fn random32() -> [u8; 32] {
@@ -232,6 +217,8 @@ pub fn random32() -> [u8; 32] {
     random
 }
 
+pub const MEETING_TOKEN_SIZE: usize = 6;
+pub type MeetingToken = [u8; MEETING_TOKEN_SIZE];
 ///
 /// Use Diffie Hellman to create an id to be used to announce yourself on the network to the other peers.
 /// The id is way too small to be secured, but it is big enougth to have a low collision rate
@@ -264,7 +251,7 @@ impl MeetingSecret {
         PublicKey::from(&self.secret)
     }
 
-    pub fn meeting_id(&self, their_public: &PublicKey) -> i64 {
+    pub fn meeting_id(&self, their_public: &PublicKey) -> MeetingToken {
         //if both public key are the same, it is the same user and hash the private key instead of using diffie hellman
         let hash = if their_public.eq(&self.public_key()) {
             hash(self.secret.as_bytes())
@@ -272,9 +259,9 @@ impl MeetingSecret {
             let df = self.secret.diffie_hellman(their_public);
             hash(df.as_bytes())
         };
-        let mut bytes = [0; 8];
-        bytes.copy_from_slice(&hash[0..8]);
-        i64::from_le_bytes(bytes)
+        let mut token: MeetingToken = [0; MEETING_TOKEN_SIZE];
+        token.copy_from_slice(&hash[0..MEETING_TOKEN_SIZE]);
+        token
     }
 }
 

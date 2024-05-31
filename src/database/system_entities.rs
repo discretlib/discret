@@ -3,9 +3,12 @@ use std::collections::HashSet;
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::{database::query::SingleQueryResult, Parameters, ParametersAdd, Uid};
+use crate::{Parameters, ParametersAdd, Uid};
 
-use super::{graph_database::GraphDatabaseService, node::Node, sqlite_database::Writeable, Error};
+use super::{
+    graph_database::GraphDatabaseService, node::Node, query::QueryResult,
+    sqlite_database::Writeable, Error,
+};
 
 pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
@@ -366,7 +369,7 @@ impl AllowedPeer {
         room_id: &str,
         public_key: &str,
         db: &GraphDatabaseService,
-    ) -> Result<Self, Error> {
+    ) -> Result<(), Error> {
         let query = "query {
             result: sys.Peer(room_id=$room_id, meeting_pub_key=$public_key){
                 id
@@ -379,13 +382,11 @@ impl AllowedPeer {
         param.add("public_key", public_key.to_string())?;
         let peer_str = db.query(query, Some(param)).await?;
 
-        let mut result: SingleQueryResult<Self> = serde_json::from_str(&peer_str)?;
-        if !result.result.is_empty() {
-            let res = result
-                .result
-                .pop()
-                .ok_or(Error::QueryParsing("Parsing 'Peer'".to_string()))?;
-            return Ok(res);
+        let query_result: QueryResult = QueryResult::new(&peer_str)?;
+        let result: Vec<Peer> = query_result.get("result").unwrap();
+
+        if !result.is_empty() {
+            return Ok(());
         }
 
         let mut param = Parameters::new();
@@ -405,20 +406,9 @@ impl AllowedPeer {
         let mut param = Parameters::new();
         param.add("room_id", room_id.to_string())?;
         param.add("public_key", public_key.to_string())?;
-        let peer_str = db.query(query, Some(param)).await?;
+        db.query(query, Some(param)).await?;
 
-        let mut result: SingleQueryResult<Self> = serde_json::from_str(&peer_str)?;
-        if result.result.is_empty() {
-            Err(Error::QueryParsing(
-                "Could not find Peer just inserted".to_string(),
-            ))
-        } else {
-            let res = result
-                .result
-                .pop()
-                .ok_or(Error::QueryParsing("Parsing 'Peer'".to_string()))?;
-            Ok(res)
-        }
+        Ok(())
     }
 }
 

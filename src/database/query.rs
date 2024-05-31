@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, ToSql};
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use crate::base64_decode;
 
@@ -24,17 +25,40 @@ pub struct Param {
 
 ///
 /// helper structure to parse the query result
-/// the query can only contain one query aliased with result
-/// the generic must me desialisable and contains the proper fields
-/// query {
-///     result: sys.Room{
-///         id
-///     }
-/// }
 ///
-#[derive(Serialize, Deserialize)]
-pub struct SingleQueryResult<T> {
-    pub result: Vec<T>,
+pub struct QueryResult {
+    parsed: Value,
+}
+impl QueryResult {
+    pub fn new(result: &str) -> Result<Self> {
+        let parsed: Value = serde_json::from_str(result)?;
+        Ok(Self { parsed })
+    }
+    //T: DeserializeOwned
+    pub fn get<T: DeserializeOwned>(&self, field_name: &str) -> Result<Vec<T>> {
+        let mut re = Vec::new();
+        let obj = self.parsed.as_object();
+        if obj.is_none() {
+            return Err(Error::InvalidJsonObject("".to_string()));
+        }
+        let obj = obj.unwrap();
+        let field = obj.get(field_name);
+        if field.is_none() {
+            return Err(Error::MissingJsonField(field_name.to_string()));
+        }
+        let field = field.unwrap();
+        let field_array = field.as_array();
+        if field_array.is_none() {
+            return Err(Error::InvalidJSonArray(field_name.to_string()));
+        }
+        let field_array = field_array.unwrap();
+        for value in field_array.clone() {
+            let entry: T = serde_json::from_value(value)?;
+            re.push(entry);
+        }
+
+        Ok(re)
+    }
 }
 
 #[derive(Debug, Default)]

@@ -42,7 +42,6 @@ mod database;
 mod date_utils;
 mod event_service;
 mod log_service;
-mod message;
 mod network;
 mod peer_connection_service;
 mod security;
@@ -54,6 +53,7 @@ use event_service::EventService;
 use log_service::LogService;
 use peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
+use serde::{Deserialize, Serialize};
 use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -82,6 +82,9 @@ pub enum Error {
     DatabaseError(#[from] crate::database::Error),
 
     #[error(transparent)]
+    NetworkError(#[from] crate::network::Error),
+
+    #[error(transparent)]
     ParsingError(#[from] crate::database::query_language::Error),
 
     #[error(transparent)]
@@ -107,6 +110,7 @@ pub enum Error {
 
     #[error("Invalid account")]
     InvalidAccount,
+
     #[error("An account allready exists")]
     AccountExists,
 

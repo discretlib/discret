@@ -51,6 +51,9 @@ pub enum Error {
     #[error("Missing json field {0}")]
     MissingJsonField(String),
 
+    #[error("Field is not an array {0}")]
+    InvalidJSonArray(String),
+
     #[error("{0}")]
     DatabaseWrite(String),
 

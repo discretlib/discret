@@ -2,9 +2,11 @@
 mod tests {
 
     use rusqlite::Connection;
+    use serde::Deserialize;
 
     use std::sync::Arc;
 
+    use crate::database::query::QueryResult;
     use crate::database::system_entities::SYSTEM_DATA_MODEL;
     use crate::security::{uid_encode, Ed25519SigningKey};
     use crate::database::sqlite_database::Writeable;
@@ -1960,6 +1962,79 @@ mod tests {
         //println!("{:#?}",&result);
         let expected = "{\n\"ns.Person\":[]\n}";
         assert_eq!(expected, result);
+    }
+
+
+
+    #[test]
+    fn query_result() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String,
+                    comment : String,
+                }
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutation mutmut {
+                P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
+                P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
+                P3: ns.Person { name:"Bob" comment:"A completely different comment" }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mut param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                ns.Person(order_by(name ASC)) {
+                    name
+                    comment
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+
+        #[derive(Deserialize)]
+        struct Person{
+            pub name:String,
+            pub comment: String
+        }
+
+        let query_result = QueryResult::new(&result).unwrap();
+        let persons: Vec<Person> = query_result.get("ns.Person").unwrap();
+
+        assert_eq!(3, persons.len());
+        assert_eq!("Alice", persons[0].name);
+        assert_eq!("Bob", persons[1].name);
+        assert_eq!("John", persons[2].name);
     }
 
 }

@@ -1,7 +1,8 @@
 use bincode;
 
-use super::error::Error;
-use crate::message::Message;
+use super::message::Message;
+use super::Error;
+
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
