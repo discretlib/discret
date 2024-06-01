@@ -690,7 +690,7 @@ mod tests {
         let _mutation = MutationParser::parse(
             r#"
             //comment
-            mutation mutmut {
+            mutate {
                 //comment
                 Person { //comment
                     //comment
@@ -741,7 +741,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 Person {
                     id : $id
                     name : [{id : $pet_id}]
@@ -754,7 +754,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 Person {
                     id : $id
                     name : {id : $pet_id}
@@ -767,7 +767,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 Person {
                     id : $id
                     name: $name
@@ -781,7 +781,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 Person {
                     id : $id
                     weight : true
@@ -794,7 +794,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 Person {
                     id : $id
                     weight : 1
@@ -807,7 +807,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id : $id
                     weight : 1.12
@@ -820,7 +820,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id : "qsdgqzaddfq"
                     
@@ -833,7 +833,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id : "emV0emV0"
                     
@@ -861,7 +861,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : $name
                 }
@@ -873,7 +873,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                Person: ns.Person {
                     name : $name
                 }
@@ -885,7 +885,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -912,7 +912,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     name : $name2
@@ -941,7 +941,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -956,7 +956,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -971,7 +971,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -989,7 +989,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -1026,7 +1026,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     surname : $name
                 }
@@ -1038,7 +1038,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -1050,7 +1050,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     some_person : null
@@ -1063,7 +1063,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     parents : null
@@ -1093,7 +1093,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     someone : {name:"hello"}
@@ -1141,7 +1141,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     someone : {
@@ -1207,7 +1207,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -1219,7 +1219,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "invalid JSON"
                 }
@@ -1231,7 +1231,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "[1,2,3,4]"
                 }
@@ -1258,7 +1258,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -1270,7 +1270,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "invalid BASE 64%$"
                 }
@@ -1282,7 +1282,7 @@ mod tests {
 
         let _ = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "JVBQS0pP"
                 }
@@ -1312,7 +1312,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     surname : $name
                 }
@@ -1324,7 +1324,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id: $id
                     surname : $name
@@ -1354,7 +1354,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     age : $age
                 }
@@ -1366,7 +1366,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "hello"
                 }
@@ -1378,7 +1378,7 @@ mod tests {
 
         let _mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "hello"
                     parents : [{name:"world"}]
@@ -1406,7 +1406,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $age
                 }

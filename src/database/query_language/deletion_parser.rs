@@ -204,7 +204,7 @@ mod tests {
         let deletion = DeletionParser::parse(
             "
             //comment
-            deletion delete_person {
+            delete delete_person {
                 //comment
                 del1: Person {
                     //comment
@@ -281,7 +281,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion  {
+            delete  {
                 ns.Pet {
                     $id3
                 }
@@ -294,7 +294,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion  {
+            delete  {
                 pets : ns.Pet {
                     $id3
                 }
@@ -330,7 +330,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion  {
+            delete  {
                 pet {
                     $id3
                 }
@@ -343,7 +343,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion  {
+            delete  {
                 Pet {
                     $id3
                 }
@@ -356,7 +356,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion {
+            delete {
                 Person {
                     $id1
                     Parent[$id2]
@@ -372,7 +372,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion {
+            delete {
                 Person {
                     $id1
                     parent[$id2]
@@ -386,7 +386,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion {
+            delete {
                 Person {
                     $id1
                     parent[]
@@ -422,7 +422,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_person{
+            delete delete_person{
                 Person {
                     $id1
                     surname[$id2]
@@ -434,7 +434,7 @@ mod tests {
 
         let _ = DeletionParser::parse(
             "
-            deletion delete_person{
+            delete delete_person{
                 Person {
                     $id1
                     parent[$id2]

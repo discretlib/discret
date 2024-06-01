@@ -704,7 +704,7 @@ mod tests {
 
         let room = first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$first_user_id
@@ -738,7 +738,7 @@ mod tests {
         param.add("room_id", room_id_b64.clone()).unwrap();
         let mutat = first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 P1: Person{
                     room_id: $room_id
                     name: "me"

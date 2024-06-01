@@ -53,9 +53,10 @@ use event_service::EventService;
 use log_service::LogService;
 use peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
-use serde::{Deserialize, Serialize};
+
 use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::{runtime::Runtime, sync::broadcast};
 
@@ -153,7 +154,7 @@ impl Discret {
         configuration: Configuration,
     ) -> std::result::Result<Self, Error> {
         let meeting_secret_key =
-            derive_key(&format!("{}{}", "MeetingSecret", app_key,), key_material);
+            derive_key(&format!("{}{}", "MEETING_SECRET", app_key,), key_material);
         let meeting_secret = MeetingSecret::new(meeting_secret_key);
 
         let pub_key = meeting_secret.public_key();
@@ -278,12 +279,35 @@ impl Discret {
     }
 }
 
+struct BlockingRuntime {
+    rt: Option<Runtime>,
+}
+impl BlockingRuntime {
+    pub fn new() -> Self {
+        Self { rt: None }
+    }
+    pub fn rt(&mut self) -> std::result::Result<&Runtime, Error> {
+        if self.rt.is_none() {
+            self.rt = Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?,
+            );
+        }
+        Ok(self.rt.as_ref().unwrap())
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref TOKIO_BLOCKING: Arc<Mutex<BlockingRuntime>> =
+    Arc::new(Mutex::new(BlockingRuntime::new()));
+}
 ///
-/// Provides a blocking
+/// Provides a blocking API
 ///
 ///
+#[derive(Clone)]
 pub struct DiscretBlocking {
-    rt: Runtime,
     discret: Discret,
 }
 impl DiscretBlocking {
@@ -294,11 +318,7 @@ impl DiscretBlocking {
         data_folder: PathBuf,
         configuration: Configuration,
     ) -> std::result::Result<Self, Error> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-
-        let discret = rt.block_on(Discret::new(
+        let discret = TOKIO_BLOCKING.lock().unwrap().rt()?.block_on(Discret::new(
             datamodel,
             app_key,
             key_material,
@@ -306,7 +326,7 @@ impl DiscretBlocking {
             configuration,
         ))?;
 
-        Ok(Self { rt, discret })
+        Ok(Self { discret })
     }
 
     pub fn delete(
@@ -314,7 +334,11 @@ impl DiscretBlocking {
         deletion: &str,
         param_opt: Option<Parameters>,
     ) -> std::result::Result<(), Error> {
-        self.rt.block_on(self.discret.delete(deletion, param_opt))
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.delete(deletion, param_opt))
     }
 
     pub async fn mutate(
@@ -322,7 +346,11 @@ impl DiscretBlocking {
         mutation: &str,
         param_opt: Option<Parameters>,
     ) -> std::result::Result<MutationResult, Error> {
-        self.rt.block_on(self.discret.mutate(mutation, param_opt))
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.mutate(mutation, param_opt))
     }
 
     pub async fn query(
@@ -330,7 +358,11 @@ impl DiscretBlocking {
         query: &str,
         param_opt: Option<Parameters>,
     ) -> std::result::Result<String, Error> {
-        self.rt.block_on(self.discret.query(query, param_opt))
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.query(query, param_opt))
     }
 
     pub fn verifying_key(&self) -> &Vec<u8> {
@@ -342,14 +374,26 @@ impl DiscretBlocking {
     }
 
     pub fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {
-        self.rt.block_on(self.discret.update_data_model(datamodel))
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.update_data_model(datamodel))
     }
 
     pub fn data_model(&self) -> std::result::Result<String, Error> {
-        self.rt.block_on(self.discret.data_model())
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.data_model())
     }
 
-    pub fn log_subscribe(&self) -> broadcast::Receiver<Log> {
-        self.rt.block_on(self.discret.log_subscribe())
+    pub fn log_subscribe(&self) -> std::result::Result<broadcast::Receiver<Log>, Error> {
+        Ok(TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.log_subscribe()))
     }
 }

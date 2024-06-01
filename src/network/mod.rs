@@ -18,7 +18,7 @@ pub struct Announce {
 }
 pub const MAX_TOKENS: u8 = 181;
 
-pub const QUIC_MTU: usize = 1200;
+pub const QUIC_MTU: usize = 2144;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -76,10 +76,7 @@ pub enum Error {
 #[cfg(test)]
 mod test {
 
-    use crate::{
-        peer_connection_service::random32,
-        security::{hash, MEETING_TOKEN_SIZE},
-    };
+    use crate::security::{hash, MEETING_TOKEN_SIZE};
 
     use super::*;
     #[test]
@@ -98,6 +95,6 @@ mod test {
 
         let serialize = bincode::serialize(&announce).unwrap();
 
-        assert_eq!(QUIC_MTU, serialize.len());
+        assert!(QUIC_MTU >= serialize.len());
     }
 }

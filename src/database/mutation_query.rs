@@ -399,7 +399,7 @@ impl MutationQuery {
 
         if mutas.len() != inserts.len() {
             return Err(Error::Query(String::from(
-                "mutation query and InsertEntity result lenght are not equal",
+                "mutate query and InsertEntity result lenght are not equal",
             )));
         }
 
@@ -419,7 +419,7 @@ impl MutationQuery {
 
         if mutas.len() != inserts.len() {
             return Err(Error::Query(String::from(
-                "mutation query and InsertEntity result lenght are not equal",
+                "mutate query and InsertEntity result lenght are not equal",
             )));
         }
 
@@ -671,7 +671,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : $name
                     age: $age
@@ -717,7 +717,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                 }
@@ -763,7 +763,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : $name
                 }
@@ -816,7 +816,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     parents : [
@@ -877,7 +877,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "Me"
                     pet: [  
@@ -914,7 +914,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id:$person_id
                     pet: [  
@@ -995,7 +995,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "Me"
                     pet: [  
@@ -1107,7 +1107,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id:$person_id
                     pet: [  
@@ -1167,7 +1167,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id:$person_id
                     pet: [  
@@ -1224,7 +1224,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     id:$person_id
                     pet: [  

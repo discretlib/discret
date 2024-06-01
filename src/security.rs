@@ -33,6 +33,7 @@ pub enum Error {
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 /// used by the quic protocol
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
+
 ///
 /// when exporting a key the first byte is a flag indicating the public key algorithm used
 /// currenlty useless but might become usefull in the future to implement new key algorithms
@@ -251,7 +252,7 @@ impl MeetingSecret {
         PublicKey::from(&self.secret)
     }
 
-    pub fn meeting_id(&self, their_public: &PublicKey) -> MeetingToken {
+    pub fn token(&self, their_public: &PublicKey) -> MeetingToken {
         //if both public key are the same, it is the same user and hash the private key instead of using diffie hellman
         let hash = if their_public.eq(&self.public_key()) {
             hash(self.secret.as_bytes())
@@ -259,6 +260,16 @@ impl MeetingSecret {
             let df = self.secret.diffie_hellman(their_public);
             hash(df.as_bytes())
         };
+        let mut token: MeetingToken = [0; MEETING_TOKEN_SIZE];
+        token.copy_from_slice(&hash[0..MEETING_TOKEN_SIZE]);
+        token
+    }
+
+    /// derive a token from a string context and a secret
+    /// provided by the Blake3 hash function  
+    ///
+    pub fn derive_token(context: &str, key_material: &[u8]) -> MeetingToken {
+        let hash = blake3::derive_key(context, key_material);
         let mut token: MeetingToken = [0; MEETING_TOKEN_SIZE];
         token.copy_from_slice(&hash[0..MEETING_TOKEN_SIZE]);
         token
@@ -307,16 +318,6 @@ pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
     blake3::derive_key(context, key_material)
 }
 
-/// derive a ket from a string context and a secret
-/// provided by the Blake3 hash function  
-///
-pub fn derive_uid(context: &str, key_material: &[u8]) -> Uid {
-    let hash = blake3::derive_key(context, key_material);
-    let mut uid = default_uid();
-    uid.copy_from_slice(&hash[0..UID_SIZE]);
-    uid
-}
-
 ///
 /// encode bytes into a base 64 String
 ///
@@ -349,6 +350,16 @@ pub fn new_uid() -> Uid {
     one.copy_from_slice(time);
     OsRng.fill_bytes(two);
 
+    uid
+}
+
+/// derive a ket from a string context and a secret
+/// provided by the Blake3 hash function  
+///
+pub fn derive_uid(context: &str, key_material: &[u8]) -> Uid {
+    let hash = blake3::derive_key(context, key_material);
+    let mut uid = default_uid();
+    uid.copy_from_slice(&hash[0..UID_SIZE]);
     uid
 }
 
@@ -472,8 +483,8 @@ mod tests {
         let peer1_public: PublicKey = bincode::deserialize(&peer1_public).unwrap();
         let peer2_public: PublicKey = bincode::deserialize(&peer2_public).unwrap();
 
-        let id1 = peer2.meeting_id(&peer1_public);
-        let id2 = peer1.meeting_id(&peer2_public);
+        let id1 = peer2.token(&peer1_public);
+        let id2 = peer1.token(&peer2_public);
         assert_eq!(id1, id2);
     }
 

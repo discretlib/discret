@@ -1,13 +1,22 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Write};
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
-use crate::{Parameters, ParametersAdd, Uid};
+use crate::{
+    base64_encode,
+    security::{Ed25519SigningKey, MeetingToken},
+    Parameters, ParametersAdd, Uid,
+};
 
 use super::{
-    graph_database::GraphDatabaseService, node::Node, query::QueryResult,
-    sqlite_database::Writeable, Error,
+    edge::Edge,
+    graph_database::GraphDatabaseService,
+    node::Node,
+    query::QueryResult,
+    sqlite_database::{Database, Writeable},
+    Error,
 };
 
 pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -77,7 +86,9 @@ pub const RIGHT_ENTITY_SHORT: &str = "32";
 pub const RIGHT_MUTATE_SELF_SHORT: &str = "33";
 pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
-pub const SYSTEM_DATA_MODEL: &str = "
+pub const ALLOWED_PEER_PEER_SHORT: &str = "32";
+
+pub const SYSTEM_DATA_MODEL: &str = r#"
 sys{
     // Entities for the authorisation model
     Room {
@@ -106,11 +117,14 @@ sys{
     //Entities for the peer connection
     Peer {
         meeting_pub_key: Base64 ,
+        name: String default "anonymous",
+        ext: Json default "{}",
         index(verifying_key)
     }
 
     AllowedPeer{
         peer: sys.Peer,
+        meeting_token: Base64,
         enabled: Boolean default true,
     }
 
@@ -122,7 +136,6 @@ sys{
     InboundInvitation{
         invite_id: Base64,
         beacons: [sys.Beacon],
-        static_adress: String nullable,
         signature: Base64,
     }
 
@@ -135,7 +148,7 @@ sys{
     Beacon{
         address : String,
     }
-}";
+}"#;
 
 pub fn sys_room_entities() -> Vec<String> {
     vec![
@@ -363,15 +376,48 @@ pub struct AllowedPeer {
     id: String,
     peer: Peer,
     enabled: bool,
+    meeting_token: String,
 }
 impl AllowedPeer {
+    pub fn create(id: Uid, room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
+        let json = format!(
+            r#"{{ 
+                "meeting_token": "{}",
+                "enabled": true
+            }}"#,
+            token
+        );
+
+        let node = Node {
+            id,
+            room_id: Some(room_id),
+            cdate: 0,
+            mdate: 0,
+            _entity: ALLOWED_PEER_ENT_SHORT.to_string(),
+            _json: Some(json),
+            ..Default::default()
+        };
+
+        let edge = Edge {
+            src: id,
+            src_entity: ALLOWED_PEER_ENT_SHORT.to_string(),
+            label: ALLOWED_PEER_PEER_SHORT.to_string(),
+            dest: peer_id,
+            cdate: 0,
+            ..Default::default()
+        };
+
+        (node, edge)
+    }
+
     pub async fn add(
         room_id: &str,
         public_key: &str,
+        _meeting_token: String,
         db: &GraphDatabaseService,
     ) -> Result<(), Error> {
         let query = "query {
-            result: sys.Peer(room_id=$room_id, meeting_pub_key=$public_key){
+            result: sys.Peer(meeting_pub_key=$public_key){
                 id
                 verifying_key
                 meeting_pub_key
@@ -394,7 +440,7 @@ impl AllowedPeer {
         param.add("public_key", public_key.to_string())?;
 
         db.mutate(
-            "mutation {
+            "mutate {
                 result: sys.Peer{
                     room_id: $room_id
                     meeting_pub_key: public_key
@@ -410,6 +456,67 @@ impl AllowedPeer {
 
         Ok(())
     }
+}
+
+pub struct AllowedPeerWriter(pub Node, pub Edge);
+impl Writeable for AllowedPeerWriter {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.0.write(conn, false, &None, &None)?;
+        self.1.write(conn)?;
+        Ok(())
+    }
+}
+pub async fn init_allowed_peers(
+    database: &Database,
+    peer_uid: Uid,
+    public_key: &[u8; 32],
+    allowed_uid: Uid,
+    private_room_id: Uid,
+    token: MeetingToken,
+    signing_key: &Ed25519SigningKey,
+) -> Result<(), Error> {
+    //init peer entity
+    let (reply, receive) = oneshot::channel::<Result<bool, Error>>();
+    database
+        .reader
+        .send_async(Box::new(move |conn| {
+            let room_node = Node::exist(&peer_uid, PEER_ENT_SHORT, conn);
+            let _ = reply.send(room_node);
+        }))
+        .await?;
+    let exists = receive.await??;
+    if !exists {
+        let mut peer_node = Peer::create(peer_uid, base64_encode(public_key));
+        peer_node.sign(signing_key)?;
+        database.writer.write(Box::new(peer_node)).await?;
+    }
+
+    //init allowed_peer entity
+    let (reply, receive) = oneshot::channel::<Result<bool, Error>>();
+    database
+        .reader
+        .send_async(Box::new(move |conn| {
+            let room_node = Node::exist(&allowed_uid, ALLOWED_PEER_ENT_SHORT, conn);
+            let _ = reply.send(room_node);
+        }))
+        .await?;
+    let exists = receive.await??;
+
+    if !exists {
+        let (mut all_node, mut all_edge) = AllowedPeer::create(
+            allowed_uid,
+            private_room_id,
+            base64_encode(&token),
+            peer_uid,
+        );
+        all_node.sign(signing_key)?;
+        all_edge.sign(signing_key)?;
+
+        let writer = AllowedPeerWriter(all_node, all_edge);
+        database.writer.write(Box::new(writer)).await?;
+    }
+
+    Ok(())
 }
 
 pub struct AllowedHardware {
@@ -442,12 +549,20 @@ pub struct Beacon {
 
 #[cfg(test)]
 mod tests {
-    use crate::security::Ed25519SigningKey;
+    use crate::event_service::EventService;
+    use crate::Configuration;
+    use crate::{peer_connection_service::random32, security::Ed25519SigningKey};
 
     use crate::database::sqlite_database::prepare_connection;
 
     use super::*;
 
+    use std::{fs, path::PathBuf};
+    const DATA_PATH: &str = "test_data/database/system_entities/";
+    fn init_database_path() {
+        let path: PathBuf = DATA_PATH.into();
+        fs::create_dir_all(&path).unwrap();
+    }
     #[test]
     fn peer() {
         let conn1 = Connection::open_in_memory().unwrap();
@@ -487,5 +602,27 @@ mod tests {
 
         let missing = Peer::get_missing(peers, &conn2).unwrap();
         assert_eq!(missing.len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inti_allowed_peer() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let pub_key = &random32();
+
+        let (first_app, verifying_key, private_room) = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            &pub_key,
+            path,
+            &Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+        let first_user_id = base64_encode(&verifying_key);
     }
 }

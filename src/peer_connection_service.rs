@@ -3,8 +3,9 @@ use std::{
     sync::Arc,
 };
 
+use quinn::Connection;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 use crate::{
     base64_encode,
@@ -28,6 +29,7 @@ use crate::{
 
 pub enum PeerConnectionMessage {
     NewPeer(
+        Option<Connection>,
         ConnectionInfo,
         mpsc::Sender<Answer>,
         mpsc::Receiver<Answer>,
@@ -151,6 +153,7 @@ impl PeerConnectionService {
     ) {
         match msg {
             PeerConnectionMessage::NewPeer(
+                _connection,
                 connection_info,
                 answer_sender,
                 answer_receiver,
@@ -368,6 +371,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     let _ = peer1
         .sender
         .send(PeerConnectionMessage::NewPeer(
+            None,
             info1,
             peer2_answer_s,
             peer1_answer_r,
@@ -388,6 +392,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     let _ = peer2
         .sender
         .send(PeerConnectionMessage::NewPeer(
+            None,
             info1,
             peer1_answer_s,
             peer2_answer_r,

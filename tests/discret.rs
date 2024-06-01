@@ -29,7 +29,7 @@ async fn minimal() {
 
     let mut_result = app
         .mutate(
-            r#"mutation {
+            r#"mutate {
                 result: Greetings{
                     message: "Hello World"
                 }

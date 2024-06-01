@@ -588,7 +588,7 @@ mod tests {
 
         let room = app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id
@@ -635,7 +635,7 @@ mod tests {
         let _ = app
             .mutate_raw(
                 r#"
-        mutation mutmut {
+        mutate mutmut {
             P2: Person {room_id:$room_id name:"Alice" parents:[{name:"someone"}] }
             P3: Person {room_id:$room_id name:"Bob"  parents:[{name:"some_other"}] }
         } "#,

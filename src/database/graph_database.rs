@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
 use super::mutation_query::MutationResult;
 use super::sqlite_database::WriteStmt;
-use super::system_entities::{self, Peer, PeerNodes, PEER_ENT_SHORT};
+use super::system_entities::{self, Peer, PeerNodes};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -26,6 +26,7 @@ use super::{
     Error, Result,
 };
 
+use crate::security::{MeetingSecret, MeetingToken};
 use crate::{
     configuration::Configuration,
     date_utils::now,
@@ -73,10 +74,10 @@ impl GraphDatabaseService {
             mpsc::channel::<Message>(configuration.parallel_room_synch);
         //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
 
-        let system_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
+        let private_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
 
         let mut db = GraphDatabase::new(
-            system_room_id,
+            private_room_id,
             public_key,
             datamodel,
             app_key,
@@ -182,7 +183,7 @@ impl GraphDatabaseService {
                 db: database,
             },
             verifying_key,
-            system_room_id,
+            private_room_id,
         ))
     }
 
@@ -654,7 +655,7 @@ struct GraphDatabase {
 }
 impl GraphDatabase {
     pub async fn new(
-        system_room_id: Uid,
+        private_room_id: Uid,
         public_key: &[u8; 32],
         model: &str,
         app_key: &str,
@@ -667,11 +668,11 @@ impl GraphDatabase {
 
         let database_secret = derive_key("DATABASE_SECRET", &signature_key);
 
-        let database_name = derive_key("DATABASE_NAME", &database_secret);
+        let database_key = derive_key("DATABASE_NAME", &database_secret);
 
         let signing_key = Ed25519SigningKey::create_from(&signature_key);
         let verifying_key = signing_key.export_verifying_key();
-        let database_path = build_path(data_folder, &base64_encode(&database_name))?;
+        let database_path = build_path(data_folder, &base64_encode(&database_key))?;
 
         let graph_database = Database::start(
             &database_path,
@@ -689,9 +690,20 @@ impl GraphDatabase {
 
         let data_model = DataModel::new();
 
-        let peer_uid = derive_uid("PEER_UID", public_key);
+        let peer_uid = derive_uid("PEER_UID", &database_key);
+        let allowed_uid = derive_uid("ALLOWED_PEER_UID", &database_key);
+        let token: MeetingToken = MeetingSecret::derive_token("MEETING_TOKEN", &database_key);
 
-        init_allowed_peers(&graph_database, peer_uid, public_key, &signing_key).await?;
+        system_entities::init_allowed_peers(
+            &graph_database,
+            peer_uid,
+            public_key,
+            allowed_uid,
+            private_room_id,
+            token,
+            &signing_key,
+        )
+        .await?;
         // let allowed_peer_uid = derive_uid("ALLOWED_PEER_UID", &public_key);
         // let peer_node = Peer::create(peer_uid, meeting_pub_key);
 
@@ -702,7 +714,7 @@ impl GraphDatabase {
 
         // create the system room associated the user
         auth.create_system_room(
-            system_room_id,
+            private_room_id,
             system_entities::sys_room_entities(),
             &graph_database.writer,
         )
@@ -1061,28 +1073,6 @@ impl GraphDatabase {
     }
 }
 
-async fn init_allowed_peers(
-    graph_database: &Database,
-    peer_uid: [u8; 16],
-    public_key: &[u8; 32],
-    signing_key: &Ed25519SigningKey,
-) -> Result<()> {
-    let (reply, receive) = oneshot::channel::<Result<bool>>();
-    graph_database
-        .reader
-        .send_async(Box::new(move |conn| {
-            let room_node = Node::exist(&peer_uid, PEER_ENT_SHORT, conn);
-            let _ = reply.send(room_node);
-        }))
-        .await?;
-    let exists = receive.await??;
-    Ok(if !exists {
-        let mut peer_node = Peer::create(peer_uid, base64_encode(public_key));
-        peer_node.sign(signing_key)?;
-        graph_database.writer.write(Box::new(peer_node)).await?;
-    })
-}
-
 struct QueryCacheEntry {
     parser: Arc<QueryParser>,
     prepared_query: Arc<PreparedQueries>,
@@ -1144,7 +1134,7 @@ mod tests {
 
         app.mutate_raw(
             r#"
-        mutation mutmut {
+        mutate mutmut {
             P2: Person { name:"Alice"  }
             P3: Person { name:"Bob"  }
         } "#,
@@ -1192,7 +1182,7 @@ mod tests {
         let res = app
             .mutate_raw(
                 r#"
-        mutation mutmut {
+        mutate mutmut {
             P2: Person { name:"Alice"  }
             P3: Person { name:"Bob"  }
         } "#,
@@ -1205,7 +1195,7 @@ mod tests {
 
         let mut param = Parameters::new();
         param.add("id", base64_encode(e)).unwrap();
-        app.delete("deletion del {Person{$id}}", Some(param))
+        app.delete("delete {Person{$id}}", Some(param))
             .await
             .unwrap();
 
@@ -1430,7 +1420,7 @@ mod tests {
         param.add("room_id", uid_encode(&room_id)).unwrap();
 
         app.mutate(
-            r#"mutation{
+            r#"mutate{
                 ns.Person{
                     room_id : $room_id
                     name : "test"
@@ -1444,7 +1434,7 @@ mod tests {
         let mut param = Parameters::new();
         param.add("room_id", uid_encode(&room_id)).unwrap();
         app.mutate(
-            r#"mutation{
+            r#"mutate{
                 sys.Beacon{
                         room_id : $room_id
                         address : "test"

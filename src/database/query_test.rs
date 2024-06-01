@@ -41,7 +41,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     age: $age
@@ -160,7 +160,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "hello"
                 }
@@ -275,7 +275,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : "hello"
                 }
@@ -354,7 +354,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person {
                     name : $name
                     parents:  [
@@ -450,7 +450,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : $name
                     parents:  [
@@ -544,7 +544,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : $name
                     age : $age
@@ -753,7 +753,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : "John"
                     age: 23
@@ -868,7 +868,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 ns.Person {
                     name : "John" 
                     surname : "John"
@@ -939,7 +939,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation  {
+           mutate {
                 P1: ns.Person { age:24 weight:45 nat:"us" }
                 P2: ns.Person { age:12 weight:23 nat:"us" }
                 P3: ns.Person { age:45 weight:86 nat:"fr" }
@@ -1074,7 +1074,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
                 P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
                 P3: ns.Person { name:"Bob" comment:"A completely different comment" }
@@ -1139,7 +1139,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
                 P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
                 P3: ns.Person { name:"Bob" comment:"A completely different comment" }
@@ -1203,7 +1203,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P2: ns.Person { name:"Alice"  }
                 P3: ns.Person { name:"Bob" def:"A completely different" }
             } "#,
@@ -1304,7 +1304,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P2: ns.Person { name:"Alice" data:"{\"val\":\"hello json\"}" }
                 P3: ns.Person { name:"Bob" data:"[1,2,3,4]" }
             } "#,
@@ -1460,7 +1460,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person {
                     name : "John"
                     parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
@@ -1580,7 +1580,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person {
                     name : "John"
                     parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
@@ -1685,7 +1685,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 auth: sys.Peer {
                     meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
@@ -1820,7 +1820,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 auth: sys.Peer {
                     meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
@@ -1837,7 +1837,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 auth: sys.Room {
                     authorisations: [{
                         name:"admin"
@@ -1857,7 +1857,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person {
                     room_id : $room_id
                     name : "John"
@@ -1984,7 +1984,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: ns.Person { name:"John" comment:"Lorem ipsum sit doler et ames" }
                 P2: ns.Person { name:"Alice" comment:"Lorem lorem ipsum " }
                 P3: ns.Person { name:"Bob" comment:"A completely different comment" }

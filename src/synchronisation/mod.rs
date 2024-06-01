@@ -175,7 +175,7 @@ mod tests {
         let room = first_peer
             .db
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 sys.Room{
                     admin: [{
                         verif_key:$first_id
@@ -289,7 +289,7 @@ mod tests {
         let room = first_peer
             .db
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 sys.Room{
                     admin: [{
                         verif_key:$first_id
@@ -324,7 +324,7 @@ mod tests {
         first_peer
             .db
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     Person{
                         room_id: $room_id
                         name: "someone"
@@ -341,7 +341,7 @@ mod tests {
         first_peer
             .db
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     Person{
                         room_id: $room_id
                         name: "another"

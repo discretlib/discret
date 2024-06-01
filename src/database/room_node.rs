@@ -978,7 +978,7 @@ mod tests {
 
         let room = app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id
@@ -1069,7 +1069,7 @@ mod tests {
 
         let room = app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id
@@ -1135,7 +1135,7 @@ mod tests {
 
         let room = app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room {
                         admin: [{
                             verif_key:$user_id
@@ -1164,7 +1164,7 @@ mod tests {
         param.add("user_id", user_id.clone()).unwrap();
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
-            r#"mutation mut {
+            r#"mutate mut {
                 sys.Room{
                     id:$room_id
                     authorisations:[{
@@ -1189,7 +1189,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
-            r#"mutation mut {
+            r#"mutate mut {
             Person{
                 room_id: $room_id
                 name:"someone"
@@ -1208,7 +1208,7 @@ mod tests {
         let mut param = Parameters::default();
         param.add("room_id", room_id.clone()).unwrap();
         app.mutate_raw(
-            r#"mutation  {
+            r#"mutate  {
             Person{
                 room_id: $room_id
                 name:"someone 2"
@@ -1283,7 +1283,7 @@ mod tests {
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id
@@ -1331,7 +1331,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
             Person{
                 room_id: $room_id
                 name:"someone"
@@ -1347,7 +1347,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 Person{
                     room_id: $room_id
                     name:"someone"
@@ -1367,7 +1367,7 @@ mod tests {
 
         first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 sys.Room{
                     id:$room_id
                     authorisations:[{
@@ -1391,7 +1391,7 @@ mod tests {
 
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         id:$room_id
                         authorisations:[{
@@ -1422,7 +1422,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 Person{
                     room_id: $room_id
                     name:"someone"
@@ -1442,7 +1442,7 @@ mod tests {
 
         first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         id:$room_id
                         authorisations:[{
@@ -1476,7 +1476,7 @@ mod tests {
         param.add("room_id", room_id.clone()).unwrap();
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 Person{
                     room_id: $room_id
                     name:"someone"
@@ -1526,7 +1526,7 @@ mod tests {
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id
@@ -1556,7 +1556,7 @@ mod tests {
         param.add("second_user", second_user_id.clone()).unwrap();
         first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         id: $room_id
                         admin: [{
@@ -1574,7 +1574,7 @@ mod tests {
         param.add("second_user", second_user_id.clone()).unwrap();
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                         sys.Room{
                             id: $room_id
                             admin: [{
@@ -1604,7 +1604,7 @@ mod tests {
 
         first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 sys.Room{
                     id: $room_id
                     admin: [{
@@ -1624,7 +1624,7 @@ mod tests {
 
         second_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                 sys.Room{
                     id: $room_id
                     admin: [{
@@ -1695,7 +1695,7 @@ mod tests {
         param.add("user_id", first_user_id.clone()).unwrap();
         let room = first_app
             .mutate_raw(
-                r#"mutation mut {
+                r#"mutate mut {
                     sys.Room{
                         admin: [{
                             verif_key:$user_id

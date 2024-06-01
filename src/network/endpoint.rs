@@ -183,6 +183,7 @@ impl DiscretEndpoint {
         let info: ConnectionInfo = bincode::deserialize(&buf)?;
 
         Self::start_channels(
+            new_conn,
             peer_service,
             info,
             answer_send,
@@ -310,6 +311,7 @@ impl DiscretEndpoint {
         event_send.write_all(&conn_info).await?;
 
         Self::start_channels(
+            conn,
             peer_service,
             info,
             answer_send,
@@ -325,6 +327,7 @@ impl DiscretEndpoint {
     }
 
     async fn start_channels(
+        conn: Connection,
         peer_service: &PeerConnectionService,
         info: ConnectionInfo,
         mut answer_send: SendStream,
@@ -347,16 +350,15 @@ impl DiscretEndpoint {
                 let len: usize = len.unwrap().try_into().unwrap();
                 if buffer.capacity() < len {
                     buffer.reserve_exact(len - buffer.capacity());
-                } else {
-                    buffer.shrink_to(len);
                 }
 
-                let answer_bytes = answer_receiv.read_exact(&mut buffer).await;
+                let answer_bytes = answer_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
                     break;
                 }
 
-                let answer: Result<Answer, Box<bincode::ErrorKind>> = bincode::deserialize(&buffer);
+                let answer: Result<Answer, Box<bincode::ErrorKind>> =
+                    bincode::deserialize(&buffer[0..len]);
                 if answer.is_err() {
                     break;
                 }
@@ -403,17 +405,15 @@ impl DiscretEndpoint {
 
                 if buffer.capacity() < len {
                     buffer.reserve_exact(len - buffer.capacity());
-                } else {
-                    buffer.shrink_to(len);
                 }
 
-                let answer_bytes = query_receiv.read(&mut buffer).await;
+                let answer_bytes = query_receiv.read(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
                     break;
                 }
 
                 let query: Result<QueryProtocol, Box<bincode::ErrorKind>> =
-                    bincode::deserialize(&buffer);
+                    bincode::deserialize(&buffer[0..len]);
                 if query.is_err() {
                     break;
                 }
@@ -458,17 +458,15 @@ impl DiscretEndpoint {
 
                 if buffer.capacity() < len {
                     buffer.reserve_exact(len - buffer.capacity());
-                } else {
-                    buffer.shrink_to(len);
                 }
 
-                let answer_bytes = event_receiv.read(&mut buffer).await;
+                let answer_bytes = event_receiv.read(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
                     break;
                 }
 
                 let event: Result<RemoteEvent, Box<bincode::ErrorKind>> =
-                    bincode::deserialize(&buffer);
+                    bincode::deserialize(&buffer[0..len]);
                 if event.is_err() {
                     break;
                 }
@@ -502,6 +500,7 @@ impl DiscretEndpoint {
         let _ = peer_service
             .sender
             .send(PeerConnectionMessage::NewPeer(
+                Some(conn),
                 info,
                 out_answer_sd,
                 in_answer_rcv,

@@ -163,7 +163,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 P1: Person { name:"John"  }
                 P2: Person { name:"Alice"  }
                 P3: Person { name:"Bob"  }
@@ -214,7 +214,7 @@ mod tests {
 
         let deletion = DeletionParser::parse(
             "
-            deletion delete_person {
+            delete delete_person {
                 Person { $id0 }
                 Person { $id1 }
                 Person { $id2 }
@@ -273,7 +273,7 @@ mod tests {
 
         let mutation = MutationParser::parse(
             r#"
-            mutation mutmut {
+            mutate {
                 Person { name:"John" parents:[{name:"Alice"},{name:"Bob"}]  }
             } "#,
             &data_model,
@@ -329,7 +329,7 @@ mod tests {
 
         let deletion = DeletionParser::parse(
             "
-            deletion delete_person {
+            delete delete_person {
                 Person { $src parents[$p0,$p1] }
             }
           ",
