@@ -261,11 +261,11 @@ impl PeerConnectionService {
                     ))
                     .await;
             }
-            PeerConnectionMessage::NewPeer(_peers) => todo!(),
-            PeerConnectionMessage::ConnectionCandidate(s, _meeting_token, _certificate_hash) => {
+            PeerConnectionMessage::NewPeer(_peers) => {}
+            PeerConnectionMessage::ConnectionCandidate(_s, _meeting_token, _certificate_hash) => {
                 // s.
 
-                todo!()
+                //todo!()
             }
         }
     }

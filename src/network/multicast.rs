@@ -209,13 +209,12 @@ mod test {
         let _ = sender.send(ann.clone()).await;
         let received = receiver.recv().await.unwrap()?;
 
-        let mut ipr = &multicast_adress.ip();
+        let mut _ipr = &multicast_adress.ip();
         match &received {
             Message::MulticastCandidates { ip, announce } => {
                 assert_eq!(announce.as_ref(), &ann);
-                ipr = ip;
+                _ipr = ip;
             }
-            _ => {}
         }
 
         //sleep enought time for one announce
@@ -224,9 +223,8 @@ mod test {
         match &msg {
             Message::MulticastCandidates { ip, announce } => {
                 assert_eq!(announce.as_ref(), &ann);
-                assert_eq!(ip, ipr);
+                assert_eq!(ip, _ipr);
             }
-            _ => {}
         }
         assert_eq!(received, msg);
         Ok(())
