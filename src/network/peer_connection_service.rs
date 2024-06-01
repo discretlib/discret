@@ -1,22 +1,20 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     sync::Arc,
 };
 
 use quinn::Connection;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+
+use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::{
-    base64_encode,
-    database::{
-        graph_database::GraphDatabaseService,
-        system_entities::{AllowedPeer, Peer},
-    },
+    database::{graph_database::GraphDatabaseService, system_entities::AllowedPeer},
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
-    security::{uid_encode, MeetingSecret, Uid},
+    security::{MeetingSecret, MeetingToken, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -24,11 +22,11 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    Parameters, ParametersAdd, Result,
+    Result,
 };
 
 pub enum PeerConnectionMessage {
-    NewPeer(
+    NewConnection(
         Option<Connection>,
         ConnectionInfo,
         mpsc::Sender<Answer>,
@@ -40,6 +38,8 @@ pub enum PeerConnectionMessage {
     ),
     PeerConnected(Vec<u8>, Vec<u8>),
     PeerDisconnected(Vec<u8>, Vec<u8>),
+    NewPeer(Vec<Uid>),
+    ConnectionCandidate(SocketAddr, [u8; 32], Vec<MeetingToken>),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
@@ -53,6 +53,38 @@ pub struct ConnectionInfo {
     pub hardware_name: Option<String>,
 }
 
+pub struct Peers {
+    pub private_room_id: Uid,
+    pub verifying_key: Vec<u8>,
+    pub meeting_secret: MeetingSecret,
+    pub allowed_peers: Vec<AllowedPeer>,
+    pub inbound_invites: Vec<String>,
+    pub proposed_invites: Vec<String>,
+    pub connected: HashMap<[u8; 32], String>,
+    pub connected_token: HashMap<MeetingToken, [u8; 32]>,
+}
+impl Peers {
+    pub async fn new(
+        db: GraphDatabaseService,
+        private_room_id: Uid,
+        verifying_key: Vec<u8>,
+        meeting_secret: MeetingSecret,
+    ) -> Result<Self> {
+        let allowed_peers = db.get_allowed_peers(private_room_id).await?;
+
+        Ok(Self {
+            private_room_id,
+            verifying_key,
+            meeting_secret,
+            allowed_peers,
+            inbound_invites: Vec::new(),
+            proposed_invites: Vec::new(),
+            connected: HashMap::new(),
+            connected_token: HashMap::new(),
+        })
+    }
+}
+
 ///
 /// Handle the creation and removal of peers
 ///
@@ -61,10 +93,10 @@ pub struct PeerConnectionService {
     pub sender: mpsc::Sender<PeerConnectionMessage>,
 }
 impl PeerConnectionService {
-    pub fn start(
+    pub async fn start(
         verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
-        system_room_id: Uid,
+        private_room_id: Uid,
         db: GraphDatabaseService,
         events: EventService,
         logs: LogService,
@@ -77,7 +109,9 @@ impl PeerConnectionService {
         let lock_service = RoomLockService::start(max_concurent_synchronisation);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
-        //let local_allowed_peer =    Self::init_local_peer(system_room_id, verifying_key, meeting_secret, &db)?;
+
+        Peers::new(db.clone(), private_room_id, verifying_key, meeting_secret).await?;
+
         tokio::spawn(async move {
             let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
             let mut event_receiver = events.subcribe().await;
@@ -86,7 +120,7 @@ impl PeerConnectionService {
                     msg = connection_receiver.recv() =>{
                         match msg{
                             Some(msg) =>{
-                                Self::process_connection(
+                                Self::process_peer_message(
                                     msg,
                                     &db,
                                     &events,
@@ -140,7 +174,7 @@ impl PeerConnectionService {
             .await;
     }
 
-    async fn process_connection(
+    async fn process_peer_message(
         msg: PeerConnectionMessage,
         local_db: &GraphDatabaseService,
         event_service: &EventService,
@@ -152,7 +186,7 @@ impl PeerConnectionService {
         peer_map: &mut HashMap<Vec<u8>, HashSet<Vec<u8>>>,
     ) {
         match msg {
-            PeerConnectionMessage::NewPeer(
+            PeerConnectionMessage::NewConnection(
                 _connection,
                 connection_info,
                 answer_sender,
@@ -226,6 +260,12 @@ impl PeerConnectionService {
                         hardware_id,
                     ))
                     .await;
+            }
+            PeerConnectionMessage::NewPeer(_peers) => todo!(),
+            PeerConnectionMessage::ConnectionCandidate(s, _meeting_token, _certificate_hash) => {
+                // s.
+
+                todo!()
             }
         }
     }
@@ -370,7 +410,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
 
     let _ = peer1
         .sender
-        .send(PeerConnectionMessage::NewPeer(
+        .send(PeerConnectionMessage::NewConnection(
             None,
             info1,
             peer2_answer_s,
@@ -391,7 +431,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     };
     let _ = peer2
         .sender
-        .send(PeerConnectionMessage::NewPeer(
+        .send(PeerConnectionMessage::NewConnection(
             None,
             info1,
             peer1_answer_s,
@@ -451,6 +491,7 @@ mod tests {
                 SignatureVerificationService::start(2),
                 10,
             )
+            .await
             .unwrap();
             Self {
                 event,

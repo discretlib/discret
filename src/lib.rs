@@ -43,7 +43,7 @@ mod date_utils;
 mod event_service;
 mod log_service;
 mod network;
-mod peer_connection_service;
+
 mod security;
 mod signature_verification_service;
 mod synchronisation;
@@ -51,7 +51,7 @@ mod synchronisation;
 use database::graph_database::GraphDatabaseService;
 use event_service::EventService;
 use log_service::LogService;
-use peer_connection_service::PeerConnectionService;
+use network::peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
 
 use signature_verification_service::SignatureVerificationService;
@@ -185,7 +185,8 @@ impl Discret {
             log.clone(),
             signature_service,
             10,
-        )?;
+        )
+        .await?;
 
         Ok(Self {
             db,

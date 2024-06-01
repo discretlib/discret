@@ -26,7 +26,7 @@ use crate::{
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
-    peer_connection_service::PeerConnectionService,
+    network::peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{base64_encode, random32, Uid},
     signature_verification_service::SignatureVerificationService,
 };
@@ -197,7 +197,9 @@ impl LocalPeerService {
                                     event_service.clone(),
                                     log_service.clone(),
                                     lock_service.clone(),
-                                    verify_service.clone())
+                                    verify_service.clone(),
+                                    peer_service.clone(),
+                                )
                                     .await {
                                         log_service.error("LocalPeerService Lock".to_string(),e);
                                         break;
@@ -300,10 +302,21 @@ impl LocalPeerService {
         log_service: LogService,
         lock_service: RoomLockService,
         verify_service: SignatureVerificationService,
+        peer_service: PeerConnectionService,
     ) -> Result<(), crate::Error> {
         tokio::spawn(async move {
-            acquired_lock.lock().await.insert(room.clone());
-            match Self::synchronise_room(room.clone(), &db, &query_service, &verify_service).await {
+            {
+                acquired_lock.lock().await.insert(room.clone());
+            }
+            match Self::synchronise_room(
+                room.clone(),
+                &db,
+                &query_service,
+                &verify_service,
+                peer_service,
+            )
+            .await
+            {
                 Ok(_) => {
                     event_service
                         .notify(EventServiceMessage::RoomSynchronized(room.clone()))
@@ -328,6 +341,7 @@ impl LocalPeerService {
         db: &GraphDatabaseService,
         query_service: &QueryService,
         verify_service: &SignatureVerificationService,
+        peer_service: PeerConnectionService,
     ) -> Result<(), crate::Error> {
         let remote_room_def: Option<RoomDefinitionLog> =
             Self::query(query_service, Query::RoomDefinition(room_id)).await?;
@@ -354,8 +368,14 @@ impl LocalPeerService {
             Query::PeerNodes(room_id, missing_peers.into_iter().collect()),
         )
         .await?;
+        let new_peers: Vec<Uid> = peer_nodes.iter().map(|n| n.id).collect();
         let peer_nodes: Vec<Node> = verify_service.verify_nodes(peer_nodes).await?;
         db.add_peer_nodes(peer_nodes).await?;
+
+        let _ = peer_service
+            .sender
+            .send(PeerConnectionMessage::NewPeer(new_peers))
+            .await;
 
         if Self::synchronise_room_data(
             &remote_room,

@@ -19,12 +19,18 @@ use tokio::{
 
 use crate::{
     log_service::LogService,
-    peer_connection_service::{ConnectionInfo, PeerConnectionMessage, PeerConnectionService},
+    network::peer_connection_service::{
+        ConnectionInfo, PeerConnectionMessage, PeerConnectionService,
+    },
     security::{self, hash, new_uid, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
 use super::Error;
+/// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
+/// used by the quic protocol
+pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
+
 static MAX_CONNECTION_RETRY: usize = 3;
 
 static CHANNEL_SIZE: usize = 4;
@@ -51,19 +57,20 @@ impl DiscretEndpoint {
         log: LogService,
         verifying_key: Vec<u8>,
     ) -> Result<Self, Error> {
+        let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
         let (hardware_key, hardware_name) = security::hardware_fingerprint();
         let (sender, mut connection_receiver) = mpsc::channel::<EndpointMessage>(20);
         let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
 
         let addr = "0.0.0.0:0".parse()?;
-        let ipv4_endpoint = build_endpoint(addr, cert)?;
+        let ipv4_endpoint = build_endpoint(addr, cert, cert_verifier.clone())?;
         let ipv4_port = ipv4_endpoint.local_addr()?.port();
 
         let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
         let addr = "[::]:0".parse()?;
 
-        let ipv6_endpoint = build_endpoint(addr, cert);
+        let ipv6_endpoint = build_endpoint(addr, cert, cert_verifier.clone());
         let (ipv6_endpoint, ipv6_port) = match ipv6_endpoint {
             Ok(end) => {
                 let ipv6_port = end.local_addr()?.port();
@@ -81,6 +88,7 @@ impl DiscretEndpoint {
                 match msg {
                     EndpointMessage::InitiateConnection(address, cert_hash, send_hardware) => {
                         Self::initiate_connection(
+                            cert_verifier.clone(),
                             endpoint_id,
                             address,
                             cert_hash,
@@ -199,6 +207,7 @@ impl DiscretEndpoint {
     }
 
     fn initiate_connection(
+        cert_verifier: Arc<ServerCertVerifier>,
         endpoint_id: Uid,
         address: SocketAddr,
         cert_hash: [u8; 32],
@@ -211,7 +220,7 @@ impl DiscretEndpoint {
         hardware_key: &[u8; 32],
         hardware_name: &str,
     ) {
-        add_valid_certificate(cert_hash);
+        cert_verifier.add_valid_certificate(cert_hash);
         let log = log.clone();
         let endpoint = if address.is_ipv4() {
             ipv4_endpoint.clone()
@@ -499,7 +508,7 @@ impl DiscretEndpoint {
 
         let _ = peer_service
             .sender
-            .send(PeerConnectionMessage::NewPeer(
+            .send(PeerConnectionMessage::NewConnection(
                 Some(conn),
                 info,
                 out_answer_sd,
@@ -516,6 +525,7 @@ impl DiscretEndpoint {
 pub fn build_endpoint(
     bind_addr: SocketAddr,
     certificate: rcgen::CertifiedKey,
+    cert_verifier: Arc<ServerCertVerifier>,
 ) -> Result<Endpoint, Error> {
     let cert_der = CertificateDer::from(certificate.cert);
     let priv_key = PrivatePkcs8KeyDer::from(certificate.key_pair.serialize_der());
@@ -523,7 +533,7 @@ pub fn build_endpoint(
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], priv_key.into())?;
 
-    server_crypto.alpn_protocols = security::ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
+    server_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
 
     let mut server_config =
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
@@ -531,33 +541,17 @@ pub fn build_endpoint(
     transport_config.max_concurrent_uni_streams(0_u8.into());
 
     let mut endpoint = Endpoint::server(server_config, bind_addr)?;
-    endpoint.set_default_client_config(client_tls_config()?);
-    Ok(endpoint)
-}
-/// Constructs a QUIC endpoint configured for use a client only.
-///
-/// ## Args
-///
-/// - server_certs: list of trusted certificates.
-pub fn client_ipv4() -> Result<Endpoint, Error> {
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())?;
-    endpoint.set_default_client_config(client_tls_config()?);
+    endpoint.set_default_client_config(client_tls_config(cert_verifier)?);
     Ok(endpoint)
 }
 
-pub fn client_ipv6() -> Result<Endpoint, Error> {
-    let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())?;
-    endpoint.set_default_client_config(client_tls_config()?);
-    Ok(endpoint)
-}
-
-fn client_tls_config() -> Result<ClientConfig, Error> {
+fn client_tls_config(cert_verifier: Arc<ServerCertVerifier>) -> Result<ClientConfig, Error> {
     let mut tls_config = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(ServerCertVerifier::new())
+        .with_custom_certificate_verifier(cert_verifier)
         .with_no_client_auth();
 
-    tls_config.alpn_protocols = security::ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
+    tls_config.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
 
     let quick_client_config = Arc::new(QuicClientConfig::try_from(tls_config)?);
 
@@ -577,29 +571,32 @@ lazy_static::lazy_static! {
     Arc::new(Mutex::new(HashSet::new()));
 }
 
-pub fn add_valid_certificate(certificate: [u8; 32]) {
-    let mut v = VALID_CERTIFICATES.lock().unwrap();
-    v.insert(certificate);
-}
-
-pub fn remove_valid_certificate(sert_hash: &[u8; 32]) {
-    let mut v = VALID_CERTIFICATES.lock().unwrap();
-    v.remove(sert_hash);
-}
 #[derive(Debug)]
 pub struct ServerCertVerifier {
     provider: rustls::crypto::CryptoProvider,
+    valid_certificates: Mutex<HashSet<[u8; 32]>>,
 }
 
 impl ServerCertVerifier {
     pub fn new() -> Arc<ServerCertVerifier> {
         Arc::new(ServerCertVerifier {
             provider: rustls::crypto::ring::default_provider(),
+            valid_certificates: Mutex::new(HashSet::new()),
         })
     }
     pub fn contains(&self, cert: &[u8]) -> bool {
-        let v = VALID_CERTIFICATES.lock().unwrap();
+        let v = self.valid_certificates.lock().unwrap();
         v.contains(cert)
+    }
+
+    pub fn add_valid_certificate(&self, certificate: [u8; 32]) {
+        let mut v = self.valid_certificates.lock().unwrap();
+        v.insert(certificate);
+    }
+
+    pub fn remove_valid_certificate(&self, sert_hash: &[u8; 32]) {
+        let mut v = self.valid_certificates.lock().unwrap();
+        v.remove(sert_hash);
     }
 }
 
@@ -669,9 +666,10 @@ mod tests {
         let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
         let der = cert.cert.der().deref();
         let hash = hash(der);
-        add_valid_certificate(hash);
+        let cert_verifier = ServerCertVerifier::new();
+        cert_verifier.add_valid_certificate(hash);
 
-        let endpoint = build_endpoint(addr, cert).unwrap();
+        let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
         let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
             let incoming_conn = endpoint.accept().await.unwrap();
@@ -682,7 +680,7 @@ mod tests {
             );
         });
         let cert = security::generate_x509_certificate();
-        let endpoint = build_endpoint(addr, cert).unwrap();
+        let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("127.0.0.1:{}", localadree.port()).parse().unwrap();
 
         let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
@@ -700,9 +698,10 @@ mod tests {
         let cert = security::generate_x509_certificate();
         let der = cert.cert.der().deref();
         let hash = hash(der);
-        add_valid_certificate(hash);
+        let cert_verifier = ServerCertVerifier::new();
+        cert_verifier.add_valid_certificate(hash);
 
-        let endpoint = build_endpoint(addr, cert).unwrap();
+        let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
         let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
             let incoming_conn = endpoint.accept().await.unwrap();
@@ -712,8 +711,8 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-
-        let endpoint = client_ipv6().unwrap();
+        let cert = security::generate_x509_certificate();
+        let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
         let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
@@ -735,10 +734,8 @@ mod tests {
         let cert = security::generate_x509_certificate();
         //let pub_key = cert.key_pair.public_key_der();
         // the server's certificate is not added to the valid list
-        // add_valid_certificate(pub_key.clone());
-        //add_valid_public_key(pub_key);
-
-        let endpoint = build_endpoint(addr, cert).unwrap();
+        let cert_verifier = ServerCertVerifier::new();
+        let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
 
         let localadree = endpoint.local_addr().unwrap();
         tokio::spawn(async move {
@@ -748,7 +745,8 @@ mod tests {
                 .expect_err("connection should have failed due to invalid certificate");
         });
 
-        let endpoint = client_ipv6().unwrap();
+        let cert = security::generate_x509_certificate();
+        let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
         endpoint

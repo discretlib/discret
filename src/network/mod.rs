@@ -2,15 +2,16 @@ pub mod endpoint;
 pub mod error;
 pub mod message;
 pub mod multicast;
-
+pub mod peer_connection_service;
 use serde::{Deserialize, Serialize};
 use std::io;
 use thiserror::Error;
 
-use crate::security::MeetingToken;
+use crate::{security::MeetingToken, Uid};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Announce {
+    endpoint_id: Uid,
     port: u16,
     certificate_hash: [u8; 32],
     signature: Vec<u8>,

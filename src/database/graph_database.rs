@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
 use super::mutation_query::MutationResult;
 use super::sqlite_database::WriteStmt;
-use super::system_entities::{self, Peer, PeerNodes};
+use super::system_entities::{self, AllowedPeer, Peer, PeerNodes};
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -26,7 +26,7 @@ use super::{
     Error, Result,
 };
 
-use crate::security::{MeetingSecret, MeetingToken};
+use crate::security::{uid_encode, MeetingSecret, MeetingToken};
 use crate::{
     configuration::Configuration,
     date_utils::now,
@@ -640,6 +640,13 @@ impl GraphDatabaseService {
             }))
             .await?;
         receive.await?
+    }
+
+    ///
+    /// retrieve id of users defined in room users but not in the sys.Peer entity
+    ///
+    pub async fn get_allowed_peers(&self, room_id: Uid) -> Result<Vec<AllowedPeer>> {
+        AllowedPeer::get(uid_encode(&room_id), &self).await
     }
 }
 

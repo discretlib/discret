@@ -30,10 +30,6 @@ pub enum Error {
     Uid(),
 }
 
-/// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
-/// used by the quic protocol
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
-
 ///
 /// when exporting a key the first byte is a flag indicating the public key algorithm used
 /// currenlty useless but might become usefull in the future to implement new key algorithms

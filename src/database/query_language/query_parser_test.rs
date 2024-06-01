@@ -1179,7 +1179,7 @@ mod tests {
                 Person  {
                     name
                     sys_peer {
-                        meeting_pub_key
+                        pub_key
                     }
                 }
             } "#,

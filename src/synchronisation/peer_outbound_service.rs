@@ -11,7 +11,7 @@ use tokio::sync::{
 
 use crate::{
     database::graph_database::GraphDatabaseService, log_service::LogService,
-    peer_connection_service::PeerConnectionService, security::Uid,
+    network::peer_connection_service::PeerConnectionService, security::Uid,
 };
 
 use super::{Answer, Error, ProveAnswer, Query, QueryProtocol};
@@ -85,6 +85,7 @@ impl InboundQueryService {
 
             Query::RoomList => {
                 let key = verifying_key.lock().await;
+
                 if !key.is_empty() {
                     let res = peer.load_allowed_room(key.clone()).await;
                     match res {

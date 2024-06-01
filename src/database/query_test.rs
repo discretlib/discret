@@ -1773,7 +1773,7 @@ mod tests {
             r#"
             mutate {
                 auth: sys.Peer {
-                    meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
+                    pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
 
                 P1: ns.Person {
@@ -1805,12 +1805,12 @@ mod tests {
                 ns.Person (order_by(name asc)) {
                     name
                     sys_peer{
-                        meeting_pub_key
+                        pub_key
                     }
                     parents (order_by(name asc)) {
                         name  
                         sys_peer{
-                            meeting_pub_key
+                            pub_key
                         }
                     }
                 }
@@ -1832,7 +1832,7 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
         //println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
         
       
@@ -1841,13 +1841,13 @@ mod tests {
             query sample{
                 ns.Person (order_by(name asc),  nullable(sys_peer)) {
                     name
-                    sys_peer (meeting_pub_key="cXNkcXNkcXM",){
-                        meeting_pub_key
+                    sys_peer (pub_key="cXNkcXNkcXM",){
+                        pub_key
                     }
                     parents (order_by(name asc)) {
                         name  
                         sys_peer{
-                            meeting_pub_key
+                            pub_key
                         }
                     }
                 }
@@ -1869,7 +1869,7 @@ mod tests {
         };
         let result = sql.read(&conn).unwrap();
        // println!("{:#?}",&result);
-        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":null,\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":null,\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"meeting_pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
+        let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":null,\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":null,\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
          
 
@@ -1908,7 +1908,7 @@ mod tests {
             r#"
             mutate {
                 auth: sys.Peer {
-                    meeting_pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
+                    pub_key: "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
                 }
             } "#,
             &data_model,

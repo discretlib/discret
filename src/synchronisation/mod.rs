@@ -98,7 +98,7 @@ mod tests {
         },
         event_service::{Event, EventService},
         log_service::LogService,
-        peer_connection_service::{
+        network::peer_connection_service::{
             connect_peers, listen_for_event, EventFn, Log, LogFn, PeerConnectionService,
         },
         security::{base64_encode, random32, MeetingSecret, Uid},
@@ -144,6 +144,7 @@ mod tests {
                 SignatureVerificationService::start(2),
                 10,
             )
+            .await
             .unwrap();
             Self {
                 event,

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Write};
+use std::collections::HashSet;
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -164,11 +164,10 @@ pub fn sys_room_entities() -> Vec<String> {
     ]
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct Peer {
-    id: String,
-    verifying_key: String,
-    meeting_pub_key: String,
+    pub id: String,
+    pub verifying_key: String,
 }
 impl Peer {
     pub fn create(id: Uid, meeting_pub_key: String) -> Node {
@@ -375,12 +374,11 @@ impl Writeable for PeerNodes {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct AllowedPeer {
-    id: String,
-    peer: Peer,
-    enabled: bool,
-    meeting_token: String,
+    pub peer: Peer,
+    pub enabled: bool,
+    pub meeting_token: String,
 }
 impl AllowedPeer {
     pub fn create(id: Uid, room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
@@ -416,24 +414,48 @@ impl AllowedPeer {
 
     pub async fn add(
         room_id: &str,
-        public_key: &str,
-        _meeting_token: String,
+        verifying_key: &str,
+        meeting_token: &str,
         db: &GraphDatabaseService,
     ) -> Result<(), Error> {
         let query = "query {
-            result: sys.Peer(meeting_pub_key=$public_key){
+            result: sys.Peer(verifying_key=$key){
                 id
                 verifying_key
-                pub_key
+            }";
+
+        let mut param = Parameters::new();
+        param.add("verifying_key", verifying_key.to_string())?;
+
+        let peer_str = db.query(query, Some(param)).await?;
+
+        let query_result: QueryResult = QueryResult::new(&peer_str)?;
+        let result: Vec<Peer> = query_result.get("result")?;
+
+        if result.is_empty() {
+            return Err(Error::UnknownPeer());
+        }
+
+        let peer_id = &result[0].id;
+
+        let query = "query {
+            result: sys.AllowedPeer(room_id=$room_id){
+                meeting_token
+                enabled
+                peer(
+                    id=$peer_id
+                ){
+                    id
+                    verifying_key
+                }
             }";
 
         let mut param = Parameters::new();
         param.add("room_id", room_id.to_string())?;
-        param.add("public_key", public_key.to_string())?;
+        param.add("peer_id", peer_id.to_string())?;
         let peer_str = db.query(query, Some(param)).await?;
-
         let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let result: Vec<Peer> = query_result.get("result").unwrap();
+        let result: Vec<AllowedPeer> = query_result.get("result")?;
 
         if !result.is_empty() {
             return Ok(());
@@ -441,24 +463,46 @@ impl AllowedPeer {
 
         let mut param = Parameters::new();
         param.add("room_id", room_id.to_string())?;
-        param.add("public_key", public_key.to_string())?;
-
+        param.add("peer_id", peer_id.to_string())?;
+        param.add("meeting_token", meeting_token.to_string())?;
         db.mutate(
             "mutate {
-                result: sys.Peer{
+                result: sys.AllowedPeer{
                     room_id: $room_id
-                    pub_key: public_key
+                    meeting_token: $meeting_token
+                    enabled: true
+                    peer: {id:$peer_id}
                 }",
             Some(param),
         )
         .await?;
 
-        let mut param = Parameters::new();
-        param.add("room_id", room_id.to_string())?;
-        param.add("public_key", public_key.to_string())?;
-        db.query(query, Some(param)).await?;
-
         Ok(())
+    }
+
+    pub async fn get(
+        room_id: String,
+        db: &GraphDatabaseService,
+    ) -> Result<Vec<AllowedPeer>, Error> {
+        let query = "query {
+            result: sys.AllowedPeer(room_id=$room_id){
+                meeting_token
+                enabled
+                peer {
+                    id
+                    verifying_key
+                }
+            }
+        }";
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+
+        let peer_str = db.query(query, Some(param)).await?;
+        let query_result: QueryResult = QueryResult::new(&peer_str)?;
+        let result: Vec<AllowedPeer> = query_result.get("result")?;
+
+        Ok(result)
     }
 }
 
@@ -553,9 +597,9 @@ pub struct Beacon {
 
 #[cfg(test)]
 mod tests {
-    use crate::event_service::EventService;
+    use crate::security::Ed25519SigningKey;
     use crate::Configuration;
-    use crate::{peer_connection_service::random32, security::Ed25519SigningKey};
+    use crate::{event_service::EventService, security::random32};
 
     use crate::database::sqlite_database::prepare_connection;
 
@@ -723,5 +767,29 @@ mod tests {
             .unwrap();
         //ensure that we get the same result when creating a database with the same credentials
         assert_eq!(res, base_result);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_allowed() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let pub_key = &random32();
+
+        let (app, _verifying_key, private_room) = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            &pub_key,
+            path.clone(),
+            &Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+
+        let list = app.get_allowed_peers(private_room).await.unwrap();
+        assert_eq!(1, list.len());
     }
 }
