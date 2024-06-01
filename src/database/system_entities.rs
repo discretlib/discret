@@ -86,7 +86,11 @@ pub const RIGHT_ENTITY_SHORT: &str = "32";
 pub const RIGHT_MUTATE_SELF_SHORT: &str = "33";
 pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
+pub const PEER_PUB_KEY_SHORT: &str = "32";
+
 pub const ALLOWED_PEER_PEER_SHORT: &str = "32";
+pub const ALLOWED_PEER_TOKEN_SHORT: &str = "33";
+pub const ALLOWED_PEER_ENABLED_SHORT: &str = "34";
 
 pub const SYSTEM_DATA_MODEL: &str = r#"
 sys{
@@ -116,7 +120,7 @@ sys{
 
     //Entities for the peer connection
     Peer {
-        meeting_pub_key: Base64 ,
+        pub_key: Base64 ,
         name: String default "anonymous",
         ext: Json default "{}",
         index(verifying_key)
@@ -170,9 +174,9 @@ impl Peer {
     pub fn create(id: Uid, meeting_pub_key: String) -> Node {
         let json = format!(
             r#"{{ 
-                "meeting_pub_key": "{}" 
+                "{}": "{}" 
             }}"#,
-            meeting_pub_key
+            PEER_PUB_KEY_SHORT, meeting_pub_key
         );
 
         let node = Node {
@@ -382,10 +386,10 @@ impl AllowedPeer {
     pub fn create(id: Uid, room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
         let json = format!(
             r#"{{ 
-                "meeting_token": "{}",
-                "enabled": true
+                "{}": "{}",
+                "{}": true
             }}"#,
-            token
+            ALLOWED_PEER_TOKEN_SHORT, token, ALLOWED_PEER_ENABLED_SHORT
         );
 
         let node = Node {
@@ -420,7 +424,7 @@ impl AllowedPeer {
             result: sys.Peer(meeting_pub_key=$public_key){
                 id
                 verifying_key
-                meeting_pub_key
+                pub_key
             }";
 
         let mut param = Parameters::new();
@@ -443,7 +447,7 @@ impl AllowedPeer {
             "mutate {
                 result: sys.Peer{
                     room_id: $room_id
-                    meeting_pub_key: public_key
+                    pub_key: public_key
                 }",
             Some(param),
         )
@@ -605,14 +609,88 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn inti_allowed_peer() {
+    async fn init_allowed_peer() {
         init_database_path();
 
         let path: PathBuf = DATA_PATH.into();
         let secret = random32();
         let pub_key = &random32();
 
-        let (first_app, verifying_key, private_room) = GraphDatabaseService::start(
+        let base_result = {
+            let (app, _verifying_key, _private_room) = GraphDatabaseService::start(
+                "authorisation app",
+                "",
+                &secret,
+                &pub_key,
+                path.clone(),
+                &Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+
+            let res = app
+                .query(
+                    "query {
+                    sys.AllowedPeer{
+                        meeting_token
+                        enabled
+                        peer {
+                            id
+                            mdate
+                            cdate
+                            verifying_key
+                            pub_key
+                        }
+                    }
+                }",
+                    None,
+                )
+                .await
+                .unwrap();
+
+            assert!(res.len() > 240); //make sure that it contains stuff
+
+            res
+        };
+        {
+            let (app, _verifying_key, _private_room) = GraphDatabaseService::start(
+                "authorisation app",
+                "",
+                &secret,
+                &pub_key,
+                path,
+                &Configuration::default(),
+                EventService::new(),
+            )
+            .await
+            .unwrap();
+
+            let res = app
+                .query(
+                    "query {
+                    sys.AllowedPeer{
+                        meeting_token
+                        enabled
+                        peer {
+                            id
+                            mdate
+                            cdate
+                            verifying_key
+                            pub_key
+                        }
+                    }
+                }",
+                    None,
+                )
+                .await
+                .unwrap();
+            //ensure that we get the same result when reading the same database again
+            assert_eq!(res, base_result);
+        }
+
+        let path: PathBuf = format!("{}/otherpaht", DATA_PATH).into();
+        let (app, _verifying_key, _private_room) = GraphDatabaseService::start(
             "authorisation app",
             "",
             &secret,
@@ -623,6 +701,27 @@ mod tests {
         )
         .await
         .unwrap();
-        let first_user_id = base64_encode(&verifying_key);
+
+        let res = app
+            .query(
+                "query {
+                sys.AllowedPeer{
+                    meeting_token
+                    enabled
+                    peer {
+                        id
+                        mdate
+                        cdate
+                        verifying_key
+                        pub_key
+                    }
+                }
+            }",
+                None,
+            )
+            .await
+            .unwrap();
+        //ensure that we get the same result when creating a database with the same credentials
+        assert_eq!(res, base_result);
     }
 }

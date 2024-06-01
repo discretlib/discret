@@ -254,6 +254,92 @@ mod tests {
             .expect("result changes everytime, just test that it creates a valid query");
     }
 
+    #[test]
+    fn sub_system_entities() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "{
+            Person {
+                name : String,
+                pet : Pet
+            }
+
+            Pet {
+                name: String
+            }
+        }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutate {
+                Person {
+                    name: "hello"
+                    pet: {name: "kitty"}
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+
+        let signing_key = Ed25519SigningKey::new();
+
+        mutation_query.sign_all(&signing_key).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            "
+            query sample{
+                Person {
+                    id
+                    cdate
+                    mdate
+                    _entity
+                    _json
+                    _binary
+                    verifying_key
+                    _signature
+                    name
+                    pet {
+                        id
+                        cdate
+                        mdate
+                        _entity
+                        _json
+                        _binary
+                        verifying_key
+                        _signature
+                        name
+                    }
+                }
+            }
+        ",
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let _ = sql
+            .read(&conn)
+            .expect("result changes everytime, just test that it creates a valid query");
+
+    }
 
 
     #[test]

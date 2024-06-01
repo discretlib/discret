@@ -517,7 +517,12 @@ fn get_fields(
 
             QueryFieldType::Scalar => {
                 if field.field.is_system {
-                    q.push_str(&format!("'{}', {}", &field.name(), &field.field.short_name,));
+                    q.push_str(&format!(
+                        "'{}', {}.{}",
+                        &field.name(),
+                        parent_table,
+                        &field.field.short_name,
+                    ));
                 } else if let Some(val) = &field.field.default_value {
                     let default = match val {
                         ParamValue::Boolean(b) => b.to_string(),
