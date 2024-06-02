@@ -199,7 +199,6 @@ impl PeerManager {
                                     format!("{}:{}", &address.ip(), &header.port)
                                         .parse()
                                         .unwrap();
-                                println!("InitiateConnection to target {} ", target);
 
                                 let _ = self
                                     .endpoint
@@ -232,7 +231,7 @@ impl PeerManager {
                 self.connected.insert(endpoint_id, (old_conn, old_conn_id));
             }
         } else {
-            println!("adding new connection");
+            println!("adding new connection {}", base64_encode(&conn_id));
             self.connected.insert(endpoint_id, (conn, conn_id));
         }
     }

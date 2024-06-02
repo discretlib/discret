@@ -182,6 +182,7 @@ impl DiscretEndpoint {
                 return Err(Error::InvalidStream(flag));
             }
         }
+
         if answer_send.is_none() || query_send.is_none() || event_send.is_none() {
             return Err(Error::MissingStream());
         }
@@ -194,10 +195,11 @@ impl DiscretEndpoint {
         let mut event_receiv = event_receiv.unwrap();
 
         let len = event_receiv.read_u32().await?;
-        let mut buf: Vec<u8> = Vec::with_capacity(len.try_into().unwrap());
-        event_receiv.read_exact(&mut buf).await?;
-        let info: ConnectionInfo = bincode::deserialize(&buf)?;
+        let len: usize = len.try_into().unwrap();
+        let mut buf = vec![0; len];
 
+        event_receiv.read_exact(&mut buf[0..len]).await?;
+        let info: ConnectionInfo = bincode::deserialize(&buf)?;
         Self::start_channels(
             new_conn,
             peer_service,
@@ -376,14 +378,13 @@ impl DiscretEndpoint {
         tokio::spawn(async move {
             let mut buffer: Vec<u8> = Vec::new();
             loop {
-                buffer.clear();
                 let len = answer_receiv.read_u32().await;
                 if len.is_err() {
                     break;
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
-                if buffer.capacity() < len {
-                    buffer.reserve_exact(len - buffer.capacity());
+                if buffer.len() < len {
+                    buffer.resize(len, 0);
                 }
 
                 let answer_bytes = answer_receiv.read_exact(&mut buffer[0..len]).await;
@@ -438,11 +439,11 @@ impl DiscretEndpoint {
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
 
-                if buffer.capacity() < len {
-                    buffer.reserve_exact(len - buffer.capacity());
+                if buffer.len() < len {
+                    buffer.resize(len, 0);
                 }
 
-                let answer_bytes = query_receiv.read(&mut buffer[0..len]).await;
+                let answer_bytes = query_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
                     break;
                 }
@@ -491,11 +492,11 @@ impl DiscretEndpoint {
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
 
-                if buffer.capacity() < len {
-                    buffer.reserve_exact(len - buffer.capacity());
+                if buffer.len() < len {
+                    buffer.resize(len, 0);
                 }
 
-                let answer_bytes = event_receiv.read(&mut buffer[0..len]).await;
+                let answer_bytes = event_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
                     break;
                 }
@@ -684,7 +685,7 @@ impl rustls::client::danger::ServerCertVerifier for ServerCertVerifier {
 mod tests {
 
     use super::*;
-    use crate::security;
+    use crate::{date_utils::now, security};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() {
@@ -692,31 +693,84 @@ mod tests {
         let cert: rcgen::CertifiedKey =
             security::generate_x509_certificate(SERVER_NAME.to_string());
         let der = cert.cert.der().deref();
-        let hash = hash(der);
+        let hasshe = hash(der);
         let cert_verifier = ServerCertVerifier::new();
-        cert_verifier.add_valid_certificate(hash);
+        cert_verifier.add_valid_certificate(hasshe);
 
-        let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
-        let localadree = endpoint.local_addr().unwrap();
+        let endpoint_one = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
+        let localaddress_one = endpoint_one.local_addr().unwrap();
+        let endpoint = endpoint_one.clone();
         tokio::spawn(async move {
-            let incoming_conn = endpoint.accept().await.unwrap();
-            let new_conn = incoming_conn.await.unwrap();
-            println!(
-                "[server] connection accepted: addr={}",
-                new_conn.remote_address()
-            );
+            loop {
+                let incoming_conn = endpoint.accept().await.unwrap();
+                let new_conn = incoming_conn.await.unwrap();
+                let (_, mut receiv) = new_conn.accept_bi().await.unwrap();
+                let number = receiv.read_i32().await.unwrap();
+                println!(
+                    "[server one] connection accepted: addr={} received {}",
+                    new_conn.remote_address(),
+                    number
+                );
+            }
         });
         let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
-        let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
-        let addr = format!("127.0.0.1:{}", localadree.port()).parse().unwrap();
+        let der = cert.cert.der().deref();
+        let hasshe = hash(der);
+        cert_verifier.add_valid_certificate(hasshe);
 
-        let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
-        //connection.open_bi();
-        println!("[client] connected: addr={}", connection.remote_address());
-        // Dropping handles allows the corresponding objects to automatically shut down
-        drop(connection);
-        // Make sure the server has a chance to clean up
-        endpoint.wait_idle().await;
+        let endpoint_two = build_endpoint(addr, cert, cert_verifier).unwrap();
+        let localaddress_two = endpoint_two.local_addr().unwrap();
+        let endpoint = endpoint_two.clone();
+        tokio::spawn(async move {
+            loop {
+                let incoming_conn = endpoint.accept().await.unwrap();
+                let new_conn = incoming_conn.await.unwrap();
+                let (_, mut receiv) = new_conn.accept_bi().await.unwrap();
+                let number = receiv.read_i32().await.unwrap();
+                println!(
+                    "[server two] connection accepted: addr={} received: {}",
+                    new_conn.remote_address(),
+                    number
+                );
+            }
+        });
+
+        let addr_one = format!("127.0.0.1:{}", localaddress_one.port())
+            .parse()
+            .unwrap();
+
+        let connection_two = endpoint_two
+            .connect(addr_one, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+
+        let (mut send, _) = connection_two.open_bi().await.unwrap();
+        send.write_i32(222222).await.unwrap();
+
+        let addr_two = format!("127.0.0.1:{}", localaddress_two.port())
+            .parse()
+            .unwrap();
+
+        let connection_one = endpoint_one
+            .connect(addr_two, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+
+        let (mut send, _) = connection_one.open_bi().await.unwrap();
+        send.write_i32(111111).await.unwrap();
+
+        let connection_one = endpoint_one
+            .connect(addr_two, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+        let (mut send, _) = connection_one.open_bi().await.unwrap();
+        send.write_i32(111111).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        println!("{}: end", now());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -734,7 +788,7 @@ mod tests {
             let incoming_conn = endpoint.accept().await.unwrap();
             let new_conn = incoming_conn.await.unwrap();
             println!(
-                "[server] connection accepted: addr={}",
+                "[server] connection accepted: addr= {}",
                 new_conn.remote_address()
             );
         });

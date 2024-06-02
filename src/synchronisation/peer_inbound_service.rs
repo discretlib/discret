@@ -76,11 +76,13 @@ impl QueryService {
                                 next_message_id += 1;
                             },
                             None => {
+
                                 break
                             },
                         }
                     }
                     msg = remote_receiver.recv() =>{
+
                         match msg {
                             Some(msg) => {
                                 if let Some(func) = sent_query.remove(&msg.id) {
@@ -88,6 +90,7 @@ impl QueryService {
                                 }
                             }
                             None => {
+
                                 break
                             },
                         }
@@ -661,6 +664,7 @@ impl LocalPeerService {
         query: Query,
     ) -> Result<T, Error> {
         let (send, recieve) = oneshot::channel::<Result<T, Error>>();
+
         let answer: AnswerFn = Box::new(move |succes, serialized| {
             let answer = if succes {
                 match bincode::deserialize::<T>(&serialized) {
@@ -681,7 +685,10 @@ impl LocalPeerService {
         match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
             Ok(r) => match r {
                 Ok(result) => return result,
-                Err(_) => return Err(Error::Technical),
+                Err(e) => {
+                    println!("{}", e.to_string());
+                    return Err(Error::Technical);
+                }
             },
             Err(_) => return Err(Error::TimeOut),
         }

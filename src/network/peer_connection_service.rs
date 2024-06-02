@@ -101,7 +101,7 @@ impl PeerConnectionService {
 
         let service = peer_service.clone();
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_millis(100));
+            let mut interval = time::interval(Duration::from_millis(1000));
 
             loop {
                 interval.tick().await;
@@ -597,7 +597,7 @@ mod tests {
         .await
         .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(2000)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         println!("{}: end", now());
     }
 }
