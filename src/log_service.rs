@@ -54,6 +54,7 @@ impl LogService {
     }
 
     pub fn error(&self, src: String, err: Error) {
+        println!("{}: {} - {}", now(), src, err.to_string());
         let _ = self.sender.send(LogMessage::Error(now(), src, err));
     }
 }

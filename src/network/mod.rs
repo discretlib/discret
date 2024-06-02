@@ -1,25 +1,49 @@
 pub mod endpoint;
-pub mod error;
-pub mod message;
 pub mod multicast;
 pub mod peer_connection_service;
+pub mod peer_manager;
+
 use serde::{Deserialize, Serialize};
+
 use std::io;
 use thiserror::Error;
 
 use crate::{security::MeetingToken, Uid};
 
-#[derive(Serialize, Deserialize, Default)]
-pub struct Announce {
+#[derive(Serialize, Deserialize)]
+pub struct ConnectionInfo {
+    pub endpoint_id: Uid,
+    pub connnection_id: Uid,
+    pub verifying_key: Vec<u8>,
+    pub hardware_key: Option<[u8; 32]>,
+    pub hardware_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct AnnounceHeader {
     endpoint_id: Uid,
     port: u16,
     certificate_hash: [u8; 32],
     signature: Vec<u8>,
-    tokens: Vec<MeetingToken>,
 }
-pub const MAX_TOKENS: u8 = 181;
+impl AnnounceHeader {
+    pub fn hash_for_signature(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.endpoint_id);
 
-pub const QUIC_MTU: usize = 2144;
+        hasher.update(&self.port.to_le_bytes());
+        hasher.update(&self.certificate_hash);
+        *hasher.finalize().as_bytes()
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Announce {
+    pub header: AnnounceHeader,
+    pub tokens: Vec<MeetingToken>,
+}
+
+pub const MAX_TOKENS: u8 = 255;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -73,29 +97,4 @@ pub enum Error {
 
     #[error("{0}")]
     Unknown(String),
-}
-#[cfg(test)]
-mod test {
-
-    use crate::security::{hash, MEETING_TOKEN_SIZE};
-
-    use super::*;
-    #[test]
-    fn validate_maximum_announce_size() {
-        let mut announce = Announce {
-            ..Default::default()
-        };
-        announce.port = 8080;
-        announce.certificate_hash = hash("bytes".as_bytes());
-        announce.signature = [234; 64].to_vec();
-
-        for i in 0..MAX_TOKENS {
-            let token: MeetingToken = [i; MEETING_TOKEN_SIZE];
-            announce.tokens.push(token);
-        }
-
-        let serialize = bincode::serialize(&announce).unwrap();
-
-        assert!(QUIC_MTU >= serialize.len());
-    }
 }

@@ -7,6 +7,7 @@ use crate::{
         node::{Node, NodeDeletionEntry},
         room_node::RoomNode,
     },
+    security::import_verifying_key,
     synchronisation::node_full::FullNode,
 };
 use tokio::sync::oneshot::{self};
@@ -23,6 +24,7 @@ pub enum VerificationMessage {
         Vec<NodeDeletionEntry>,
         oneshot::Sender<Result<Vec<NodeDeletionEntry>>>,
     ),
+    Hash(Vec<u8>, [u8; 32], Vec<u8>, oneshot::Sender<bool>),
 }
 ///
 /// Signature verification consumes a lot of cpu ressources.
@@ -54,6 +56,22 @@ impl SignatureVerificationService {
                         }
                         VerificationMessage::NodeLog(log, reply) => {
                             let _ = reply.send(Self::node_log_check(log));
+                        }
+                        VerificationMessage::Hash(signature, hash, verifying_key, reply) => {
+                            let pub_key = import_verifying_key(&verifying_key);
+                            match pub_key {
+                                Ok(pub_key) => match pub_key.verify(&hash, &signature) {
+                                    Ok(_) => {
+                                        let _ = reply.send(true);
+                                    }
+                                    Err(_) => {
+                                        let _ = reply.send(false);
+                                    }
+                                },
+                                Err(_) => {
+                                    let _ = reply.send(false);
+                                }
+                            }
                         }
                     }
                 }
@@ -183,6 +201,25 @@ impl SignatureVerificationService {
         let _ = self
             .sender
             .send_async(VerificationMessage::NodeLog(log, reply))
+            .await;
+        receiver.await.unwrap() //won't fail unless when stopping app
+    }
+
+    pub async fn verify_hash(
+        &self,
+        signature: Vec<u8>,
+        hash: [u8; 32],
+        verifying_key: Vec<u8>,
+    ) -> bool {
+        let (reply, receiver) = oneshot::channel::<bool>();
+        let _ = self
+            .sender
+            .send_async(VerificationMessage::Hash(
+                signature,
+                hash,
+                verifying_key,
+                reply,
+            ))
             .await;
         receiver.await.unwrap() //won't fail unless when stopping app
     }

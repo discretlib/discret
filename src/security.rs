@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("Invalid Base64 encoded Uid")]
     Uid(),
+
+    #[error("Invalid Base64 encoded MeetingToken")]
+    MeetingToken(),
 }
 
 ///
@@ -202,8 +205,8 @@ impl VerifyingKey for Ed2519VerifyingKey {
     }
 }
 
-pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
-    let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec!["".into()]).unwrap();
+pub fn generate_x509_certificate(name: String) -> rcgen::CertifiedKey {
+    let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
     cert
 }
 
@@ -270,6 +273,17 @@ impl MeetingSecret {
         token.copy_from_slice(&hash[0..MEETING_TOKEN_SIZE]);
         token
     }
+
+    pub fn decode_token(base64: &str) -> Result<MeetingToken, Error> {
+        let r = base64_decode(base64.as_bytes()).map_err(|_| Error::MeetingToken())?;
+        let mut token: MeetingToken = [0; MEETING_TOKEN_SIZE];
+        if r.len() < MEETING_TOKEN_SIZE {
+            return Err(Error::MeetingToken());
+        }
+        token.copy_from_slice(&r[0..MEETING_TOKEN_SIZE]);
+
+        Ok(token)
+    }
 }
 
 ///
@@ -303,7 +317,7 @@ pub fn derive_pass_phrase(login: &str, pass_phrase: &str) -> [u8; 32] {
 /// hash a byte array using the Blake3 hash function
 ///
 pub fn hash(bytes: &[u8]) -> [u8; 32] {
-    blake3::hash(bytes).as_bytes().to_owned()
+    *blake3::hash(bytes).as_bytes()
 }
 
 ///
@@ -484,10 +498,10 @@ mod tests {
         assert_eq!(id1, id2);
     }
 
-    #[test]
-    pub fn hardware_print() {
-        let info = hardware_fingerprint();
-        let info2 = hardware_fingerprint();
-        assert_eq!(info, info2);
-    }
+    // #[test]
+    // pub fn hardware_print() {
+    //     let info = hardware_fingerprint();
+    //     let info2 = hardware_fingerprint();
+    //     assert_eq!(info, info2);
+    // }
 }

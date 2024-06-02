@@ -19,19 +19,17 @@ use tokio::{
 
 use crate::{
     log_service::LogService,
-    network::peer_connection_service::{
-        ConnectionInfo, PeerConnectionMessage, PeerConnectionService,
-    },
+    network::peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{self, hash, new_uid, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::Error;
+use super::{ConnectionInfo, Error};
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 /// used by the quic protocol
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
-static MAX_CONNECTION_RETRY: usize = 3;
+static MAX_CONNECTION_RETRY: usize = 4;
 
 static CHANNEL_SIZE: usize = 4;
 
@@ -46,10 +44,14 @@ pub enum EndpointMessage {
     InitiateConnection(SocketAddr, [u8; 32], bool),
 }
 
+const SERVER_NAME: &str = "discret";
 pub struct DiscretEndpoint {
-    sender: mpsc::Sender<EndpointMessage>,
-    ipv4_port: u16,
-    ipv6_port: Option<u16>,
+    pub id: Uid,
+    pub sender: mpsc::Sender<EndpointMessage>,
+    pub ipv4_port: u16,
+    pub ipv4_cert_hash: [u8; 32],
+    pub ipv6_port: Option<u16>,
+    pub ipv6_cert_hash: [u8; 32],
 }
 impl DiscretEndpoint {
     pub async fn start(
@@ -61,15 +63,18 @@ impl DiscretEndpoint {
         let endpoint_id = new_uid();
         let (hardware_key, hardware_name) = security::hardware_fingerprint();
         let (sender, mut connection_receiver) = mpsc::channel::<EndpointMessage>(20);
-        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
 
+        let cert: rcgen::CertifiedKey =
+            security::generate_x509_certificate(SERVER_NAME.to_string());
+        let ipv4_cert_hash = hash(cert.cert.der().deref());
         let addr = "0.0.0.0:0".parse()?;
         let ipv4_endpoint = build_endpoint(addr, cert, cert_verifier.clone())?;
         let ipv4_port = ipv4_endpoint.local_addr()?.port();
 
-        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
+        let cert: rcgen::CertifiedKey =
+            security::generate_x509_certificate(SERVER_NAME.to_string());
+        let ipv6_cert_hash = hash(cert.cert.der().deref());
         let addr = "[::]:0".parse()?;
-
         let ipv6_endpoint = build_endpoint(addr, cert, cert_verifier.clone());
         let (ipv6_endpoint, ipv6_port) = match ipv6_endpoint {
             Ok(end) => {
@@ -115,7 +120,7 @@ impl DiscretEndpoint {
                 let new_conn = Self::start_accepted(&peer_s, incoming).await;
                 if let Err(e) = new_conn {
                     logs.error(
-                        "Incoming connection".to_string(),
+                        "ipv4 - start_accepted".to_string(),
                         crate::Error::from(Error::from(e)),
                     );
                 }
@@ -130,7 +135,7 @@ impl DiscretEndpoint {
                     let new_conn = Self::start_accepted(&peer_service, incoming).await;
                     if let Err(e) = new_conn {
                         logs.error(
-                            "Incoming connection".to_string(),
+                            "ipv6 - start_accepted".to_string(),
                             crate::Error::from(Error::from(e)),
                         );
                     }
@@ -139,9 +144,12 @@ impl DiscretEndpoint {
         }
 
         Ok(Self {
+            id: endpoint_id,
             sender,
             ipv4_port,
+            ipv4_cert_hash,
             ipv6_port,
+            ipv6_cert_hash,
         })
     }
 
@@ -243,7 +251,7 @@ impl DiscretEndpoint {
         tokio::spawn(async move {
             for i in 0..MAX_CONNECTION_RETRY {
                 let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
-                    endpoint.connect(address, "");
+                    endpoint.connect(address, SERVER_NAME);
 
                 match conn_result {
                     Ok(connecting) => {
@@ -272,8 +280,13 @@ impl DiscretEndpoint {
                                         "InitiateConnection.start_connection".to_string(),
                                         crate::Error::from(e),
                                     );
+                                    let _ = &peer_service
+                                        .sender
+                                        .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                                        .await;
                                     return;
-                                };
+                                }
+                                break;
                             }
                             Err(e) => {
                                 if i == MAX_CONNECTION_RETRY - 1 {
@@ -285,18 +298,30 @@ impl DiscretEndpoint {
                                             e.to_string(),
                                         )),
                                     );
+                                    let _ = &peer_service
+                                        .sender
+                                        .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                                        .await;
                                 }
                             }
                         };
                     }
                     Err(e) => {
-                        log.error(
-                            "InitiateConnection".to_string(),
-                            crate::Error::from(Error::from(e)),
-                        );
-                        break;
+                        if i == MAX_CONNECTION_RETRY - 1 {
+                            log.error(
+                                "InitiateConnection".to_string(),
+                                crate::Error::from(Error::from(e)),
+                            );
+                        }
+                        let _ = &peer_service
+                            .sender
+                            .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                            .await;
                     }
                 };
+
+                let wait = 1 * (1 + i);
+                tokio::time::sleep(Duration::from_secs(wait.try_into().unwrap())).await;
             }
         });
     }
@@ -381,6 +406,7 @@ impl DiscretEndpoint {
             let mut buffer: Vec<u8> = Vec::new();
             while let Some(answer) = out_answer_rcv.recv().await {
                 buffer.clear();
+
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, Answer>(&mut buffer, &answer);
                 if serialised.is_err() {
@@ -663,7 +689,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() {
         let addr = "0.0.0.0:0".parse().unwrap();
-        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
+        let cert: rcgen::CertifiedKey =
+            security::generate_x509_certificate(SERVER_NAME.to_string());
         let der = cert.cert.der().deref();
         let hash = hash(der);
         let cert_verifier = ServerCertVerifier::new();
@@ -679,7 +706,7 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-        let cert = security::generate_x509_certificate();
+        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("127.0.0.1:{}", localadree.port()).parse().unwrap();
 
@@ -695,7 +722,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv6() {
         let addr = "[::]:0".parse().unwrap();
-        let cert = security::generate_x509_certificate();
+        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
         let der = cert.cert.der().deref();
         let hash = hash(der);
         let cert_verifier = ServerCertVerifier::new();
@@ -711,7 +738,7 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-        let cert = security::generate_x509_certificate();
+        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
@@ -731,7 +758,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_invalid_certificate() {
         let addr = "[::]:0".parse().unwrap();
-        let cert = security::generate_x509_certificate();
+        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
         //let pub_key = cert.key_pair.public_key_der();
         // the server's certificate is not added to the valid list
         let cert_verifier = ServerCertVerifier::new();
@@ -745,12 +772,12 @@ mod tests {
                 .expect_err("connection should have failed due to invalid certificate");
         });
 
-        let cert = security::generate_x509_certificate();
+        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
         endpoint
-            .connect(addr, "localhost")
+            .connect(addr, SERVER_NAME)
             .unwrap()
             .await
             .expect_err("connection should have failed due to invalid certificate");

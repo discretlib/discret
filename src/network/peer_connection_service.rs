@@ -1,20 +1,19 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use quinn::Connection;
-use serde::{Deserialize, Serialize};
 
-use tokio::sync::{broadcast, mpsc, Mutex};
-
+use super::peer_manager::PeerManager;
 use crate::{
-    database::{graph_database::GraphDatabaseService, system_entities::AllowedPeer},
+    database::graph_database::GraphDatabaseService,
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
-    security::{MeetingSecret, MeetingToken, Uid},
+    security::{MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -23,6 +22,10 @@ use crate::{
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
     Result,
+};
+use tokio::{
+    sync::{broadcast, mpsc, Mutex},
+    time,
 };
 
 pub enum PeerConnectionMessage {
@@ -36,54 +39,15 @@ pub enum PeerConnectionMessage {
         mpsc::Sender<RemoteEvent>,
         mpsc::Receiver<RemoteEvent>,
     ),
+    ConnectionFailed(Uid),
     PeerConnected(Vec<u8>, Vec<u8>),
     PeerDisconnected(Vec<u8>, Vec<u8>),
     NewPeer(Vec<Uid>),
-    ConnectionCandidate(SocketAddr, [u8; 32], Vec<MeetingToken>),
+    SendAnnounce(),
+    MulticastMessage(MulticastMessage, SocketAddr),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
-
-#[derive(Serialize, Deserialize)]
-pub struct ConnectionInfo {
-    pub endpoint_id: Uid,
-    pub connnection_id: Uid,
-    pub verifying_key: Vec<u8>,
-    pub hardware_key: Option<[u8; 32]>,
-    pub hardware_name: Option<String>,
-}
-
-pub struct Peers {
-    pub private_room_id: Uid,
-    pub verifying_key: Vec<u8>,
-    pub meeting_secret: MeetingSecret,
-    pub allowed_peers: Vec<AllowedPeer>,
-    pub inbound_invites: Vec<String>,
-    pub proposed_invites: Vec<String>,
-    pub connected: HashMap<[u8; 32], String>,
-    pub connected_token: HashMap<MeetingToken, [u8; 32]>,
-}
-impl Peers {
-    pub async fn new(
-        db: GraphDatabaseService,
-        private_room_id: Uid,
-        verifying_key: Vec<u8>,
-        meeting_secret: MeetingSecret,
-    ) -> Result<Self> {
-        let allowed_peers = db.get_allowed_peers(private_room_id).await?;
-
-        Ok(Self {
-            private_room_id,
-            verifying_key,
-            meeting_secret,
-            allowed_peers,
-            inbound_invites: Vec::new(),
-            proposed_invites: Vec::new(),
-            connected: HashMap::new(),
-            connected_token: HashMap::new(),
-        })
-    }
-}
 
 ///
 /// Handle the creation and removal of peers
@@ -110,7 +74,43 @@ impl PeerConnectionService {
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
-        Peers::new(db.clone(), private_room_id, verifying_key, meeting_secret).await?;
+        let endpoint =
+            DiscretEndpoint::start(peer_service.clone(), logs.clone(), verifying_key.clone())
+                .await?;
+
+        let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
+        let multicast_discovery = multicast::start_multicast_discovery(
+            multicast_adress,
+            peer_service.clone(),
+            logs.clone(),
+        )
+        .await?;
+
+        let mut peers = PeerManager::new(
+            endpoint,
+            multicast_discovery,
+            db.clone(),
+            verify_service.clone(),
+            private_room_id,
+            verifying_key.clone(),
+            meeting_secret,
+        )
+        .await?;
+
+        //   peers.send_annouces().await?;
+
+        let service = peer_service.clone();
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_millis(100));
+
+            loop {
+                interval.tick().await;
+                let _ = service
+                    .sender
+                    .send(PeerConnectionMessage::SendAnnounce())
+                    .await;
+            }
+        });
 
         tokio::spawn(async move {
             let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
@@ -122,6 +122,7 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 Self::process_peer_message(
                                     msg,
+                                    &mut peers,
                                     &db,
                                     &events,
                                     &logs,
@@ -134,8 +135,6 @@ impl PeerConnectionService {
                             },
                             None => break,
                         }
-
-
                     }
                     msg = event_receiver.recv() =>{
                         match msg{
@@ -176,6 +175,7 @@ impl PeerConnectionService {
 
     async fn process_peer_message(
         msg: PeerConnectionMessage,
+        peer_manager: &mut PeerManager,
         local_db: &GraphDatabaseService,
         event_service: &EventService,
         log_service: &LogService,
@@ -187,7 +187,7 @@ impl PeerConnectionService {
     ) {
         match msg {
             PeerConnectionMessage::NewConnection(
-                _connection,
+                connection,
                 connection_info,
                 answer_sender,
                 answer_receiver,
@@ -196,6 +196,14 @@ impl PeerConnectionService {
                 event_sender,
                 event_receiver,
             ) => {
+                if let Some(connection) = connection {
+                    peer_manager.add_connection(
+                        connection_info.endpoint_id,
+                        connection,
+                        connection_info.connnection_id,
+                    )
+                };
+                println!("{}: Success", now());
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let inbound_query_service = InboundQueryService::start(
@@ -262,10 +270,21 @@ impl PeerConnectionService {
                     .await;
             }
             PeerConnectionMessage::NewPeer(_peers) => {}
-            PeerConnectionMessage::ConnectionCandidate(_s, _meeting_token, _certificate_hash) => {
-                // s.
 
-                //todo!()
+            PeerConnectionMessage::SendAnnounce() => {
+                if let Err(e) = peer_manager.send_annouces().await {
+                    log_service.error(
+                        "PeerConnectionMessage::SendAnnounce".to_string(),
+                        crate::Error::from(e),
+                    );
+                }
+            }
+            PeerConnectionMessage::MulticastMessage(_message, address) => {
+                peer_manager.process_multicast(_message, address).await;
+            }
+
+            PeerConnectionMessage::ConnectionFailed(endpoint_id) => {
+                peer_manager.clean_progress(endpoint_id);
             }
         }
     }
@@ -311,6 +330,12 @@ impl AllowedConnection {
 
 #[cfg(test)]
 pub use crate::{log_service::Log, security::random32};
+
+use super::{
+    endpoint::DiscretEndpoint,
+    multicast::{self, MulticastMessage},
+    ConnectionInfo,
+};
 
 #[cfg(test)]
 pub type LogFn = Box<dyn Fn(Log) -> std::result::Result<(), String> + Send + 'static>;
@@ -448,7 +473,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use crate::configuration::Configuration;
+    use crate::{configuration::Configuration, Discret};
 
     use super::*;
 
@@ -543,5 +568,36 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multicast_connect() {
+        init_database_path();
+        let path: PathBuf = DATA_PATH.into();
+        let model = "{Person{name:String,}}";
+        let key_material = random32();
+        let _: Discret = Discret::new(
+            model,
+            "hello",
+            &key_material,
+            path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        let second_path: PathBuf = format!("{}/second", DATA_PATH).into();
+        let _: Discret = Discret::new(
+            model,
+            "hello",
+            &key_material,
+            second_path,
+            Configuration::default(),
+        )
+        .await
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        println!("{}: end", now());
     }
 }
