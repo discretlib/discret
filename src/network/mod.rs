@@ -1,8 +1,7 @@
 pub mod endpoint;
 pub mod multicast;
-pub mod peer_connection_service;
 pub mod peer_manager;
-
+pub mod shared_buffers;
 use serde::{Deserialize, Serialize};
 
 use std::io;
@@ -13,6 +12,7 @@ use crate::{security::MeetingToken, Uid};
 #[derive(Serialize, Deserialize)]
 pub struct ConnectionInfo {
     pub endpoint_id: Uid,
+    pub remote_id: Uid,
     pub connnection_id: Uid,
     pub verifying_key: Vec<u8>,
     pub hardware_key: Option<[u8; 32]>,

@@ -72,7 +72,6 @@ impl RoomLockService {
                 }
             }
         });
-
         Self { sender }
     }
 

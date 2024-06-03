@@ -3,8 +3,8 @@ use bincode;
 use crate::log_service::LogService;
 use crate::security::MeetingToken;
 
-use super::peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
 use super::{Announce, AnnounceHeader, Error};
+use crate::peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
 
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};

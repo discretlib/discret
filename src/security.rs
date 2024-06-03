@@ -5,6 +5,7 @@ use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
+use rcgen::{CertificateParams, KeyPair, SanType};
 use sysinfo::{Networks, System};
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -206,8 +207,13 @@ impl VerifyingKey for Ed2519VerifyingKey {
 }
 
 pub fn generate_x509_certificate(name: String) -> rcgen::CertifiedKey {
-    let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
-    cert
+    let mut params: CertificateParams = Default::default();
+
+    params.subject_alt_names = vec![SanType::DnsName(name.try_into().unwrap())];
+    let key_pair = KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+    let cert = params.self_signed(&key_pair).unwrap();
+    // let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
+    rcgen::CertifiedKey { cert, key_pair }
 }
 
 pub fn random32() -> [u8; 32] {

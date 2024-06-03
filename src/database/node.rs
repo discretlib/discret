@@ -133,8 +133,7 @@ impl Node {
         len += self._entity.as_bytes().len();
 
         if let Some(v) = &self._json {
-            let serialized = serde_json::to_string(v)?;
-            len += serialized.as_bytes().len();
+            len += v.as_bytes().len();
         }
 
         if let Some(v) = &self._binary {

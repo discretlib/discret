@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -7,12 +7,17 @@ use std::{
 
 use quinn::Connection;
 
-use super::peer_manager::PeerManager;
 use crate::{
     database::graph_database::GraphDatabaseService,
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
+    network::{
+        endpoint::DiscretEndpoint,
+        multicast::{self, MulticastMessage},
+        peer_manager::{self, PeerManager},
+        ConnectionInfo,
+    },
     security::{MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
@@ -39,9 +44,9 @@ pub enum PeerConnectionMessage {
         mpsc::Sender<RemoteEvent>,
         mpsc::Receiver<RemoteEvent>,
     ),
-    ConnectionFailed(Uid),
-    PeerConnected(Vec<u8>, Vec<u8>),
-    PeerDisconnected(Vec<u8>, Vec<u8>),
+    ConnectionFailed(Uid, Uid),
+    PeerConnected(Vec<u8>, Uid),
+    PeerDisconnected(Vec<u8>, [u8; 32], Uid),
     NewPeer(Vec<Uid>),
     SendAnnounce(),
     MulticastMessage(MulticastMessage, SocketAddr),
@@ -75,7 +80,7 @@ impl PeerConnectionService {
         let ret = peer_service.clone();
 
         let endpoint =
-            DiscretEndpoint::start(peer_service.clone(), logs.clone(), verifying_key.clone())
+            DiscretEndpoint::start(peer_service.clone(), logs.clone(), verifying_key.clone(), 8)
                 .await?;
 
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
@@ -86,7 +91,7 @@ impl PeerConnectionService {
         )
         .await?;
 
-        let mut peers = PeerManager::new(
+        let mut peer_manager = PeerManager::new(
             endpoint,
             multicast_discovery,
             db.clone(),
@@ -113,7 +118,6 @@ impl PeerConnectionService {
         });
 
         tokio::spawn(async move {
-            let mut peer_map: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
             let mut event_receiver = events.subcribe().await;
             loop {
                 tokio::select! {
@@ -122,7 +126,7 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 Self::process_peer_message(
                                     msg,
-                                    &mut peers,
+                                    &mut peer_manager,
                                     &db,
                                     &events,
                                     &logs,
@@ -130,7 +134,6 @@ impl PeerConnectionService {
                                     &lock_service,
                                     &verify_service,
                                     local_event_broadcast.subscribe(),
-                                    &mut peer_map,
                                 ).await;
                             },
                             None => break,
@@ -153,22 +156,28 @@ impl PeerConnectionService {
         Ok(ret)
     }
 
-    pub async fn disconnect(&self, verifying_key: Vec<u8>, hardware_id: Vec<u8>) {
+    pub async fn disconnect(
+        &self,
+        verifying_key: Vec<u8>,
+        circuit_id: [u8; 32],
+        connection_id: Uid,
+    ) {
         let _ = self
             .sender
             .send(PeerConnectionMessage::PeerDisconnected(
                 verifying_key,
-                hardware_id,
+                circuit_id,
+                connection_id,
             ))
             .await;
     }
 
-    pub async fn connected(&self, verifying_key: Vec<u8>, hardware_id: Vec<u8>) {
+    pub async fn connected(&self, verifying_key: Vec<u8>, connection_id: Uid) {
         let _ = self
             .sender
             .send(PeerConnectionMessage::PeerConnected(
                 verifying_key,
-                hardware_id,
+                connection_id,
             ))
             .await;
     }
@@ -183,7 +192,6 @@ impl PeerConnectionService {
         lock_service: &RoomLockService,
         verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
-        peer_map: &mut HashMap<Vec<u8>, HashSet<Vec<u8>>>,
     ) {
         match msg {
             PeerConnectionMessage::NewConnection(
@@ -199,14 +207,20 @@ impl PeerConnectionService {
                 if let Some(connection) = connection {
                     peer_manager.add_connection(
                         connection_info.endpoint_id,
+                        connection_info.remote_id,
                         connection,
                         connection_info.connnection_id,
                     )
                 };
-                println!("{}: Success", now());
+                let circuit_id =
+                    PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
+                let connection_id = connection_info.connnection_id;
+
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let inbound_query_service = InboundQueryService::start(
+                    circuit_id,
+                    connection_id,
                     RemotePeerHandle {
                         hardware_id: connection_info.verifying_key.clone(),
                         db: local_db.clone(),
@@ -226,6 +240,8 @@ impl PeerConnectionService {
                     event_receiver,
                     local_event_broadcast,
                     connection_info.verifying_key.clone(),
+                    circuit_id,
+                    connection_id,
                     verifying_key.clone(),
                     local_db.clone(),
                     lock_service.clone(),
@@ -238,34 +254,31 @@ impl PeerConnectionService {
                     verify_service.clone(),
                 );
             }
-            PeerConnectionMessage::PeerConnected(verifying_key, hardware_id) => {
-                let entry = peer_map.entry(verifying_key.clone()).or_default();
-                entry.insert(hardware_id.clone());
+
+            PeerConnectionMessage::PeerConnected(verifying_key, connection_id) => {
                 let _ = event_service
                     .sender
                     .send(EventServiceMessage::PeerConnected(
                         verifying_key,
                         now(),
-                        hardware_id,
+                        connection_id,
                     ))
                     .await;
             }
 
-            PeerConnectionMessage::PeerDisconnected(verifying_key, hardware_id) => {
-                let entry = peer_map.remove(&verifying_key);
-                if let Some(mut entries) = entry {
-                    entries.remove(&hardware_id);
-                    if !entries.is_empty() {
-                        peer_map.insert(verifying_key.clone(), entries);
-                    }
-                }
-
+            PeerConnectionMessage::PeerDisconnected(verifying_key, circuit_id, connection_id) => {
+                if peer_manager.disconnect(
+                    circuit_id,
+                    connection_id,
+                    peer_manager::REASON_UNKNOWN,
+                    "",
+                ) {}
                 let _ = event_service
                     .sender
                     .send(EventServiceMessage::PeerDisconnected(
                         verifying_key,
                         now(),
-                        hardware_id,
+                        connection_id,
                     ))
                     .await;
             }
@@ -283,8 +296,8 @@ impl PeerConnectionService {
                 peer_manager.process_multicast(_message, address).await;
             }
 
-            PeerConnectionMessage::ConnectionFailed(endpoint_id) => {
-                peer_manager.clean_progress(endpoint_id);
+            PeerConnectionMessage::ConnectionFailed(endpoint_id, remote_id) => {
+                peer_manager.clean_progress(endpoint_id, remote_id);
             }
         }
     }
@@ -320,22 +333,8 @@ impl PeerConnectionService {
     }
 }
 
-pub struct AllowedConnection {}
-impl AllowedConnection {
-    pub async fn load() {}
-    pub async fn add() {}
-    pub async fn create_invite() {}
-    pub async fn add_invite() {}
-}
-
 #[cfg(test)]
 pub use crate::{log_service::Log, security::random32};
-
-use super::{
-    endpoint::DiscretEndpoint,
-    multicast::{self, MulticastMessage},
-    ConnectionInfo,
-};
 
 #[cfg(test)]
 pub type LogFn = Box<dyn Fn(Log) -> std::result::Result<(), String> + Send + 'static>;
@@ -427,6 +426,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
 
     let info1 = ConnectionInfo {
         endpoint_id: new_uid(),
+        remote_id: new_uid(),
         connnection_id: new_uid(),
         verifying_key: random32().to_vec(),
         hardware_key: None,
@@ -449,7 +449,9 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
 
     let info1 = ConnectionInfo {
         endpoint_id: new_uid(),
+        remote_id: new_uid(),
         connnection_id: new_uid(),
+
         verifying_key: random32().to_vec(),
         hardware_key: None,
         hardware_name: None,
@@ -587,7 +589,7 @@ mod tests {
         .unwrap();
 
         let second_path: PathBuf = format!("{}/second", DATA_PATH).into();
-        let _: Discret = Discret::new(
+        let discret2: Discret = Discret::new(
             model,
             "hello",
             &key_material,
@@ -596,8 +598,26 @@ mod tests {
         )
         .await
         .unwrap();
+        let private_room_id = discret2.private_room_id();
+        let mut events = discret2.subscribe_for_events().await;
+        let handle = tokio::spawn(async move {
+            loop {
+                let event = events.recv().await;
+                match event {
+                    Ok(e) => match e {
+                        Event::RoomSynchronized(room_id) => {
+                            assert_eq!(room_id, private_room_id);
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Err(e) => println!("Error {}", e),
+                }
+            }
+        });
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        println!("{}: end", now());
+        let s = tokio::time::timeout(Duration::from_secs(1), handle).await;
+
+        assert!(s.is_ok());
     }
 }

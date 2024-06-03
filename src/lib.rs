@@ -43,15 +43,15 @@ mod date_utils;
 mod event_service;
 mod log_service;
 mod network;
-
+mod peer_connection_service;
 mod security;
 mod signature_verification_service;
 mod synchronisation;
 
 use database::graph_database::GraphDatabaseService;
-use event_service::EventService;
+use event_service::{Event, EventService};
 use log_service::LogService;
-use network::peer_connection_service::PeerConnectionService;
+use peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
 
 use signature_verification_service::SignatureVerificationService;
@@ -141,9 +141,10 @@ pub enum Error {
 pub struct Discret {
     db: GraphDatabaseService,
     peers: PeerConnectionService,
-    log: LogService,
+    events: EventService,
+    logs: LogService,
     verifying_key: Vec<u8>,
-    system_room_id: Uid,
+    private_room_id: Uid,
 }
 impl Discret {
     pub async fn new(
@@ -160,29 +161,29 @@ impl Discret {
         let pub_key = meeting_secret.public_key();
         let public_key = pub_key.as_bytes();
 
-        let event_service = EventService::new();
-        let (db, verifying_key, system_room_id) = GraphDatabaseService::start(
+        let events = EventService::new();
+        let (db, verifying_key, private_room_id) = GraphDatabaseService::start(
             app_key,
             datamodel,
             key_material,
             public_key,
             data_folder.clone(),
             &configuration,
-            event_service.clone(),
+            events.clone(),
         )
         .await?;
 
         let signature_service =
             SignatureVerificationService::start(configuration.signature_verification_parallelism);
 
-        let log = LogService::start();
+        let logs = LogService::start();
         let peers = PeerConnectionService::start(
             verifying_key.clone(),
             meeting_secret,
-            system_room_id,
+            private_room_id,
             db.clone(),
-            event_service.clone(),
-            log.clone(),
+            events.clone(),
+            logs.clone(),
             signature_service,
             10,
         )
@@ -191,9 +192,10 @@ impl Discret {
         Ok(Self {
             db,
             peers,
-            log,
+            events,
+            logs,
             verifying_key,
-            system_room_id,
+            private_room_id,
         })
     }
 
@@ -249,8 +251,8 @@ impl Discret {
     /// This special room is used internally to store system data
     /// you can use it to query and update the sys.* entities
     ///
-    pub fn system_room_id(&self) -> &Uid {
-        &self.system_room_id
+    pub fn private_room_id(&self) -> Uid {
+        self.private_room_id
     }
 
     ///
@@ -275,8 +277,12 @@ impl Discret {
         Ok(self.db.datamodel().await?)
     }
 
-    pub async fn log_subscribe(&self) -> broadcast::Receiver<Log> {
-        self.log.subcribe().await
+    pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
+        self.events.subcribe().await
+    }
+
+    pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
+        self.logs.subcribe().await
     }
 }
 
@@ -370,8 +376,8 @@ impl DiscretBlocking {
         &self.discret.verifying_key
     }
 
-    pub fn system_room_id(&self) -> &Uid {
-        &self.discret.system_room_id
+    pub fn private_room_id(&self) -> Uid {
+        self.discret.private_room_id
     }
 
     pub fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {
@@ -390,11 +396,21 @@ impl DiscretBlocking {
             .block_on(self.discret.data_model())
     }
 
-    pub fn log_subscribe(&self) -> std::result::Result<broadcast::Receiver<Log>, Error> {
-        Ok(TOKIO_BLOCKING
+    pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
+        TOKIO_BLOCKING
             .lock()
             .unwrap()
-            .rt()?
-            .block_on(self.discret.log_subscribe()))
+            .rt()
+            .unwrap()
+            .block_on(self.discret.subscribe_for_events())
+    }
+
+    pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()
+            .unwrap()
+            .block_on(self.discret.subscribe_for_logs())
     }
 }

@@ -9,8 +9,8 @@ pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<Event>>),
     ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, Vec<u8>),
-    PeerDisconnected(Vec<u8>, i64, Vec<u8>),
+    PeerConnected(Vec<u8>, i64, Uid),
+    PeerDisconnected(Vec<u8>, i64, Uid),
     RoomSynchronized(Uid),
 }
 
@@ -18,8 +18,8 @@ pub enum EventServiceMessage {
 pub enum Event {
     ComputedDailyLog(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
-    PeerConnected(Vec<u8>, i64, Vec<u8>),
-    PeerDisconnected(Vec<u8>, i64, Vec<u8>),
+    PeerConnected(Vec<u8>, i64, Uid),
+    PeerDisconnected(Vec<u8>, i64, Uid),
     RoomSynchronized(Uid),
 }
 
@@ -48,15 +48,18 @@ impl EventService {
                     EventServiceMessage::RoomModified(room) => {
                         let _ = broadcast.send(Event::RoomModified(room));
                     }
-                    EventServiceMessage::PeerConnected(verifying_key, date, hardware_key) => {
-                        let _ =
-                            broadcast.send(Event::PeerConnected(verifying_key, date, hardware_key));
+                    EventServiceMessage::PeerConnected(verifying_key, date, connection_id) => {
+                        let _ = broadcast.send(Event::PeerConnected(
+                            verifying_key,
+                            date,
+                            connection_id,
+                        ));
                     }
-                    EventServiceMessage::PeerDisconnected(verifying_key, date, hardware_key) => {
+                    EventServiceMessage::PeerDisconnected(verifying_key, date, connection_id) => {
                         let _ = broadcast.send(Event::PeerDisconnected(
                             verifying_key,
                             date,
-                            hardware_key,
+                            connection_id,
                         ));
                     }
                     EventServiceMessage::RoomSynchronized(room) => {

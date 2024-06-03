@@ -4,13 +4,7 @@ use quinn::{
     TransportConfig, VarInt,
 };
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    ops::Deref,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::HashSet, net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,12 +13,12 @@ use tokio::{
 
 use crate::{
     log_service::LogService,
-    network::peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
+    peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{self, hash, new_uid, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::{ConnectionInfo, Error};
+use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error};
 /// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
 /// used by the quic protocol
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
@@ -41,7 +35,7 @@ static QUERY_STREAM: u8 = 2;
 static EVENT_STREAM: u8 = 3;
 
 pub enum EndpointMessage {
-    InitiateConnection(SocketAddr, [u8; 32], bool),
+    InitiateConnection(SocketAddr, [u8; 32], Uid, bool),
 }
 
 const SERVER_NAME: &str = "discret";
@@ -58,6 +52,7 @@ impl DiscretEndpoint {
         peer_service: PeerConnectionService,
         log: LogService,
         verifying_key: Vec<u8>,
+        num_buffers: usize,
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
@@ -88,13 +83,24 @@ impl DiscretEndpoint {
         let ipv6 = ipv6_endpoint.clone();
         let logs = log.clone();
         let peer_s = peer_service.clone();
+        let input_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
+        let output_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
+        let i_buff = input_buffers.clone();
+        let o_buff = output_buffers.clone();
+
         tokio::spawn(async move {
             while let Some(msg) = connection_receiver.recv().await {
                 match msg {
-                    EndpointMessage::InitiateConnection(address, cert_hash, send_hardware) => {
+                    EndpointMessage::InitiateConnection(
+                        address,
+                        cert_hash,
+                        remote_id,
+                        send_hardware,
+                    ) => {
                         Self::initiate_connection(
                             cert_verifier.clone(),
                             endpoint_id,
+                            remote_id,
                             address,
                             cert_hash,
                             &peer_s,
@@ -105,19 +111,24 @@ impl DiscretEndpoint {
                             send_hardware,
                             &hardware_key,
                             &hardware_name,
+                            &i_buff,
+                            &o_buff,
                         );
                     }
                 }
             }
         });
 
+        //ipv4 server
+
         let logs = log.clone();
         let peer_s = peer_service.clone();
+        let i_buff = input_buffers.clone();
+        let o_buff = output_buffers.clone();
 
-        //ipv4 server
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
-                let new_conn = Self::start_accepted(&peer_s, incoming).await;
+                let new_conn = Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff).await;
                 if let Err(e) = new_conn {
                     logs.error(
                         "ipv4 - start_accepted".to_string(),
@@ -128,13 +139,19 @@ impl DiscretEndpoint {
         });
 
         //ipv6 server
-        let logs = log.clone();
+
         if let Some(endpoint) = ipv6_endpoint {
             tokio::spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
-                    let new_conn = Self::start_accepted(&peer_service, incoming).await;
+                    let new_conn = Self::start_accepted(
+                        &peer_service,
+                        incoming,
+                        &input_buffers,
+                        &output_buffers,
+                    )
+                    .await;
                     if let Err(e) = new_conn {
-                        logs.error(
+                        log.error(
                             "ipv6 - start_accepted".to_string(),
                             crate::Error::from(Error::from(e)),
                         );
@@ -156,6 +173,8 @@ impl DiscretEndpoint {
     async fn start_accepted(
         peer_service: &PeerConnectionService,
         incoming: Incoming,
+        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
     ) -> Result<(), Error> {
         let new_conn = incoming.await?;
         let mut answer_send: Option<SendStream> = None;
@@ -210,6 +229,8 @@ impl DiscretEndpoint {
             query_receiv,
             event_send,
             event_receiv,
+            input_buffers,
+            output_buffers,
         )
         .await;
 
@@ -219,6 +240,7 @@ impl DiscretEndpoint {
     fn initiate_connection(
         cert_verifier: Arc<ServerCertVerifier>,
         endpoint_id: Uid,
+        remote_id: Uid,
         address: SocketAddr,
         cert_hash: [u8; 32],
         peer_service: &PeerConnectionService,
@@ -229,6 +251,8 @@ impl DiscretEndpoint {
         send_hardware: bool,
         hardware_key: &[u8; 32],
         hardware_name: &str,
+        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
     ) {
         cert_verifier.add_valid_certificate(cert_hash);
         let log = log.clone();
@@ -250,6 +274,9 @@ impl DiscretEndpoint {
         let verifying_key = verifying_key.clone();
         let hardware_key = hardware_key.clone();
         let hardware_name = hardware_name.to_string();
+        let input_buffers = input_buffers.clone();
+        let output_buffers = output_buffers.clone();
+
         tokio::spawn(async move {
             for i in 0..MAX_CONNECTION_RETRY {
                 let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
@@ -269,14 +296,21 @@ impl DiscretEndpoint {
 
                                 let info = ConnectionInfo {
                                     endpoint_id,
+                                    remote_id,
                                     connnection_id,
                                     verifying_key: verifying_key.clone(),
                                     hardware_key: hardware_key,
                                     hardware_name: hardware_name,
                                 };
 
-                                if let Err(e) =
-                                    Self::start_connection(conn, &peer_service, info).await
+                                if let Err(e) = Self::start_connection(
+                                    conn,
+                                    &peer_service,
+                                    info,
+                                    &input_buffers,
+                                    &output_buffers,
+                                )
+                                .await
                                 {
                                     log.error(
                                         "InitiateConnection.start_connection".to_string(),
@@ -284,7 +318,10 @@ impl DiscretEndpoint {
                                     );
                                     let _ = &peer_service
                                         .sender
-                                        .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                                        .send(PeerConnectionMessage::ConnectionFailed(
+                                            endpoint_id,
+                                            remote_id,
+                                        ))
                                         .await;
                                     return;
                                 }
@@ -302,7 +339,10 @@ impl DiscretEndpoint {
                                     );
                                     let _ = &peer_service
                                         .sender
-                                        .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                                        .send(PeerConnectionMessage::ConnectionFailed(
+                                            endpoint_id,
+                                            remote_id,
+                                        ))
                                         .await;
                                 }
                             }
@@ -317,7 +357,10 @@ impl DiscretEndpoint {
                         }
                         let _ = &peer_service
                             .sender
-                            .send(PeerConnectionMessage::ConnectionFailed(endpoint_id))
+                            .send(PeerConnectionMessage::ConnectionFailed(
+                                endpoint_id,
+                                remote_id,
+                            ))
                             .await;
                     }
                 };
@@ -331,6 +374,8 @@ impl DiscretEndpoint {
         conn: Connection,
         peer_service: &PeerConnectionService,
         info: ConnectionInfo,
+        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
     ) -> Result<(), Error> {
         let (mut answer_send, answer_receiv) = conn.open_bi().await?;
         answer_send.write_u8(ANSWER_STREAM).await?;
@@ -356,6 +401,8 @@ impl DiscretEndpoint {
             query_receiv,
             event_send,
             event_receiv,
+            input_buffers,
+            output_buffers,
         )
         .await;
 
@@ -372,16 +419,23 @@ impl DiscretEndpoint {
         mut query_receiv: RecvStream,
         mut event_send: SendStream,
         mut event_receiv: RecvStream,
+        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
     ) {
         //process Answsers
         let (in_answer_sd, in_answer_rcv) = mpsc::channel::<Answer>(CHANNEL_SIZE);
+        let input_buff = input_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             loop {
                 let len = answer_receiv.read_u32().await;
                 if len.is_err() {
                     break;
                 }
+                let mut buf_lock = input_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
+
                 let len: usize = len.unwrap().try_into().unwrap();
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -394,6 +448,8 @@ impl DiscretEndpoint {
 
                 let answer: Result<Answer, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
+                drop(buffer);
+
                 if answer.is_err() {
                     break;
                 }
@@ -403,9 +459,13 @@ impl DiscretEndpoint {
         });
 
         let (out_answer_sd, mut out_answer_rcv) = mpsc::channel::<Answer>(CHANNEL_SIZE);
+        let output_buff = output_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             while let Some(answer) = out_answer_rcv.recv().await {
+                let mut buf_lock = output_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
                 buffer.clear();
 
                 let serialised =
@@ -421,6 +481,8 @@ impl DiscretEndpoint {
                     break;
                 }
                 let sent = answer_send.write_all(&buffer).await;
+                drop(buffer);
+                drop(arc_buf);
                 if sent.is_err() {
                     break;
                 }
@@ -429,15 +491,19 @@ impl DiscretEndpoint {
 
         //process Queries
         let (in_query_sd, in_query_rcv) = mpsc::channel::<QueryProtocol>(CHANNEL_SIZE);
+        let input_buff = input_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             loop {
-                buffer.clear();
                 let len = query_receiv.read_u32().await;
                 if len.is_err() {
                     break;
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
+
+                let mut buf_lock = input_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -450,19 +516,27 @@ impl DiscretEndpoint {
 
                 let query: Result<QueryProtocol, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
+                drop(buffer);
+
                 if query.is_err() {
                     break;
                 }
+
                 let query = query.unwrap();
                 let _ = in_query_sd.send(query).await;
             }
         });
 
         let (out_query_sd, mut out_query_rcv) = mpsc::channel::<QueryProtocol>(CHANNEL_SIZE);
+        let output_buff = output_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             while let Some(query) = out_query_rcv.recv().await {
+                let mut buf_lock = output_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
                 buffer.clear();
+
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, QueryProtocol>(&mut buffer, &query);
                 if serialised.is_err() {
@@ -474,6 +548,8 @@ impl DiscretEndpoint {
                     break;
                 }
                 let sent = query_send.write_all(&buffer).await;
+                drop(buffer);
+
                 if sent.is_err() {
                     break;
                 }
@@ -482,15 +558,19 @@ impl DiscretEndpoint {
 
         //process remote Events
         let (in_event_sd, in_event_rcv) = mpsc::channel::<RemoteEvent>(CHANNEL_SIZE);
+        let input_buff = input_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             loop {
-                buffer.clear();
                 let len = event_receiv.read_u32().await;
                 if len.is_err() {
                     break;
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
+
+                let mut buf_lock = input_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -503,6 +583,8 @@ impl DiscretEndpoint {
 
                 let event: Result<RemoteEvent, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
+                drop(buffer);
+
                 if event.is_err() {
                     break;
                 }
@@ -512,10 +594,15 @@ impl DiscretEndpoint {
         });
 
         let (out_event_sd, mut out_event_rcv) = mpsc::channel::<RemoteEvent>(CHANNEL_SIZE);
+        let output_buff = output_buffers.clone();
         tokio::spawn(async move {
-            let mut buffer: Vec<u8> = Vec::new();
             while let Some(event) = out_event_rcv.recv().await {
+                let mut buf_lock = output_buff.lock().await;
+                let arc_buf = buf_lock.get();
+                drop(buf_lock);
+                let mut buffer = arc_buf.lock().await;
                 buffer.clear();
+
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, RemoteEvent>(&mut buffer, &event);
                 if serialised.is_err() {
@@ -527,6 +614,7 @@ impl DiscretEndpoint {
                     break;
                 }
                 let sent = event_send.write_all(&buffer).await;
+                drop(buffer);
                 if sent.is_err() {
                     break;
                 }
@@ -594,21 +682,21 @@ fn client_tls_config(cert_verifier: Arc<ServerCertVerifier>) -> Result<ClientCon
 }
 
 lazy_static::lazy_static! {
-    pub static ref VALID_CERTIFICATES: Arc<Mutex<HashSet<[u8; 32]>>> =
-    Arc::new(Mutex::new(HashSet::new()));
+    pub static ref VALID_CERTIFICATES: Arc<std::sync::Mutex<HashSet<[u8; 32]>>> =
+    Arc::new(std::sync::Mutex::new(HashSet::new()));
 }
 
 #[derive(Debug)]
 pub struct ServerCertVerifier {
     provider: rustls::crypto::CryptoProvider,
-    valid_certificates: Mutex<HashSet<[u8; 32]>>,
+    valid_certificates: std::sync::Mutex<HashSet<[u8; 32]>>,
 }
 
 impl ServerCertVerifier {
     pub fn new() -> Arc<ServerCertVerifier> {
         Arc::new(ServerCertVerifier {
             provider: rustls::crypto::ring::default_provider(),
-            valid_certificates: Mutex::new(HashSet::new()),
+            valid_certificates: std::sync::Mutex::new(HashSet::new()),
         })
     }
     pub fn contains(&self, cert: &[u8]) -> bool {

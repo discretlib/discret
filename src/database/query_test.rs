@@ -405,11 +405,11 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        let result = sql
+        let _ = sql
             .read(&conn)
           .unwrap();
 
-        println!("{}",result);
+     //   println!("{}",result);
 
         
     }

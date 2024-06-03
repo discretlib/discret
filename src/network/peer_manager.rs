@@ -4,7 +4,7 @@ use quinn::{Connection, VarInt};
 use tokio::sync::mpsc;
 
 use crate::{
-    base64_decode, base64_encode,
+    base64_decode,
     database::{graph_database::GraphDatabaseService, system_entities::AllowedPeer},
     network::endpoint::EndpointMessage,
     security::{MeetingSecret, MeetingToken},
@@ -15,10 +15,10 @@ use crate::{
 use super::{endpoint::DiscretEndpoint, multicast::MulticastMessage, Announce, AnnounceHeader};
 
 //indicate that an other connection has be kept
-const ERROR_CONN_ELECTION: u16 = 1;
+const REASON_CONN_ELECTION: u16 = 1;
 
-//A technical error has occured
-const ERROR_TECHNICAL: u16 = 2;
+//the remote peer does not hav to knwow why the connection is closed
+pub const REASON_UNKNOWN: u16 = 2;
 
 pub struct PeerManager {
     pub endpoint: DiscretEndpoint,
@@ -30,8 +30,8 @@ pub struct PeerManager {
 
     pub allowed_token: HashMap<MeetingToken, Vec<Vec<u8>>>,
 
-    connection_progress: HashMap<Uid, bool>,
-    connected: HashMap<Uid, (Connection, Uid)>,
+    connection_progress: HashMap<[u8; 32], bool>,
+    connected: HashMap<[u8; 32], (Connection, Uid)>,
 
     db: GraphDatabaseService,
     verify_service: SignatureVerificationService,
@@ -123,12 +123,17 @@ impl PeerManager {
                 if a.header.endpoint_id == self.endpoint.id {
                     return;
                 }
+                let circuit_id = Self::circuit_id(a.header.endpoint_id, self.endpoint.id);
+                if self.connected.contains_key(&circuit_id) {
+                    return;
+                }
+                let connection_progress = self.connection_progress.entry(circuit_id).or_default();
+                if *connection_progress {
+                    return;
+                }
+
                 for candidate in &a.tokens {
                     if let Some(verifying_keys) = self.allowed_token.get(candidate) {
-                        let connection_progress = self
-                            .connection_progress
-                            .entry(a.header.endpoint_id)
-                            .or_default();
                         if !*connection_progress {
                             for verifying_key in verifying_keys {
                                 let mut include_hardware = false;
@@ -148,7 +153,6 @@ impl PeerManager {
                                         format!("{}:{}", &address.ip(), &a.header.port)
                                             .parse()
                                             .unwrap();
-                                    println!("initiate from Annouce to target {} ", target);
                                     let _ = self
                                         .multicast_discovery
                                         .send(MulticastMessage::InitiateConnection(
@@ -163,6 +167,7 @@ impl PeerManager {
                                         .send(EndpointMessage::InitiateConnection(
                                             target,
                                             a.header.certificate_hash,
+                                            a.header.endpoint_id,
                                             include_hardware,
                                         ))
                                         .await;
@@ -176,11 +181,13 @@ impl PeerManager {
                 if header.endpoint_id == self.endpoint.id {
                     return;
                 }
+                let circuit_id = Self::circuit_id(header.endpoint_id, self.endpoint.id);
+                let connection_progress = self.connection_progress.entry(circuit_id).or_default();
+                if *connection_progress {
+                    return;
+                }
+
                 if let Some(verifying_keys) = self.allowed_token.get(&token) {
-                    let connection_progress = self
-                        .connection_progress
-                        .entry(header.endpoint_id)
-                        .or_default();
                     if !*connection_progress {
                         for verifying_key in verifying_keys {
                             let mut include_hardware = false;
@@ -206,6 +213,7 @@ impl PeerManager {
                                     .send(EndpointMessage::InitiateConnection(
                                         target,
                                         header.certificate_hash,
+                                        header.endpoint_id,
                                         include_hardware,
                                     ))
                                     .await;
@@ -218,31 +226,61 @@ impl PeerManager {
     }
 
     //peer to peer connectoin tends to create two connections
-    //we arbitrarily remove the on the highest conn_id
-    pub fn add_connection(&mut self, endpoint_id: Uid, conn: Connection, conn_id: Uid) {
-        if let Some((old_conn, old_conn_id)) = self.connected.remove(&endpoint_id) {
+    //we arbitrarily remove the on the highest conn_id (the newest conn, Uids starts with a timestamps)
+    pub fn add_connection(
+        &mut self,
+        endpoint_id: Uid,
+        remote_id: Uid,
+        conn: Connection,
+        conn_id: Uid,
+    ) {
+        let circuit_id = Self::circuit_id(endpoint_id, remote_id);
+        self.connection_progress.remove(&circuit_id);
+
+        if let Some((old_conn, old_conn_id)) = self.connected.remove(&circuit_id) {
             if old_conn_id > conn_id {
-                println!("closing old{}", base64_encode(&old_conn_id));
-                old_conn.close(VarInt::from(ERROR_CONN_ELECTION), "e".as_bytes());
-                self.connected.insert(endpoint_id, (conn, conn_id));
+                old_conn.close(VarInt::from(REASON_CONN_ELECTION), "".as_bytes());
+                self.connected.insert(circuit_id, (conn, conn_id));
             } else {
-                println!("closing new{}", base64_encode(&conn_id));
-                conn.close(VarInt::from(ERROR_CONN_ELECTION), "e".as_bytes());
-                self.connected.insert(endpoint_id, (old_conn, old_conn_id));
+                conn.close(VarInt::from(REASON_CONN_ELECTION), "".as_bytes());
+                self.connected.insert(circuit_id, (old_conn, old_conn_id));
             }
         } else {
-            println!("adding new connection {}", base64_encode(&conn_id));
-            self.connected.insert(endpoint_id, (conn, conn_id));
+            self.connected.insert(circuit_id, (conn, conn_id));
         }
     }
 
-    pub fn disconnect(&mut self, endpoint_id: Uid, error_code: u16, message: &str) {
-        if let Some((conn, _)) = self.connected.remove(&endpoint_id) {
-            conn.close(VarInt::from(error_code), message.as_bytes());
+    pub fn disconnect(
+        &mut self,
+        circuit_id: [u8; 32],
+        conn_id: Uid,
+        error_code: u16,
+        message: &str,
+    ) -> bool {
+        let mut disconnected = false;
+        let conn = self.connected.get(&circuit_id);
+        if let Some((conn, uid)) = conn {
+            if conn_id.eq(uid) {
+                conn.close(VarInt::from(error_code), message.as_bytes());
+                self.connected.remove(&circuit_id);
+                disconnected = true
+            }
         }
+        disconnected
     }
 
-    pub fn clean_progress(&mut self, endpoint_id: Uid) {
-        self.connection_progress.remove(&endpoint_id);
+    pub fn clean_progress(&mut self, endpoint_id: Uid, remote_id: Uid) {
+        let circuit_id = Self::circuit_id(endpoint_id, remote_id);
+        self.connection_progress.remove(&circuit_id);
+    }
+
+    pub fn circuit_id(endpoint_id: Uid, remote_id: Uid) -> [u8; 32] {
+        let mut v = vec![endpoint_id, remote_id];
+        v.sort();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&v[0]);
+        hasher.update(&v[1]);
+        let hash = hasher.finalize();
+        *hash.as_bytes()
     }
 }

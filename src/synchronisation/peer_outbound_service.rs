@@ -11,7 +11,7 @@ use tokio::sync::{
 
 use crate::{
     database::graph_database::GraphDatabaseService, log_service::LogService,
-    network::peer_connection_service::PeerConnectionService, security::Uid,
+    peer_connection_service::PeerConnectionService, security::Uid,
 };
 
 use super::{Answer, Error, ProveAnswer, Query, QueryProtocol};
@@ -25,6 +25,8 @@ pub struct InboundQueryService {
 }
 impl InboundQueryService {
     pub fn start(
+        circuit_id: [u8; 32],
+        connection_id: Uid,
         mut peer: RemotePeerHandle,
         mut receiver: mpsc::Receiver<QueryProtocol>,
         log_service: LogService,
@@ -57,7 +59,9 @@ impl InboundQueryService {
             }
 
             let key = verifying_key.lock().await;
-            peer_service.disconnect(key.clone(), peer.hardware_id).await;
+            peer_service
+                .disconnect(key.clone(), circuit_id, connection_id)
+                .await;
         });
         Self { room_sender }
     }
