@@ -14,7 +14,7 @@ use tokio::{
 use crate::{
     log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, hash, new_uid, HardwareFingerprint, Uid},
+    security::{self, hash, new_uid, random_domain_name, HardwareFingerprint, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
@@ -38,7 +38,6 @@ pub enum EndpointMessage {
     InitiateConnection(SocketAddr, [u8; 32], Uid, bool),
 }
 
-const SERVER_NAME: &str = "quicwg.org";
 pub struct DiscretEndpoint {
     pub id: Uid,
     pub sender: mpsc::Sender<EndpointMessage>,
@@ -276,7 +275,7 @@ impl DiscretEndpoint {
         tokio::spawn(async move {
             for i in 0..MAX_CONNECTION_RETRY {
                 let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
-                    endpoint.connect(address, SERVER_NAME);
+                    endpoint.connect(address, &random_domain_name());
 
                 match conn_result {
                     Ok(connecting) => {
@@ -908,7 +907,7 @@ mod tests {
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
         endpoint
-            .connect(addr, SERVER_NAME)
+            .connect(addr, &random_domain_name())
             .unwrap()
             .await
             .expect_err("connection should have failed due to invalid certificate");

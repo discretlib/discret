@@ -103,21 +103,6 @@ impl PeerConnectionService {
         )
         .await?;
 
-        //   peers.send_annouces().await?;
-
-        let service = peer_service.clone();
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_millis(1000));
-
-            loop {
-                interval.tick().await;
-                let _ = service
-                    .sender
-                    .send(PeerConnectionMessage::SendAnnounce())
-                    .await;
-            }
-        });
-
         tokio::spawn(async move {
             let mut event_receiver = events.subcribe().await;
             loop {
@@ -300,9 +285,35 @@ impl PeerConnectionService {
                     );
                 }
             }
-            PeerConnectionMessage::MulticastMessage(_message, address) => {
-                peer_manager.process_multicast(_message, address).await;
-            }
+            PeerConnectionMessage::MulticastMessage(message, address) => match message {
+                MulticastMessage::ProbeLocalIp(probe_value) => {
+                    let probed = peer_manager
+                        .validate_probe(probe_value, address)
+                        .await
+                        .unwrap();
+                    //ip have been retrieved and headers have been initialised, we can start sending anounce
+                    if probed {
+                        let service = peer_service.clone();
+                        tokio::spawn(async move {
+                            let mut interval = time::interval(Duration::from_millis(1000));
+
+                            loop {
+                                interval.tick().await;
+                                let _ = service
+                                    .sender
+                                    .send(PeerConnectionMessage::SendAnnounce())
+                                    .await;
+                            }
+                        });
+                    }
+                }
+                MulticastMessage::Annouce(a) => peer_manager.process_announce(a, address).await,
+                MulticastMessage::InitiateConnection(header, token) => {
+                    peer_manager
+                        .process_initiate_connection(header, token, address)
+                        .await
+                }
+            },
 
             PeerConnectionMessage::ConnectionFailed(endpoint_id, remote_id) => {
                 peer_manager.clean_progress(endpoint_id, remote_id);

@@ -19,6 +19,7 @@ const MULTICAST_MTU: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 pub enum MulticastMessage {
+    ProbeLocalIp([u8; 32]),
     Annouce(Announce),
     InitiateConnection(AnnounceHeader, MeetingToken),
 }

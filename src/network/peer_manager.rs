@@ -1,9 +1,9 @@
+use crate::Error;
+use quinn::{Connection, VarInt};
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
 };
-
-use quinn::{Connection, VarInt};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     },
     log_service::LogService,
     network::endpoint::EndpointMessage,
-    security::{HardwareFingerprint, MeetingSecret, MeetingToken},
+    security::{random32, HardwareFingerprint, MeetingSecret, MeetingToken},
     signature_verification_service::SignatureVerificationService,
     Uid,
 };
@@ -46,7 +46,8 @@ pub struct PeerManager {
     logs: LogService,
     verify_service: SignatureVerificationService,
 
-    ipv4_header: AnnounceHeader,
+    probe_value: [u8; 32],
+    ipv4_header: Option<AnnounceHeader>,
     ipv6_header: Option<AnnounceHeader>,
 }
 impl PeerManager {
@@ -62,6 +63,7 @@ impl PeerManager {
     ) -> Result<Self, crate::Error> {
         let allowed_peers = db.get_allowed_peers(private_room_id).await?;
         let mut allowed_token: HashMap<MeetingToken, Vec<Vec<u8>>> = HashMap::new();
+
         for peers in &allowed_peers {
             let token = MeetingSecret::decode_token(&peers.meeting_token)?;
             let entry = allowed_token.entry(token).or_default();
@@ -70,29 +72,10 @@ impl PeerManager {
             entry.push(verifying_key);
         }
 
-        let mut ipv4_header = AnnounceHeader {
-            endpoint_id: endpoint.id,
-            port: endpoint.ipv4_port,
-            certificate_hash: endpoint.ipv4_cert_hash,
-            ..Default::default()
-        };
-
-        let (_verifying, signature) = db.sign(ipv4_header.hash_for_signature().to_vec()).await;
-        ipv4_header.signature = signature;
-
-        let ipv6_header = if let Some(port) = endpoint.ipv6_port {
-            let mut ipv6_header = AnnounceHeader {
-                endpoint_id: endpoint.id,
-                port: port,
-                certificate_hash: endpoint.ipv6_cert_hash,
-                ..Default::default()
-            };
-            let (_verifying, signature) = db.sign(ipv6_header.hash_for_signature().to_vec()).await;
-            ipv6_header.signature = signature;
-            Some(ipv6_header)
-        } else {
-            None
-        };
+        let probe_value = random32();
+        let _ = multicast_discovery
+            .send(MulticastMessage::ProbeLocalIp(probe_value))
+            .await;
 
         Ok(Self {
             endpoint,
@@ -108,130 +91,203 @@ impl PeerManager {
             db,
             logs,
             verify_service,
-            ipv4_header,
-            ipv6_header,
+            probe_value,
+            ipv4_header: None,
+            ipv6_header: None,
         })
     }
 
     pub async fn send_annouces(&self) -> Result<(), crate::Error> {
-        let mut tokens: Vec<MeetingToken> = Vec::new();
-        for tok in &self.allowed_peers {
-            tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
-        }
-        let ipv4_announce = Announce {
-            header: self.ipv4_header.clone(),
-            tokens,
-        };
+        if let Some(ipv4_header) = &self.ipv4_header {
+            let mut tokens: Vec<MeetingToken> = Vec::new();
+            for tok in &self.allowed_peers {
+                tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
+            }
+            let ipv4_announce = Announce {
+                header: ipv4_header.clone(),
+                tokens,
+            };
 
-        self.multicast_discovery
-            .send(MulticastMessage::Annouce(ipv4_announce))
-            .await
-            .map_err(|_| crate::Error::ChannelError("MulticastMessage send".to_string()))?;
+            self.multicast_discovery
+                .send(MulticastMessage::Annouce(ipv4_announce))
+                .await
+                .map_err(|_| crate::Error::ChannelError("MulticastMessage send".to_string()))?;
+        }
+
         Ok(())
     }
 
-    pub async fn process_multicast(&mut self, msg: MulticastMessage, address: SocketAddr) {
-        match msg {
-            MulticastMessage::Annouce(a) => {
-                if a.header.endpoint_id == self.endpoint.id {
-                    return;
-                }
-                let circuit_id = Self::circuit_id(a.header.endpoint_id, self.endpoint.id);
-                if self.connected.contains_key(&circuit_id) {
-                    return;
-                }
-                let connection_progress = self.connection_progress.entry(circuit_id).or_default();
-                if *connection_progress {
-                    return;
-                }
+    pub async fn validate_probe(
+        &mut self,
+        probe_value: [u8; 32],
+        address: SocketAddr,
+    ) -> Result<bool, Error> {
+        if self.ipv4_header.is_some() {
+            return Ok(false);
+        }
+        if probe_value.eq(&self.probe_value) {
+            let ipv4_adress: SocketAddr = format!("{}:{}", &address.ip(), &self.endpoint.ipv4_port)
+                .parse()
+                .unwrap();
 
-                for candidate in &a.tokens {
-                    if let Some(verifying_keys) = self.allowed_token.get(candidate) {
-                        if !*connection_progress {
-                            for verifying_key in verifying_keys {
-                                let mut include_hardware = false;
-                                let hash_to_verify = a.header.hash_for_signature();
-                                let signature = a.header.signature.clone();
-                                let validated = self
-                                    .verify_service
-                                    .verify_hash(signature, hash_to_verify, verifying_key.clone())
-                                    .await;
-                                if validated {
-                                    *connection_progress = true;
-                                    if verifying_key.eq(&self.verifying_key) {
-                                        include_hardware = true;
-                                    }
-                                    self.local_connection.insert(circuit_id);
-                                    let target: SocketAddr =
-                                        format!("{}:{}", &address.ip(), &a.header.port)
-                                            .parse()
-                                            .unwrap();
-                                    let _ = self
-                                        .multicast_discovery
-                                        .send(MulticastMessage::InitiateConnection(
-                                            self.ipv4_header.clone(),
-                                            *candidate,
-                                        ))
-                                        .await;
+            let mut ipv4_header = AnnounceHeader {
+                socket_adress: ipv4_adress,
+                endpoint_id: self.endpoint.id,
+                certificate_hash: self.endpoint.ipv4_cert_hash,
+                signature: Vec::new(),
+            };
 
-                                    let _ = self
-                                        .endpoint
-                                        .sender
-                                        .send(EndpointMessage::InitiateConnection(
-                                            target,
-                                            a.header.certificate_hash,
-                                            a.header.endpoint_id,
-                                            include_hardware,
-                                        ))
-                                        .await;
-                                }
+            let (_verifying, signature) = self
+                .db
+                .sign(ipv4_header.hash_for_signature().to_vec())
+                .await;
+            ipv4_header.signature = signature;
+            self.ipv4_header = Some(ipv4_header);
+
+            let ipv6_header = if let Some(port) = self.endpoint.ipv6_port {
+                let ipv6_adress: SocketAddr =
+                    format!("{}:{}", &address.ip(), port).parse().unwrap();
+
+                let mut ipv6_header = AnnounceHeader {
+                    socket_adress: ipv6_adress,
+                    endpoint_id: self.endpoint.id,
+                    certificate_hash: self.endpoint.ipv6_cert_hash,
+                    signature: Vec::new(),
+                };
+                let (_verifying, signature) = self
+                    .db
+                    .sign(ipv6_header.hash_for_signature().to_vec())
+                    .await;
+                ipv6_header.signature = signature;
+                Some(ipv6_header)
+            } else {
+                None
+            };
+
+            self.ipv6_header = ipv6_header;
+
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub async fn process_announce(&mut self, a: Announce, address: SocketAddr) {
+        if self.ipv4_header.is_none() {
+            return;
+        }
+        if !a.header.socket_adress.ip().eq(&address.ip()) {
+            return;
+        }
+        if a.header.endpoint_id.eq(&self.endpoint.id) {
+            return;
+        }
+
+        let circuit_id = Self::circuit_id(a.header.endpoint_id, self.endpoint.id);
+        if self.connected.contains_key(&circuit_id) {
+            return;
+        }
+        let connection_progress = self.connection_progress.entry(circuit_id).or_default();
+        if *connection_progress {
+            return;
+        }
+
+        let header = self.ipv4_header.as_ref().unwrap();
+
+        for candidate in &a.tokens {
+            if let Some(verifying_keys) = self.allowed_token.get(candidate) {
+                if !*connection_progress {
+                    for verifying_key in verifying_keys {
+                        let mut include_hardware = false;
+                        let hash_to_verify = a.header.hash_for_signature();
+                        let signature = a.header.signature.clone();
+                        let validated = self
+                            .verify_service
+                            .verify_hash(signature, hash_to_verify, verifying_key.clone())
+                            .await;
+                        if validated {
+                            *connection_progress = true;
+                            if verifying_key.eq(&self.verifying_key) {
+                                include_hardware = true;
                             }
+                            self.local_connection.insert(circuit_id);
+                            let target: SocketAddr = a.header.socket_adress;
+
+                            let _ = self
+                                .multicast_discovery
+                                .send(MulticastMessage::InitiateConnection(
+                                    header.clone(),
+                                    *candidate,
+                                ))
+                                .await;
+
+                            let _ = self
+                                .endpoint
+                                .sender
+                                .send(EndpointMessage::InitiateConnection(
+                                    target,
+                                    a.header.certificate_hash,
+                                    a.header.endpoint_id,
+                                    include_hardware,
+                                ))
+                                .await;
                         }
                     }
                 }
             }
-            MulticastMessage::InitiateConnection(header, token) => {
-                if header.endpoint_id == self.endpoint.id {
-                    return;
-                }
-                let circuit_id = Self::circuit_id(header.endpoint_id, self.endpoint.id);
-                let connection_progress = self.connection_progress.entry(circuit_id).or_default();
-                if *connection_progress {
-                    return;
-                }
+        }
+    }
 
-                if let Some(verifying_keys) = self.allowed_token.get(&token) {
-                    if !*connection_progress {
-                        for verifying_key in verifying_keys {
-                            let mut include_hardware = false;
-                            let hash_to_verify = header.hash_for_signature();
-                            let signature = header.signature.clone();
-                            let validated = self
-                                .verify_service
-                                .verify_hash(signature, hash_to_verify, verifying_key.clone())
-                                .await;
-                            if validated {
-                                *connection_progress = true;
-                                if verifying_key.eq(&self.verifying_key) {
-                                    include_hardware = true;
-                                }
-                                let target: SocketAddr =
-                                    format!("{}:{}", &address.ip(), &header.port)
-                                        .parse()
-                                        .unwrap();
+    pub async fn process_initiate_connection(
+        &mut self,
+        header: AnnounceHeader,
+        token: MeetingToken,
+        address: SocketAddr,
+    ) {
+        if self.ipv4_header.is_none() {
+            return;
+        }
+        if !header.socket_adress.ip().eq(&address.ip()) {
+            return;
+        }
+        if header.endpoint_id == self.endpoint.id {
+            return;
+        }
+        let circuit_id = Self::circuit_id(header.endpoint_id, self.endpoint.id);
+        let connection_progress = self.connection_progress.entry(circuit_id).or_default();
+        if *connection_progress {
+            return;
+        }
+        if self.connected.contains_key(&circuit_id) {
+            return;
+        }
 
-                                let _ = self
-                                    .endpoint
-                                    .sender
-                                    .send(EndpointMessage::InitiateConnection(
-                                        target,
-                                        header.certificate_hash,
-                                        header.endpoint_id,
-                                        include_hardware,
-                                    ))
-                                    .await;
-                            }
+        if let Some(verifying_keys) = self.allowed_token.get(&token) {
+            if !*connection_progress {
+                for verifying_key in verifying_keys {
+                    let mut include_hardware = false;
+                    let hash_to_verify = header.hash_for_signature();
+                    let signature = header.signature.clone();
+                    let validated = self
+                        .verify_service
+                        .verify_hash(signature, hash_to_verify, verifying_key.clone())
+                        .await;
+                    if validated {
+                        *connection_progress = true;
+                        if verifying_key.eq(&self.verifying_key) {
+                            include_hardware = true;
                         }
+                        let target: SocketAddr = header.socket_adress;
+
+                        let _ = self
+                            .endpoint
+                            .sender
+                            .send(EndpointMessage::InitiateConnection(
+                                target,
+                                header.certificate_hash,
+                                header.endpoint_id,
+                                include_hardware,
+                            ))
+                            .await;
                     }
                 }
             }

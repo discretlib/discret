@@ -1,5 +1,4 @@
 use std::{
-    env,
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
@@ -10,7 +9,7 @@ use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
-use rcgen::{CertificateParams, KeyPair, SanType};
+use rcgen::{CertificateParams, KeyPair};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Networks, System};
 use thiserror::Error;
@@ -216,13 +215,53 @@ impl VerifyingKey for Ed2519VerifyingKey {
 }
 
 pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
-    let mut params: CertificateParams = Default::default();
-
-    params.subject_alt_names = vec![SanType::DnsName("localhost".try_into().unwrap())];
+    let params: CertificateParams = Default::default();
     let key_pair = KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
     // let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
     rcgen::CertifiedKey { cert, key_pair }
+}
+
+///
+/// The quick connection initiate connection with a domain name that is mandatory during TLS negociations for certificate validation.
+/// We are bypassing the TLS cerficate validation, so we don't need this domain name.
+/// But... this is transmitted in clear text over the network as part of the QUIC handshake. Setting a static name would make it trivial
+/// to detect that the discret protocol is used.
+/// Let's make it a litte bit harder by creating a random domain name
+///
+pub fn random_domain_name() -> String {
+    let min_value = 4;
+    let max_value = 9;
+    let divider = max_value - min_value;
+    let offset: usize = OsRng.next_u32().try_into().unwrap();
+    let num = offset % divider;
+
+    let consonants = vec![
+        'b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'q', 'r', 's', 't', 'v',
+    ];
+    let vowels = vec!['a', 'e', 'i', 'o', 'u'];
+    let extension = vec![".com", ".org", ".net", ".us", ".co", ".biz", ".info"];
+    let size = num + min_value;
+    let mut domain = String::new();
+
+    let mut vowel = false;
+    for _ in 0..size {
+        let mut index: usize = OsRng.next_u32().try_into().unwrap();
+        if vowel {
+            index = index % vowels.len();
+            domain.push(vowels[index]);
+            vowel = false;
+        } else {
+            index = index % consonants.len();
+            domain.push(consonants[index]);
+            vowel = true;
+        }
+    }
+    let mut index: usize = OsRng.next_u32().try_into().unwrap();
+    index = index % extension.len();
+    domain.push_str(extension[index]);
+
+    domain
 }
 
 pub fn random32() -> [u8; 32] {
@@ -425,7 +464,6 @@ pub fn uid_from(v: Vec<u8>) -> Result<Uid, Error> {
 /// if the platform is not supported by sysinfo,
 /// creates a file named discret_fingerprint.bin and stores a random number
 ///
-///
 #[derive(Serialize, Deserialize, Clone)]
 pub struct HardwareFingerprint {
     pub id: Uid,
@@ -436,13 +474,6 @@ impl HardwareFingerprint {
         let mut name = "Discret Device".to_string();
         let id: [u8; 32] = if sysinfo::IS_SUPPORTED_SYSTEM {
             let mut hasher = blake3::Hasher::new();
-            //add the current path to give different key for different installation
-            let path = if let Ok(path) = env::current_dir() {
-                path.display().to_string()
-            } else {
-                "".to_string()
-            };
-            hasher.update(path.as_bytes());
             let mut sys = System::new_all();
             sys.refresh_all();
 
@@ -573,5 +604,12 @@ mod tests {
         let id1 = HardwareFingerprint::get_file_key(path.into()).unwrap();
         let id2 = HardwareFingerprint::get_file_key(path.into()).unwrap();
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    pub fn random_domain() {
+        for _ in 0..50 {
+            assert!(random_domain_name().len() <= 13);
+        }
     }
 }

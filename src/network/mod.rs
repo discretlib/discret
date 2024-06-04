@@ -4,7 +4,7 @@ pub mod peer_manager;
 pub mod shared_buffers;
 use serde::{Deserialize, Serialize};
 
-use std::io;
+use std::{io, net::SocketAddr};
 use thiserror::Error;
 
 use crate::{
@@ -20,25 +20,24 @@ pub struct ConnectionInfo {
     pub hardware: Option<HardwareFingerprint>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AnnounceHeader {
+    socket_adress: SocketAddr,
     endpoint_id: Uid,
-    port: u16,
     certificate_hash: [u8; 32],
     signature: Vec<u8>,
 }
 impl AnnounceHeader {
     pub fn hash_for_signature(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.socket_adress.to_string().as_bytes());
         hasher.update(&self.endpoint_id);
-
-        hasher.update(&self.port.to_le_bytes());
         hasher.update(&self.certificate_hash);
         *hasher.finalize().as_bytes()
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct Announce {
     pub header: AnnounceHeader,
     pub tokens: Vec<MeetingToken>,
