@@ -113,7 +113,6 @@ impl LocalPeerService {
     pub fn start(
         mut remote_event: Receiver<RemoteEvent>,
         mut local_event: broadcast::Receiver<LocalEvent>,
-        hardware_id: Vec<u8>,
         circuit_id: [u8; 32],
         connection_id: Uid,
         remote_verifying_key: Arc<Mutex<Vec<u8>>>,
@@ -174,7 +173,8 @@ impl LocalPeerService {
                                     &lock_service,
                                     &query_service,
                                     &mut remote_rooms,
-                                    &hardware_id)
+                                    circuit_id
+                                 )
                                     .await{
                                         log_service.error("LocalPeerService remote event".to_string(),e);
                                         break;
@@ -236,7 +236,7 @@ impl LocalPeerService {
         lock_service: &RoomLockService,
         query_service: &QueryService,
         remote_rooms: &mut HashSet<Uid>,
-        hardware_id: &Vec<u8>,
+        circuit_id: [u8; 32],
     ) -> Result<(), crate::Error> {
         match event {
             RemoteEvent::Ready => {
@@ -245,7 +245,7 @@ impl LocalPeerService {
                     remote_rooms.insert(room.clone());
                 }
                 lock_service
-                    .request_locks(hardware_id.clone(), rooms, lock_reply.clone())
+                    .request_locks(circuit_id, rooms, lock_reply.clone())
                     .await;
             }
 
@@ -253,17 +253,13 @@ impl LocalPeerService {
                 remote_rooms.insert(room.clone());
                 let mut q = VecDeque::new();
                 q.push_back(room);
-                lock_service
-                    .request_locks(hardware_id.clone(), q, lock_reply)
-                    .await;
+                lock_service.request_locks(circuit_id, q, lock_reply).await;
             }
             RemoteEvent::RoomDataChanged(room) => {
                 if remote_rooms.contains(&room) {
                     let mut q = VecDeque::new();
                     q.push_back(room);
-                    lock_service
-                        .request_locks(hardware_id.clone(), q, lock_reply)
-                        .await;
+                    lock_service.request_locks(circuit_id, q, lock_reply).await;
                 }
             }
         }

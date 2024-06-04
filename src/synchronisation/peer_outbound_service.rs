@@ -301,7 +301,6 @@ impl InboundQueryService {
 }
 
 pub struct RemotePeerHandle {
-    pub hardware_id: Vec<u8>,
     pub allowed_room: HashSet<Uid>,
     pub db: GraphDatabaseService,
     pub reply: mpsc::Sender<Answer>,

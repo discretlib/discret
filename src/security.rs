@@ -1,4 +1,9 @@
-use std::env;
+use std::{
+    env,
+    fs::OpenOptions,
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use crate::date_utils::now;
 use argon2::{self, Config, Variant, Version};
@@ -6,6 +11,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use rcgen::{CertificateParams, KeyPair, SanType};
+use serde::{Deserialize, Serialize};
 use sysinfo::{Networks, System};
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -26,6 +32,9 @@ pub enum Error {
 
     #[error(transparent)]
     Decode(#[from] base64::DecodeError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 
     #[error("Invalid Base64 encoded Uid")]
     Uid(),
@@ -206,10 +215,10 @@ impl VerifyingKey for Ed2519VerifyingKey {
     }
 }
 
-pub fn generate_x509_certificate(name: String) -> rcgen::CertifiedKey {
+pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
     let mut params: CertificateParams = Default::default();
 
-    params.subject_alt_names = vec![SanType::DnsName(name.try_into().unwrap())];
+    params.subject_alt_names = vec![SanType::DnsName("localhost".try_into().unwrap())];
     let key_pair = KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
     // let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
@@ -379,6 +388,15 @@ pub fn derive_uid(context: &str, key_material: &[u8]) -> Uid {
     uid
 }
 
+/// derive a ket from a string context and a secret
+/// provided by the Blake3 hash function  
+///
+pub fn uid_from_hash(hash: &[u8; 32]) -> Uid {
+    let mut uid = default_uid();
+    uid.copy_from_slice(&hash[0..UID_SIZE]);
+    uid
+}
+
 pub fn default_uid() -> Uid {
     DEFAULT_UID.clone()
 }
@@ -400,42 +418,79 @@ pub fn uid_from(v: Vec<u8>) -> Result<Uid, Error> {
 
 ///
 /// try to get a unique identifier from the underlying hardware
-/// returns a unique identifier and  the machine name
+/// returns a unique identifier and  the machine name.
 ///
-/// if the platform is not supported by sysinfo, return a random number and an empty string
+/// This is only used to identifies devices you own, not devices of other peers
+///
+/// if the platform is not supported by sysinfo,
+/// creates a file named discret_fingerprint.bin and stores a random number
 ///
 ///
-pub fn hardware_fingerprint() -> ([u8; 32], String) {
-    let mut hasher = blake3::Hasher::new();
+#[derive(Serialize, Deserialize, Clone)]
+pub struct HardwareFingerprint {
+    pub id: Uid,
+    pub name: String,
+}
+impl HardwareFingerprint {
+    pub fn new() -> Result<Self, Error> {
+        let mut name = "Discret Device".to_string();
+        let id: [u8; 32] = if sysinfo::IS_SUPPORTED_SYSTEM {
+            let mut hasher = blake3::Hasher::new();
+            //add the current path to give different key for different installation
+            let path = if let Ok(path) = env::current_dir() {
+                path.display().to_string()
+            } else {
+                "".to_string()
+            };
+            hasher.update(path.as_bytes());
+            let mut sys = System::new_all();
+            sys.refresh_all();
 
-    //add the current path to give different key for different installation
-    let path = if let Ok(path) = env::current_dir() {
-        path.display().to_string()
-    } else {
-        "".to_string()
-    };
-    hasher.update(path.as_bytes());
-    let mut sys = System::new_all();
-    sys.refresh_all();
+            let host_name = System::host_name().unwrap_or_default();
+            name = System::name().unwrap_or_default();
+            name = format!("{} {}", host_name, name);
+            hasher.update(name.as_bytes());
+            let networks = Networks::new_with_refreshed_list();
+            let mut macs = Vec::new();
+            for (_, network) in &networks {
+                macs.push(network.mac_address().to_string());
+            }
+            macs.sort();
+            for mac in macs {
+                hasher.update(mac.as_bytes());
+            }
+            *hasher.finalize().as_bytes()
+        } else {
+            Self::get_file_key("discret_fingerprint.bin".into())?
+        };
 
-    let host_name = System::host_name().unwrap_or_default();
-    let name = System::name().unwrap_or_default();
-    let name = format!("{} {}", host_name, name);
-    hasher.update(name.as_bytes());
-    let networks = Networks::new_with_refreshed_list();
-    let mut macs = Vec::new();
-    for (_, network) in &networks {
-        macs.push(network.mac_address().to_string());
+        Ok(Self {
+            id: uid_from_hash(&id),
+            name,
+        })
     }
-    macs.sort();
-    for mac in macs {
-        hasher.update(mac.as_bytes());
+
+    fn get_file_key(path: PathBuf) -> Result<[u8; 32], Error> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+
+        let mut content: [u8; 32] = [0; 32];
+        let len = file.read(&mut content)?;
+        if len == 0 {
+            content = random32();
+            file.write(&content)?;
+        }
+        Ok(content)
     }
-    (hasher.finalize().into(), name)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     #[test]
     fn control_derive_pass_phrase() {
@@ -504,10 +559,19 @@ mod tests {
         assert_eq!(id1, id2);
     }
 
-    // #[test]
-    // pub fn hardware_print() {
-    //     let info = hardware_fingerprint();
-    //     let info2 = hardware_fingerprint();
-    //     assert_eq!(info, info2);
-    // }
+    #[test]
+    pub fn hardware_print() {
+        let info = HardwareFingerprint::new().unwrap();
+        let info2 = HardwareFingerprint::new().unwrap();
+        assert_eq!(info.id, info2.id);
+    }
+    #[test]
+    pub fn hardware_fingerprint_file() {
+        let path = "test_data/fingerprint.bin";
+        let _ = fs::remove_file(&path);
+
+        let id1 = HardwareFingerprint::get_file_key(path.into()).unwrap();
+        let id2 = HardwareFingerprint::get_file_key(path.into()).unwrap();
+        assert_eq!(id1, id2);
+    }
 }

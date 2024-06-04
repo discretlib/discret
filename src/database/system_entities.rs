@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     base64_encode,
-    security::{Ed25519SigningKey, MeetingToken},
+    security::{uid_encode, Ed25519SigningKey, MeetingToken},
     Parameters, ParametersAdd, Uid,
 };
 
@@ -52,6 +52,9 @@ pub const PEER_ENT_SHORT: &str = "0.4";
 pub const ALLOWED_PEER_ENT: &str = "sys.AllowedPeer";
 pub const ALLOWED_PEER_ENT_SHORT: &str = "0.5";
 
+pub const ALLOWED_HARDWARE_ENT: &str = "sys.AllowedHardware";
+pub const ALLOWED_HARDWARE_ENT_SHORT: &str = "0.6";
+
 //name of the system fields
 pub const ID_FIELD: &str = "id";
 pub const ROOM_ID_FIELD: &str = "room_id";
@@ -90,7 +93,10 @@ pub const PEER_PUB_KEY_SHORT: &str = "32";
 
 pub const ALLOWED_PEER_PEER_SHORT: &str = "32";
 pub const ALLOWED_PEER_TOKEN_SHORT: &str = "33";
-pub const ALLOWED_PEER_ENABLED_SHORT: &str = "34";
+pub const ALLOWED_PEER_STATUS_SHORT: &str = "34";
+
+pub const ALLOWED_HARDWARE_NAME_SHORT: &str = "32";
+pub const ALLOWED_HARDWARE_STATUS_SHORT: &str = "33";
 
 pub const SYSTEM_DATA_MODEL: &str = r#"
 sys{
@@ -129,12 +135,12 @@ sys{
     AllowedPeer{
         peer: sys.Peer,
         meeting_token: Base64,
-        enabled: Boolean default true,
+        status: String default "enabled", //enabled, disabled, pending
     }
 
     AllowedHardware{
-        fingerprint: Base64,
         name: String,
+        status: String default "enabled", //enabled, disabled, pending
     }
 
     InboundInvitation{
@@ -377,22 +383,22 @@ impl Writeable for PeerNodes {
 #[derive(Deserialize)]
 pub struct AllowedPeer {
     pub peer: Peer,
-    pub enabled: bool,
+    pub status: String,
     pub meeting_token: String,
 }
 impl AllowedPeer {
-    pub fn create(id: Uid, room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
+    pub fn create(id: Uid, private_room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
         let json = format!(
             r#"{{ 
                 "{}": "{}",
-                "{}": true
+                "{}": "enabled"
             }}"#,
-            ALLOWED_PEER_TOKEN_SHORT, token, ALLOWED_PEER_ENABLED_SHORT
+            ALLOWED_PEER_TOKEN_SHORT, token, ALLOWED_PEER_STATUS_SHORT
         );
 
         let node = Node {
             id,
-            room_id: Some(room_id),
+            room_id: Some(private_room_id),
             cdate: 0,
             mdate: 0,
             _entity: ALLOWED_PEER_ENT_SHORT.to_string(),
@@ -441,7 +447,7 @@ impl AllowedPeer {
         let query = "query {
             result: sys.AllowedPeer(room_id=$room_id){
                 meeting_token
-                enabled
+                status
                 peer(
                     id=$peer_id
                 ){
@@ -470,7 +476,7 @@ impl AllowedPeer {
                 result: sys.AllowedPeer{
                     room_id: $room_id
                     meeting_token: $meeting_token
-                    enabled: true
+                    status: true
                     peer: {id:$peer_id}
                 }",
             Some(param),
@@ -487,7 +493,7 @@ impl AllowedPeer {
         let query = "query {
             result: sys.AllowedPeer(room_id=$room_id){
                 meeting_token
-                enabled
+                status
                 peer {
                     id
                     verifying_key
@@ -567,10 +573,83 @@ pub async fn init_allowed_peers(
     Ok(())
 }
 
+#[derive(Deserialize)]
 pub struct AllowedHardware {
-    id: String,
-    fingerprint: String,
-    name: String,
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+impl AllowedHardware {
+    pub async fn get(
+        id: Uid,
+        private_room_id: Uid,
+        status: &str,
+        db: &GraphDatabaseService,
+    ) -> Result<Option<Self>, Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", uid_encode(&private_room_id))?;
+        param.add("id", uid_encode(&id))?;
+        param.add("status", status.to_string())?;
+
+        let res = db
+            .query(
+                r#"query {
+                result: sys.AllowedHardware(id=$id, room_id=$room_id, status=$status){
+                        id
+                        name
+                        status
+                    }
+                }"#,
+                Some(param),
+            )
+            .await?;
+        let query_result: QueryResult = QueryResult::new(&res)?;
+        let mut result: Vec<Self> = query_result.get("result")?;
+        Ok(result.pop())
+    }
+
+    pub async fn put(
+        id: Uid,
+        private_room_id: Uid,
+        name: &str,
+        status: &str,
+        db: &GraphDatabaseService,
+    ) -> Result<(), Error> {
+        let json = format!(
+            r#"{{ 
+                "{}": "{}",
+                "{}": "{}"
+            }}"#,
+            ALLOWED_HARDWARE_NAME_SHORT, name, ALLOWED_HARDWARE_STATUS_SHORT, status
+        );
+
+        let (reply, receive) = oneshot::channel::<Result<Option<Box<Node>>, rusqlite::Error>>();
+        db.db
+            .reader
+            .send_async(Box::new(move |conn| {
+                let room_node =
+                    Node::get_in_room(&id, &private_room_id, ALLOWED_HARDWARE_ENT_SHORT, conn);
+                let _ = reply.send(room_node);
+            }))
+            .await?;
+        let existing = receive.await??;
+
+        let mut node = match existing {
+            Some(node) => *node,
+            None => Node {
+                id,
+                room_id: Some(private_room_id),
+                cdate: 0,
+                mdate: 0,
+                _entity: ALLOWED_HARDWARE_ENT_SHORT.to_string(),
+                _json: None,
+                ..Default::default()
+            },
+        };
+        node._json = Some(json);
+        db.db.writer.write(Box::new(node)).await?;
+        Ok(())
+    }
 }
 
 pub struct InboundInvitation {
@@ -597,7 +676,7 @@ pub struct Beacon {
 
 #[cfg(test)]
 mod tests {
-    use crate::security::Ed25519SigningKey;
+    use crate::security::{Ed25519SigningKey, HardwareFingerprint};
     use crate::Configuration;
     use crate::{event_service::EventService, security::random32};
 
@@ -678,7 +757,7 @@ mod tests {
                     "query {
                     sys.AllowedPeer{
                         meeting_token
-                        enabled
+                        status
                         peer {
                             id
                             mdate
@@ -715,7 +794,7 @@ mod tests {
                     "query {
                     sys.AllowedPeer{
                         meeting_token
-                        enabled
+                        status
                         peer {
                             id
                             mdate
@@ -751,7 +830,7 @@ mod tests {
                 "query {
                 sys.AllowedPeer{
                     meeting_token
-                    enabled
+                    status
                     peer {
                         id
                         mdate
@@ -791,5 +870,60 @@ mod tests {
 
         let list = app.get_allowed_peers(private_room).await.unwrap();
         assert_eq!(1, list.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hardware() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let pub_key = &random32();
+
+        let (app, _verifying_key, private_room) = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            &pub_key,
+            path.clone(),
+            &Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+
+        let hardware = HardwareFingerprint::new().unwrap();
+
+        let status = "allowed";
+
+        AllowedHardware::put(hardware.id, private_room, &hardware.name, status, &app)
+            .await
+            .unwrap();
+
+        let allowed = AllowedHardware::get(hardware.id, private_room, status, &app)
+            .await
+            .unwrap();
+
+        assert!(allowed.is_some());
+        let allowed = allowed.unwrap();
+        assert_eq!(hardware.name, allowed.name);
+        assert_eq!(status, allowed.status);
+
+        let disabled = "disabled";
+        AllowedHardware::put(hardware.id, private_room, &hardware.name, disabled, &app)
+            .await
+            .unwrap();
+
+        let allowed = AllowedHardware::get(hardware.id, private_room, status, &app)
+            .await
+            .unwrap();
+
+        assert!(allowed.is_none());
+
+        let allowed = AllowedHardware::get(hardware.id, private_room, disabled, &app)
+            .await
+            .unwrap();
+
+        assert!(allowed.is_some());
     }
 }

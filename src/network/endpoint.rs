@@ -14,14 +14,14 @@ use tokio::{
 use crate::{
     log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, hash, new_uid, Uid},
+    security::{self, hash, new_uid, HardwareFingerprint, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
 use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error};
-/// magic number for the ALPN protocol that allows for less roundtrip during tls negociation
-/// used by the quic protocol
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
+
+//Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
+pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
 
 static MAX_CONNECTION_RETRY: usize = 4;
 
@@ -38,7 +38,7 @@ pub enum EndpointMessage {
     InitiateConnection(SocketAddr, [u8; 32], Uid, bool),
 }
 
-const SERVER_NAME: &str = "discret";
+const SERVER_NAME: &str = "quicwg.org";
 pub struct DiscretEndpoint {
     pub id: Uid,
     pub sender: mpsc::Sender<EndpointMessage>,
@@ -56,18 +56,16 @@ impl DiscretEndpoint {
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
-        let (hardware_key, hardware_name) = security::hardware_fingerprint();
+        let hardware = HardwareFingerprint::new()?;
         let (sender, mut connection_receiver) = mpsc::channel::<EndpointMessage>(20);
 
-        let cert: rcgen::CertifiedKey =
-            security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
         let ipv4_cert_hash = hash(cert.cert.der().deref());
         let addr = "0.0.0.0:0".parse()?;
         let ipv4_endpoint = build_endpoint(addr, cert, cert_verifier.clone())?;
         let ipv4_port = ipv4_endpoint.local_addr()?.port();
 
-        let cert: rcgen::CertifiedKey =
-            security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
         let ipv6_cert_hash = hash(cert.cert.der().deref());
         let addr = "[::]:0".parse()?;
         let ipv6_endpoint = build_endpoint(addr, cert, cert_verifier.clone());
@@ -109,8 +107,7 @@ impl DiscretEndpoint {
                             &ipv6,
                             &verifying_key,
                             send_hardware,
-                            &hardware_key,
-                            &hardware_name,
+                            &hardware,
                             &i_buff,
                             &o_buff,
                         );
@@ -249,8 +246,7 @@ impl DiscretEndpoint {
         ipv6_endpoint: &Option<Endpoint>,
         verifying_key: &Vec<u8>,
         send_hardware: bool,
-        hardware_key: &[u8; 32],
-        hardware_name: &str,
+        hardware: &HardwareFingerprint,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
     ) {
@@ -272,8 +268,8 @@ impl DiscretEndpoint {
         };
         let peer_service = peer_service.clone();
         let verifying_key = verifying_key.clone();
-        let hardware_key = hardware_key.clone();
-        let hardware_name = hardware_name.to_string();
+        let hardware = hardware.clone();
+
         let input_buffers = input_buffers.clone();
         let output_buffers = output_buffers.clone();
 
@@ -288,19 +284,17 @@ impl DiscretEndpoint {
                             Ok(conn) => {
                                 let connnection_id = new_uid();
 
-                                let (hardware_key, hardware_name) = if send_hardware {
-                                    (Some(hardware_key), Some(hardware_name.clone()))
+                                let hardware = if send_hardware {
+                                    Some(hardware.clone())
                                 } else {
-                                    (None, None)
+                                    None
                                 };
 
                                 let info = ConnectionInfo {
                                     endpoint_id,
                                     remote_id,
                                     connnection_id,
-                                    verifying_key: verifying_key.clone(),
-                                    hardware_key: hardware_key,
-                                    hardware_name: hardware_name,
+                                    hardware,
                                 };
 
                                 if let Err(e) = Self::start_connection(
@@ -778,8 +772,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() {
         let addr = "0.0.0.0:0".parse().unwrap();
-        let cert: rcgen::CertifiedKey =
-            security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert: rcgen::CertifiedKey = security::generate_x509_certificate();
         let der = cert.cert.der().deref();
         let hasshe = hash(der);
         let cert_verifier = ServerCertVerifier::new();
@@ -801,7 +794,7 @@ mod tests {
                 );
             }
         });
-        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert = security::generate_x509_certificate();
         let der = cert.cert.der().deref();
         let hasshe = hash(der);
         cert_verifier.add_valid_certificate(hasshe);
@@ -855,7 +848,7 @@ mod tests {
             .await
             .unwrap();
         let (mut send, _) = connection_one.open_bi().await.unwrap();
-        send.write_i32(111111).await.unwrap();
+        send.write_i32(33333).await.unwrap();
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         println!("{}: end", now());
@@ -864,7 +857,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv6() {
         let addr = "[::]:0".parse().unwrap();
-        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert = security::generate_x509_certificate();
         let der = cert.cert.der().deref();
         let hash = hash(der);
         let cert_verifier = ServerCertVerifier::new();
@@ -880,15 +873,11 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert = security::generate_x509_certificate();
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
         let connection = endpoint.connect(addr, "localhost").unwrap().await.unwrap();
-        // let (send, receiv) = connection.open_bi().await.unwrap();
-        // send.write_all(buf).await;
-
-        //let s = connection.accept_bi().await.unwrap();
 
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
@@ -900,7 +889,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_invalid_certificate() {
         let addr = "[::]:0".parse().unwrap();
-        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert = security::generate_x509_certificate();
         //let pub_key = cert.key_pair.public_key_der();
         // the server's certificate is not added to the valid list
         let cert_verifier = ServerCertVerifier::new();
@@ -914,7 +903,7 @@ mod tests {
                 .expect_err("connection should have failed due to invalid certificate");
         });
 
-        let cert = security::generate_x509_certificate(SERVER_NAME.to_string());
+        let cert = security::generate_x509_certificate();
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 

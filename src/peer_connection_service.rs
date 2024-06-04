@@ -95,6 +95,7 @@ impl PeerConnectionService {
             endpoint,
             multicast_discovery,
             db.clone(),
+            logs.clone(),
             verify_service.clone(),
             private_room_id,
             verifying_key.clone(),
@@ -204,25 +205,33 @@ impl PeerConnectionService {
                 event_sender,
                 event_receiver,
             ) => {
+                let circuit_id =
+                    PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
+
+                if let Some(hardware) = connection_info.hardware {
+                    if !peer_manager
+                        .validate_hardware(connection_info.endpoint_id, hardware, true)
+                        .await
+                    {
+                        return;
+                    }
+                }
+
                 if let Some(connection) = connection {
                     peer_manager.add_connection(
-                        connection_info.endpoint_id,
-                        connection_info.remote_id,
+                        circuit_id,
                         connection,
                         connection_info.connnection_id,
                     )
                 };
-                let circuit_id =
-                    PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
-                let connection_id = connection_info.connnection_id;
 
+                let connection_id = connection_info.connnection_id;
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let inbound_query_service = InboundQueryService::start(
                     circuit_id,
                     connection_id,
                     RemotePeerHandle {
-                        hardware_id: connection_info.verifying_key.clone(),
                         db: local_db.clone(),
                         allowed_room: HashSet::new(),
                         reply: answer_sender,
@@ -239,7 +248,6 @@ impl PeerConnectionService {
                 LocalPeerService::start(
                     event_receiver,
                     local_event_broadcast,
-                    connection_info.verifying_key.clone(),
                     circuit_id,
                     connection_id,
                     verifying_key.clone(),
@@ -414,7 +422,7 @@ pub async fn listen_for_event(
 
 #[cfg(test)]
 pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnectionService) {
-    use crate::security::new_uid;
+    use crate::security::{self, new_uid};
 
     let (peer1_answer_s, peer1_answer_r) = mpsc::channel::<Answer>(100);
     let (peer1_query_s, peer1_query_r) = mpsc::channel::<QueryProtocol>(100);
@@ -428,9 +436,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
         endpoint_id: new_uid(),
         remote_id: new_uid(),
         connnection_id: new_uid(),
-        verifying_key: random32().to_vec(),
-        hardware_key: None,
-        hardware_name: None,
+        hardware: Some(security::HardwareFingerprint::new().unwrap()),
     };
 
     let _ = peer1
@@ -452,9 +458,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
         remote_id: new_uid(),
         connnection_id: new_uid(),
 
-        verifying_key: random32().to_vec(),
-        hardware_key: None,
-        hardware_name: None,
+        hardware: Some(security::HardwareFingerprint::new().unwrap()),
     };
     let _ = peer2
         .sender

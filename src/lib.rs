@@ -77,37 +77,37 @@ pub use crate::security::{base64_decode, base64_encode, derive_pass_phrase, Uid}
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    CryptoError(#[from] crate::security::Error),
+    Security(#[from] crate::security::Error),
 
     #[error(transparent)]
-    DatabaseError(#[from] crate::database::Error),
+    Database(#[from] crate::database::Error),
 
     #[error(transparent)]
-    NetworkError(#[from] crate::network::Error),
+    Network(#[from] crate::network::Error),
 
     #[error(transparent)]
-    ParsingError(#[from] crate::database::query_language::Error),
+    Parsing(#[from] crate::database::query_language::Error),
 
     #[error(transparent)]
-    JSONError(#[from] serde_json::Error),
+    JSON(#[from] serde_json::Error),
 
     #[error(transparent)]
-    TokioJoinError(#[from] tokio::task::JoinError),
+    TokioJoin(#[from] tokio::task::JoinError),
 
     #[error(transparent)]
-    TimeoutElapsed(#[from] tokio::time::error::Elapsed),
+    Timeout(#[from] tokio::time::error::Elapsed),
 
     #[error(transparent)]
-    SerialisationError(#[from] Box<bincode::ErrorKind>),
+    Bincode(#[from] Box<bincode::ErrorKind>),
 
     #[error(transparent)]
-    IoError(#[from] std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    RecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    OneshotRecv(#[from] tokio::sync::oneshot::error::RecvError),
 
     #[error(transparent)]
-    SynchError(#[from] crate::synchronisation::Error),
+    Synch(#[from] crate::synchronisation::Error),
 
     #[error("Invalid account")]
     InvalidAccount,

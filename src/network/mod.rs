@@ -7,16 +7,17 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use thiserror::Error;
 
-use crate::{security::MeetingToken, Uid};
+use crate::{
+    security::{HardwareFingerprint, MeetingToken},
+    Uid,
+};
 
 #[derive(Serialize, Deserialize)]
 pub struct ConnectionInfo {
     pub endpoint_id: Uid,
     pub remote_id: Uid,
     pub connnection_id: Uid,
-    pub verifying_key: Vec<u8>,
-    pub hardware_key: Option<[u8; 32]>,
-    pub hardware_name: Option<String>,
+    pub hardware: Option<HardwareFingerprint>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -73,6 +74,12 @@ pub enum Error {
 
     #[error(transparent)]
     SocketRead(#[from] quinn::ReadExactError),
+
+    #[error(transparent)]
+    Security(#[from] crate::security::Error),
+
+    #[error(transparent)]
+    Database(#[from] crate::database::Error),
 
     #[error("Message size {0} is to long and is ignored. Maximum allowed: {1}")]
     MsgSerialisationToLong(usize, usize),

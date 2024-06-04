@@ -37,7 +37,7 @@ use crate::{
 
 const LRU_SIZE: usize = 128;
 
-enum Message {
+pub enum Message {
     Query(String, Parameters, Sender<Result<String>>),
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
@@ -54,11 +54,11 @@ enum Message {
 ///
 #[derive(Clone)]
 pub struct GraphDatabaseService {
-    peer_sender: mpsc::Sender<Message>,
+    pub peer_sender: mpsc::Sender<Message>,
     //queue dedicated to user interaction
     //  interactive_sender: mpsc::Sender<Message>,
-    auth: AuthorisationService,
-    db: Database,
+    pub auth: AuthorisationService,
+    pub db: Database,
 }
 impl GraphDatabaseService {
     pub async fn start(

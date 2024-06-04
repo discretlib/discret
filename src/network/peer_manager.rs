@@ -1,13 +1,20 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use quinn::{Connection, VarInt};
 use tokio::sync::mpsc;
 
 use crate::{
     base64_decode,
-    database::{graph_database::GraphDatabaseService, system_entities::AllowedPeer},
+    database::{
+        graph_database::GraphDatabaseService,
+        system_entities::{AllowedHardware, AllowedPeer},
+    },
+    log_service::LogService,
     network::endpoint::EndpointMessage,
-    security::{MeetingSecret, MeetingToken},
+    security::{HardwareFingerprint, MeetingSecret, MeetingToken},
     signature_verification_service::SignatureVerificationService,
     Uid,
 };
@@ -21,19 +28,22 @@ const REASON_CONN_ELECTION: u16 = 1;
 pub const REASON_UNKNOWN: u16 = 2;
 
 pub struct PeerManager {
-    pub endpoint: DiscretEndpoint,
-    pub multicast_discovery: mpsc::Sender<MulticastMessage>,
-    pub private_room_id: Uid,
-    pub verifying_key: Vec<u8>,
-    pub meeting_secret: MeetingSecret,
-    pub allowed_peers: Vec<AllowedPeer>,
+    endpoint: DiscretEndpoint,
+    multicast_discovery: mpsc::Sender<MulticastMessage>,
+    private_room_id: Uid,
+    verifying_key: Vec<u8>,
 
+    pub meeting_secret: MeetingSecret,
+
+    pub allowed_peers: Vec<AllowedPeer>,
     pub allowed_token: HashMap<MeetingToken, Vec<Vec<u8>>>,
 
     connection_progress: HashMap<[u8; 32], bool>,
     connected: HashMap<[u8; 32], (Connection, Uid)>,
+    local_connection: HashSet<[u8; 32]>,
 
     db: GraphDatabaseService,
+    logs: LogService,
     verify_service: SignatureVerificationService,
 
     ipv4_header: AnnounceHeader,
@@ -44,6 +54,7 @@ impl PeerManager {
         endpoint: DiscretEndpoint,
         multicast_discovery: mpsc::Sender<MulticastMessage>,
         db: GraphDatabaseService,
+        logs: LogService,
         verify_service: SignatureVerificationService,
         private_room_id: Uid,
         verifying_key: Vec<u8>,
@@ -93,7 +104,9 @@ impl PeerManager {
             allowed_token,
             connected: HashMap::new(),
             connection_progress: HashMap::new(),
+            local_connection: HashSet::new(),
             db,
+            logs,
             verify_service,
             ipv4_header,
             ipv6_header,
@@ -148,7 +161,7 @@ impl PeerManager {
                                     if verifying_key.eq(&self.verifying_key) {
                                         include_hardware = true;
                                     }
-
+                                    self.local_connection.insert(circuit_id);
                                     let target: SocketAddr =
                                         format!("{}:{}", &address.ip(), &a.header.port)
                                             .parse()
@@ -227,14 +240,7 @@ impl PeerManager {
 
     //peer to peer connectoin tends to create two connections
     //we arbitrarily remove the on the highest conn_id (the newest conn, Uids starts with a timestamps)
-    pub fn add_connection(
-        &mut self,
-        endpoint_id: Uid,
-        remote_id: Uid,
-        conn: Connection,
-        conn_id: Uid,
-    ) {
-        let circuit_id = Self::circuit_id(endpoint_id, remote_id);
+    pub fn add_connection(&mut self, circuit_id: [u8; 32], conn: Connection, conn_id: Uid) {
         self.connection_progress.remove(&circuit_id);
 
         if let Some((old_conn, old_conn_id)) = self.connected.remove(&circuit_id) {
@@ -263,6 +269,7 @@ impl PeerManager {
             if conn_id.eq(uid) {
                 conn.close(VarInt::from(error_code), message.as_bytes());
                 self.connected.remove(&circuit_id);
+                self.local_connection.remove(&circuit_id);
                 disconnected = true
             }
         }
@@ -282,5 +289,71 @@ impl PeerManager {
         hasher.update(&v[1]);
         let hash = hasher.finalize();
         *hash.as_bytes()
+    }
+
+    pub async fn validate_hardware(
+        &self,
+        endpoint_id: Uid,
+        hardware: HardwareFingerprint,
+        auto_allow_local: bool,
+    ) -> bool {
+        let s = self
+            .validate_hardware_int(endpoint_id, hardware, auto_allow_local)
+            .await;
+
+        match s {
+            Ok(valid) => valid,
+            Err(e) => {
+                self.logs.error(
+                    "PeerManager.validate_hardware".to_string(),
+                    crate::Error::from(e),
+                );
+                false
+            }
+        }
+    }
+
+    pub async fn validate_hardware_int(
+        &self,
+        endpoint_id: Uid,
+        hardware: HardwareFingerprint,
+        auto_allow_local: bool,
+    ) -> Result<bool, super::Error> {
+        let allowed_status = "allowed";
+        let pending_status = "pending";
+
+        let valid = if endpoint_id == self.endpoint.id {
+            true
+        } else {
+            match AllowedHardware::get(hardware.id, self.private_room_id, allowed_status, &self.db)
+                .await?
+            {
+                Some(_) => true,
+                None => {
+                    if auto_allow_local {
+                        AllowedHardware::put(
+                            hardware.id,
+                            self.private_room_id,
+                            &hardware.name,
+                            allowed_status,
+                            &self.db,
+                        )
+                        .await?;
+                        true
+                    } else {
+                        AllowedHardware::put(
+                            hardware.id,
+                            self.private_room_id,
+                            &hardware.name,
+                            pending_status,
+                            &self.db,
+                        )
+                        .await?;
+                        false
+                    }
+                }
+            }
+        };
+        Ok(valid)
     }
 }

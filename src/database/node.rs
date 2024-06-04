@@ -291,8 +291,9 @@ impl Node {
     pub const NODE_QUERY: &'static str = "
     SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
     FROM _node 
-    WHERE id = ? AND 
-    _entity = ?";
+    WHERE 
+        id = ? AND 
+        _entity = ?";
     ///
     /// Retrieve a node using its primary key
     ///
@@ -304,6 +305,29 @@ impl Node {
         let mut get_stmt = conn.prepare_cached(Self::NODE_QUERY)?;
         let node = get_stmt
             .query_row((id, entity), Self::NODE_MAPPING)
+            .optional()?;
+        Ok(node)
+    }
+
+    pub const NODE_ROOM_QUERY: &'static str = "
+    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
+    FROM _node 
+    WHERE 
+        id = ? AND 
+        room_id = ? AND  
+        _entity = ?";
+    ///
+    /// Retrieve a node using its primary key
+    ///
+    pub fn get_in_room(
+        id: &Uid,
+        room_id: &Uid,
+        entity: &str,
+        conn: &Connection,
+    ) -> std::result::Result<Option<Box<Node>>, rusqlite::Error> {
+        let mut get_stmt = conn.prepare_cached(Self::NODE_ROOM_QUERY)?;
+        let node = get_stmt
+            .query_row((id, room_id, entity), Self::NODE_MAPPING)
             .optional()?;
         Ok(node)
     }
@@ -522,33 +546,64 @@ impl Node {
 }
 impl Writeable for Node {
     fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        let mut insert_stmt = conn.prepare_cached(
-            "INSERT INTO _node ( 
+        if let Some(id) = self._local_id {
+            let mut update_node_stmt = conn.prepare_cached(
+                "
+            UPDATE _node SET 
+                id = ?,
+                room_id = ?,
+                cdate = ?,
+                mdate = ?,
+                _entity = ?,
+                _json = ?,
+                _binary = ?,
+                verifying_key = ?,
+                _signature = ?
+            WHERE
+                rowid = ? ",
+            )?;
+
+            update_node_stmt.execute((
+                &self.id,
+                &self.room_id,
+                &self.cdate,
+                &self.mdate,
+                &self._entity,
+                &self._json,
+                &self._binary,
+                &self.verifying_key,
+                &self._signature,
                 id,
-                room_id,
-                cdate,
-                mdate,
-                _entity,
-                _json,
-                _binary,
-                verifying_key,
-                _signature
-            ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )",
-        )?;
-        let rowid = insert_stmt.insert((
-            &self.id,
-            &self.room_id,
-            &self.cdate,
-            &self.mdate,
-            &self._entity,
-            &self._json,
-            &self._binary,
-            &self.verifying_key,
-            &self._signature,
-        ))?;
-        self._local_id = Some(rowid);
+            ))?;
+        } else {
+            let mut insert_stmt = conn.prepare_cached(
+                "INSERT INTO _node ( 
+                    id,
+                    room_id,
+                    cdate,
+                    mdate,
+                    _entity,
+                    _json,
+                    _binary,
+                    verifying_key,
+                    _signature
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )",
+            )?;
+            let rowid = insert_stmt.insert((
+                &self.id,
+                &self.room_id,
+                &self.cdate,
+                &self.mdate,
+                &self._entity,
+                &self._json,
+                &self._binary,
+                &self.verifying_key,
+                &self._signature,
+            ))?;
+            self._local_id = Some(rowid);
+        }
         Ok(())
     }
 }
