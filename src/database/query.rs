@@ -35,21 +35,21 @@ impl QueryResult {
         Ok(Self { parsed })
     }
     //T: DeserializeOwned
-    pub fn get<T: DeserializeOwned>(&self, field_name: &str) -> Result<Vec<T>> {
+    pub fn get<T: DeserializeOwned>(&self, f: &str) -> Result<Vec<T>> {
         let mut re = Vec::new();
         let obj = self.parsed.as_object();
         if obj.is_none() {
             return Err(Error::InvalidJsonObject("".to_string()));
         }
         let obj = obj.unwrap();
-        let field = obj.get(field_name);
+        let field = obj.get(f);
         if field.is_none() {
-            return Err(Error::MissingJsonField(field_name.to_string()));
+            return Err(Error::MissingJsonField(f.to_string()));
         }
         let field = field.unwrap();
         let field_array = field.as_array();
         if field_array.is_none() {
-            return Err(Error::InvalidJSonArray(field_name.to_string()));
+            return Err(Error::InvalidJSonArray(f.to_string()));
         }
         let field_array = field_array.unwrap();
         for value in field_array.clone() {

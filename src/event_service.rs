@@ -16,7 +16,7 @@ pub enum EventServiceMessage {
 
 #[derive(Clone)]
 pub enum Event {
-    ComputedDailyLog(Result<DailyLogsUpdate, String>),
+    DataChanged(Result<DailyLogsUpdate, String>),
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Uid),
     PeerDisconnected(Vec<u8>, i64, Uid),
@@ -41,8 +41,8 @@ impl EventService {
                     }
                     EventServiceMessage::ComputedDailyLog(res) => {
                         let _ = match res {
-                            Ok(e) => broadcast.send(Event::ComputedDailyLog(Ok(e))),
-                            Err(e) => broadcast.send(Event::ComputedDailyLog(Err(e.to_string()))),
+                            Ok(e) => broadcast.send(Event::DataChanged(Ok(e))),
+                            Err(e) => broadcast.send(Event::DataChanged(Err(e.to_string()))),
                         };
                     }
                     EventServiceMessage::RoomModified(room) => {

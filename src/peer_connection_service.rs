@@ -295,7 +295,7 @@ impl PeerConnectionService {
                     if probed {
                         let service = peer_service.clone();
                         tokio::spawn(async move {
-                            let mut interval = time::interval(Duration::from_millis(1000));
+                            let mut interval = time::interval(Duration::from_secs(60));
 
                             loop {
                                 interval.tick().await;
@@ -327,7 +327,7 @@ impl PeerConnectionService {
         log_service: &LogService,
     ) {
         match event {
-            Event::ComputedDailyLog(daily_log) => {
+            Event::DataChanged(daily_log) => {
                 match daily_log {
                     Ok(daily_log) => {
                         let mut rooms = Vec::new();
@@ -613,7 +613,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let private_room_id = discret2.private_room_id();
+        let private_room_id = discret2.private_room();
         let mut events = discret2.subscribe_for_events().await;
         let handle = tokio::spawn(async move {
             loop {

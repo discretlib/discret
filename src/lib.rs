@@ -49,7 +49,7 @@ mod signature_verification_service;
 mod synchronisation;
 
 use database::graph_database::GraphDatabaseService;
-use event_service::{Event, EventService};
+use event_service::EventService;
 use log_service::LogService;
 use peer_connection_service::PeerConnectionService;
 use security::{derive_key, MeetingSecret};
@@ -61,14 +61,18 @@ use thiserror::Error;
 use tokio::{runtime::Runtime, sync::broadcast};
 
 pub type Result<T> = std::result::Result<T, Error>;
-pub use crate::configuration::Configuration;
-pub use crate::database::{
-    mutation_query::MutationResult,
-    query_language::parameter::{Parameters, ParametersAdd},
-    room::Room,
+pub use crate::{
+    configuration::Configuration,
+    database::{
+        mutation_query::MutationResult,
+        query::QueryResult,
+        query_language::parameter::{Parameters, ParametersAdd},
+        room::Room,
+    },
+    event_service::Event,
+    log_service::{Log, LogMessage},
+    security::{base64_decode, base64_encode, default_uid, derive_pass_phrase, uid_encode, Uid},
 };
-pub use crate::log_service::Log;
-pub use crate::security::{base64_decode, base64_encode, derive_pass_phrase, Uid};
 
 ///
 /// Defines every errors that can be by the discret lib
@@ -202,12 +206,8 @@ impl Discret {
     ///
     /// Deletion query
     ///
-    pub async fn delete(
-        &self,
-        deletion: &str,
-        param_opt: Option<Parameters>,
-    ) -> std::result::Result<(), Error> {
-        match self.db.delete(deletion, param_opt).await {
+    pub async fn delete(&self, d: &str, p: Option<Parameters>) -> std::result::Result<(), Error> {
+        match self.db.delete(d, p).await {
             Ok(_) => Ok(()),
             Err(e) => Err(e.into()),
         }
@@ -218,10 +218,10 @@ impl Discret {
     ///
     pub async fn mutate(
         &self,
-        mutation: &str,
-        param_opt: Option<Parameters>,
+        m: &str,
+        p: Option<Parameters>,
     ) -> std::result::Result<MutationResult, Error> {
-        Ok(self.db.mutate(mutation, param_opt).await?)
+        Ok(self.db.mutate(m, p).await?)
     }
 
     ///
@@ -229,10 +229,10 @@ impl Discret {
     ///
     pub async fn query(
         &self,
-        query: &str,
-        param_opt: Option<Parameters>,
+        q: &str,
+        p: Option<Parameters>,
     ) -> std::result::Result<String, Error> {
-        Ok(self.db.query(query, param_opt).await?)
+        Ok(self.db.query(q, p).await?)
     }
 
     ///
@@ -251,7 +251,7 @@ impl Discret {
     /// This special room is used internally to store system data
     /// you can use it to query and update the sys.* entities
     ///
-    pub fn private_room_id(&self) -> Uid {
+    pub fn private_room(&self) -> Uid {
         self.private_room_id
     }
 
@@ -336,47 +336,43 @@ impl DiscretBlocking {
         Ok(Self { discret })
     }
 
-    pub fn delete(
-        &self,
-        deletion: &str,
-        param_opt: Option<Parameters>,
-    ) -> std::result::Result<(), Error> {
+    pub fn delete(&self, d: &str, p: Option<Parameters>) -> std::result::Result<(), Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
             .rt()?
-            .block_on(self.discret.delete(deletion, param_opt))
+            .block_on(self.discret.delete(d, p))
     }
 
     pub async fn mutate(
         &self,
-        mutation: &str,
-        param_opt: Option<Parameters>,
+        m: &str,
+        p: Option<Parameters>,
     ) -> std::result::Result<MutationResult, Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
             .rt()?
-            .block_on(self.discret.mutate(mutation, param_opt))
+            .block_on(self.discret.mutate(m, p))
     }
 
     pub async fn query(
         &self,
-        query: &str,
-        param_opt: Option<Parameters>,
+        q: &str,
+        p: Option<Parameters>,
     ) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
             .rt()?
-            .block_on(self.discret.query(query, param_opt))
+            .block_on(self.discret.query(q, p))
     }
 
     pub fn verifying_key(&self) -> &Vec<u8> {
         &self.discret.verifying_key
     }
 
-    pub fn private_room_id(&self) -> Uid {
+    pub fn private_room(&self) -> Uid {
         self.discret.private_room_id
     }
 

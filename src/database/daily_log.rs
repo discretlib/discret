@@ -572,7 +572,7 @@ mod tests {
         //receive daily_log event done during startup
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::ComputedDailyLog(log) => {
+                crate::event_service::Event::DataChanged(log) => {
                     let s = log.unwrap();
                     assert_eq!(0, s.room_dates.len());
 
@@ -614,7 +614,7 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::ComputedDailyLog(log) => {
+                crate::event_service::Event::DataChanged(log) => {
                     let s = log.unwrap();
                     assert_eq!(0, s.room_dates.len());
 
@@ -647,7 +647,7 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::ComputedDailyLog(log) => {
+                crate::event_service::Event::DataChanged(log) => {
                     let log = log.unwrap();
                     let dates = log.room_dates.get(bin_room_id).unwrap();
                     assert_eq!(1, dates.len());

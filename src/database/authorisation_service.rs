@@ -620,6 +620,8 @@ impl RoomAuthorisations {
             auth.add_right(EntityRight::new(0, sys_table, true, false))?;
         }
 
+        auth.add_right(EntityRight::new(0, "*".to_string(), true, false))?;
+
         room.authorisations.insert(auth.id, auth);
 
         let change_log = RoomChangelog { room_id, mdate: 0 };
@@ -949,7 +951,7 @@ impl RoomAuthorisations {
             .unwrap()
             .as_array()
             .unwrap();
-        
+
         for room_value in rooms {
             let room_map = room_value.as_object().unwrap();
 
