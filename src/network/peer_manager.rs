@@ -129,7 +129,8 @@ impl PeerManager {
             let ipv4_adress: SocketAddr = format!("{}:{}", &address.ip(), &self.endpoint.ipv4_port)
                 .parse()
                 .unwrap();
-
+            self.logs
+                .info(format!("Detected Local Adress {}", &address.ip()));
             let mut ipv4_header = AnnounceHeader {
                 socket_adress: ipv4_adress,
                 endpoint_id: self.endpoint.id,
@@ -143,28 +144,6 @@ impl PeerManager {
                 .await;
             ipv4_header.signature = signature;
             self.ipv4_header = Some(ipv4_header);
-
-            let ipv6_header = if let Some(port) = self.endpoint.ipv6_port {
-                let ipv6_adress: SocketAddr =
-                    format!("{}:{}", &address.ip(), port).parse().unwrap();
-
-                let mut ipv6_header = AnnounceHeader {
-                    socket_adress: ipv6_adress,
-                    endpoint_id: self.endpoint.id,
-                    certificate_hash: self.endpoint.ipv6_cert_hash,
-                    signature: Vec::new(),
-                };
-                let (_verifying, signature) = self
-                    .db
-                    .sign(ipv6_header.hash_for_signature().to_vec())
-                    .await;
-                ipv6_header.signature = signature;
-                Some(ipv6_header)
-            } else {
-                None
-            };
-
-            self.ipv6_header = ipv6_header;
 
             return Ok(true);
         }

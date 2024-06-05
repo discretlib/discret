@@ -720,12 +720,8 @@ impl GraphDatabase {
         };
 
         // create the system room associated the user
-        auth.create_system_room(
-            private_room_id,
-            system_entities::sys_room_entities(),
-            &graph_database.writer,
-        )
-        .await?;
+        auth.create_system_room(private_room_id, &graph_database.writer)
+            .await?;
 
         let auth_service =
             AuthorisationService::start(auth, graph_database.writer.clone(), event_service.clone());

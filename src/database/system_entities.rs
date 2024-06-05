@@ -160,16 +160,6 @@ sys{
     }
 }"#;
 
-pub fn sys_room_entities() -> Vec<String> {
-    vec![
-        "sys.AllowedPeer".to_string(),
-        "sys.AllowedHardware".to_string(),
-        "sys.InboundInvitation".to_string(),
-        "sys.ProposedInvitation".to_string(),
-        "sys.Beacon".to_string(),
-    ]
-}
-
 #[derive(Deserialize)]
 pub struct Peer {
     pub id: String,

@@ -591,7 +591,6 @@ impl RoomAuthorisations {
     pub async fn create_system_room(
         &mut self,
         room_id: Uid,
-        sys_tables: Vec<String>,
         database_writer: &BufferedDatabaseWriter,
     ) -> Result<()> {
         let mut room = Room {
@@ -615,10 +614,6 @@ impl RoomAuthorisations {
             date: 0,
             enabled: true,
         })?;
-
-        for sys_table in sys_tables {
-            auth.add_right(EntityRight::new(0, sys_table, true, false))?;
-        }
 
         auth.add_right(EntityRight::new(0, "*".to_string(), true, false))?;
 
