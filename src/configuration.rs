@@ -28,15 +28,13 @@ pub struct Configuration {
     ///
     /// nodes size should be kept small enought to ensure fast synchronisation
     ///
-    pub max_node_size_in_kp: usize,
+    pub max_node_size_in_kb: usize,
 
     ///
     /// Default 4096
     /// set the maximum cache size for the reading threads. increasing it can improve performances
     /// each read threads defined in read_parallelism consume up to that amount
     ///
-    /// Real max memory usage is read_cache_size_in_kb *read_parallelism
-    /// default memory usage is 16 Mb.
     pub read_cache_size_in_kb: usize,
 
     ///
@@ -97,7 +95,7 @@ impl Default for Configuration {
         Self {
             parallel_room_synch: 8,
             synchronisation_batch_size: 256,
-            max_node_size_in_kp: 256,
+            max_node_size_in_kb: 256,
             read_cache_size_in_kb: 4096,
             signature_verification_parallelism: 4,
             read_parallelism: 4,

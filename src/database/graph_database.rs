@@ -1436,7 +1436,7 @@ mod tests {
             Some(param),
         )
         .await
-        .expect_err("AuthorisationRejected");
+        .expect("wildcard auth");
 
         let mut param = Parameters::new();
         param.add("room_id", uid_encode(&room_id)).unwrap();

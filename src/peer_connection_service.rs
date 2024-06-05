@@ -287,6 +287,7 @@ impl PeerConnectionService {
             }
             PeerConnectionMessage::MulticastMessage(message, address) => match message {
                 MulticastMessage::ProbeLocalIp(probe_value) => {
+                    println!("probe received {}", address);
                     let probed = peer_manager
                         .validate_probe(probe_value, address)
                         .await

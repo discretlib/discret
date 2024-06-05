@@ -131,10 +131,11 @@ fn new_socket() -> io::Result<Socket> {
 #[cfg(windows)]
 fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
     let addr = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), addr.port());
+    socket.set_reuse_address(true)?;
     socket.bind(&socket2::SockAddr::from(addr))
 }
 
-/// On unixes we bind to the multicast address, which causes multicast packets to be filtered
+/// On unixes we bind to the multicast address
 #[cfg(unix)]
 fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
     socket.set_reuse_address(true)?;
