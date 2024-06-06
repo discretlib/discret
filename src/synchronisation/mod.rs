@@ -142,7 +142,7 @@ mod tests {
                 event.clone(),
                 log.clone(),
                 SignatureVerificationService::start(2),
-                10,
+                Configuration::default(),
             )
             .await
             .unwrap();

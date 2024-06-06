@@ -70,8 +70,7 @@ impl GraphDatabaseService {
         configuration: &Configuration,
         event_service: EventService,
     ) -> Result<(Self, Vec<u8>, Uid)> {
-        let (peer_sender, mut peer_receiver) =
-            mpsc::channel::<Message>(configuration.parallel_room_synch);
+        let (peer_sender, mut peer_receiver) = mpsc::channel::<Message>(configuration.parallelism);
         //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
 
         let private_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
@@ -685,9 +684,9 @@ impl GraphDatabase {
             &database_path,
             &database_secret,
             config.read_cache_size_in_kb,
-            config.read_parallelism,
+            config.parallelism,
             config.write_cache_size_in_kb,
-            config.write_buffer_size,
+            config.write_buffer_length,
             config.enable_database_memory_security,
         )?;
 

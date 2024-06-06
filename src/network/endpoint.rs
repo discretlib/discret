@@ -52,6 +52,7 @@ impl DiscretEndpoint {
         log: LogService,
         verifying_key: Vec<u8>,
         num_buffers: usize,
+        max_buffer_size: usize,
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
@@ -109,6 +110,7 @@ impl DiscretEndpoint {
                             &hardware,
                             &i_buff,
                             &o_buff,
+                            max_buffer_size,
                         );
                     }
                 }
@@ -124,7 +126,9 @@ impl DiscretEndpoint {
 
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
-                let new_conn = Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff).await;
+                let new_conn =
+                    Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, max_buffer_size)
+                        .await;
                 if let Err(e) = new_conn {
                     logs.error(
                         "ipv4 - start_accepted".to_string(),
@@ -144,6 +148,7 @@ impl DiscretEndpoint {
                         incoming,
                         &input_buffers,
                         &output_buffers,
+                        max_buffer_size,
                     )
                     .await;
                     if let Err(e) = new_conn {
@@ -171,6 +176,7 @@ impl DiscretEndpoint {
         incoming: Incoming,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        max_buffer_size: usize,
     ) -> Result<(), Error> {
         let new_conn = incoming.await?;
         let mut answer_send: Option<SendStream> = None;
@@ -227,6 +233,7 @@ impl DiscretEndpoint {
             event_receiv,
             input_buffers,
             output_buffers,
+            max_buffer_size,
         )
         .await;
 
@@ -248,6 +255,7 @@ impl DiscretEndpoint {
         hardware: &HardwareFingerprint,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        max_buffer_size: usize,
     ) {
         cert_verifier.add_valid_certificate(cert_hash);
         let log = log.clone();
@@ -302,6 +310,7 @@ impl DiscretEndpoint {
                                     info,
                                     &input_buffers,
                                     &output_buffers,
+                                    max_buffer_size,
                                 )
                                 .await
                                 {
@@ -369,6 +378,7 @@ impl DiscretEndpoint {
         info: ConnectionInfo,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        max_buffer_size: usize,
     ) -> Result<(), Error> {
         let (mut answer_send, answer_receiv) = conn.open_bi().await?;
         answer_send.write_u8(ANSWER_STREAM).await?;
@@ -396,6 +406,7 @@ impl DiscretEndpoint {
             event_receiv,
             input_buffers,
             output_buffers,
+            max_buffer_size,
         )
         .await;
 
@@ -414,6 +425,7 @@ impl DiscretEndpoint {
         mut event_receiv: RecvStream,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        max_buffer_size: usize,
     ) {
         //process Answsers
         let (in_answer_sd, in_answer_rcv) = mpsc::channel::<Answer>(CHANNEL_SIZE);
@@ -424,12 +436,16 @@ impl DiscretEndpoint {
                 if len.is_err() {
                     break;
                 }
+                let len: usize = len.unwrap().try_into().unwrap();
+                if len > max_buffer_size {
+                    break;
+                }
+
                 let mut buf_lock = input_buff.lock().await;
                 let arc_buf = buf_lock.get();
                 drop(buf_lock);
                 let mut buffer = arc_buf.lock().await;
 
-                let len: usize = len.unwrap().try_into().unwrap();
                 if buffer.len() < len {
                     buffer.resize(len, 0);
                 }
@@ -492,6 +508,9 @@ impl DiscretEndpoint {
                     break;
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
+                if len > max_buffer_size {
+                    break;
+                }
 
                 let mut buf_lock = input_buff.lock().await;
                 let arc_buf = buf_lock.get();
@@ -559,6 +578,9 @@ impl DiscretEndpoint {
                     break;
                 }
                 let len: usize = len.unwrap().try_into().unwrap();
+                if len > max_buffer_size {
+                    break;
+                }
 
                 let mut buf_lock = input_buff.lock().await;
                 let arc_buf = buf_lock.get();

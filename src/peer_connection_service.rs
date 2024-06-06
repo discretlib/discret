@@ -26,7 +26,7 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    Result,
+    Configuration, Result,
 };
 use tokio::{
     sync::{broadcast, mpsc, Mutex},
@@ -70,18 +70,23 @@ impl PeerConnectionService {
         events: EventService,
         logs: LogService,
         verify_service: SignatureVerificationService,
-        max_concurent_synchronisation: usize,
+        configuration: Configuration,
     ) -> Result<Self> {
         let (sender, mut connection_receiver) =
             mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
         let (local_event_broadcast, _) = broadcast::channel::<LocalEvent>(16);
-        let lock_service = RoomLockService::start(max_concurent_synchronisation);
+        let lock_service = RoomLockService::start(configuration.parallelism);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
-        let endpoint =
-            DiscretEndpoint::start(peer_service.clone(), logs.clone(), verifying_key.clone(), 8)
-                .await?;
+        let endpoint = DiscretEndpoint::start(
+            peer_service.clone(),
+            logs.clone(),
+            verifying_key.clone(),
+            configuration.parallelism + 1,
+            configuration.max_object_size_in_kb * 1024 * 2,
+        )
+        .await?;
 
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
         let multicast_discovery = multicast::start_multicast_discovery(
@@ -120,6 +125,7 @@ impl PeerConnectionService {
                                     &lock_service,
                                     &verify_service,
                                     local_event_broadcast.subscribe(),
+                                    &configuration
                                 ).await;
                             },
                             None => break,
@@ -178,6 +184,7 @@ impl PeerConnectionService {
         lock_service: &RoomLockService,
         verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
+        configuration: &Configuration,
     ) {
         match msg {
             PeerConnectionMessage::NewConnection(
@@ -195,7 +202,11 @@ impl PeerConnectionService {
 
                 if let Some(hardware) = connection_info.hardware {
                     if !peer_manager
-                        .validate_hardware(connection_info.endpoint_id, hardware, true)
+                        .validate_hardware(
+                            connection_info.endpoint_id,
+                            hardware,
+                            configuration.auto_accept_local_device,
+                        )
                         .await
                     {
                         return;
@@ -275,7 +286,11 @@ impl PeerConnectionService {
                     ))
                     .await;
             }
-            PeerConnectionMessage::NewPeer(_peers) => {}
+            PeerConnectionMessage::NewPeer(peers) => {
+                if configuration.auto_allow_new_peers {
+                } else {
+                }
+            }
 
             PeerConnectionMessage::SendAnnounce() => {
                 if let Err(e) = peer_manager.send_annouces().await {
@@ -532,7 +547,7 @@ mod tests {
                 event.clone(),
                 log.clone(),
                 SignatureVerificationService::start(2),
-                10,
+                Configuration::default(),
             )
             .await
             .unwrap();

@@ -177,8 +177,7 @@ impl Discret {
         )
         .await?;
 
-        let signature_service =
-            SignatureVerificationService::start(configuration.signature_verification_parallelism);
+        let signature_service = SignatureVerificationService::start(configuration.parallelism);
 
         let logs = LogService::start();
         let peers = PeerConnectionService::start(
@@ -189,7 +188,7 @@ impl Discret {
             events.clone(),
             logs.clone(),
             signature_service,
-            10,
+            configuration,
         )
         .await?;
 

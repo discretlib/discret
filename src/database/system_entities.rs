@@ -135,6 +135,7 @@ sys{
     AllowedPeer{
         peer: sys.Peer,
         meeting_token: Base64,
+        last_connection: Integer default 0,
         status: String default "enabled", //enabled, disabled, pending
     }
 

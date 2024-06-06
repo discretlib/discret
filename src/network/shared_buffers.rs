@@ -11,6 +11,7 @@ impl SharedBuffers {
     pub fn new(num_buffers: usize) -> Self {
         let mut buffers: Vec<Arc<tokio::sync::Mutex<Vec<u8>>>> = Vec::with_capacity(num_buffers);
         buffers.resize_with(num_buffers, Default::default);
+
         Self {
             buffers,
             current: 0,
