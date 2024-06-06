@@ -113,6 +113,9 @@ pub enum Error {
     #[error(transparent)]
     Synch(#[from] crate::synchronisation::Error),
 
+    #[error(transparent)]
+    InvalidAdress(#[from] std::net::AddrParseError),
+
     #[error("Invalid account")]
     InvalidAccount,
 

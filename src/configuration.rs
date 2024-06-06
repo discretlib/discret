@@ -138,7 +138,7 @@ pub struct Configuration {
     /// on systems with multiple network interfaces, it might be necessary to provide the right ip adress for multicast to work properly
     /// the default (let the OS choose for you) should work on most cases.
     ///
-    pub multicast_listen_ipv4: String,
+    pub multicast_ipv4_interface: String,
 
     ///
     /// default: 224.0.0.224:22402
@@ -171,7 +171,7 @@ impl Default for Configuration {
             write_cache_size_in_kb: 2048,
             write_buffer_length: 1024,
             enable_database_memory_security: false,
-            multicast_listen_ipv4: "0.0.0.0".to_string(),
+            multicast_ipv4_interface: "0.0.0.0".to_string(),
             multicast_ipv4_group: "224.0.0.224:22402".to_string(),
         }
     }

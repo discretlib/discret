@@ -27,11 +27,12 @@ pub enum MulticastMessage {
 //#[allow(clippy::unnecessary_unwrap)]
 pub async fn start_multicast_discovery(
     multicast_adress: SocketAddr,
+    multicast_ipv4_interface: Ipv4Addr,
     peer_service: PeerConnectionService,
     log: LogService,
 ) -> Result<Sender<MulticastMessage>, Error> {
-    let socket_sender = new_sender()?;
-    let socket_listener = new_listener(multicast_adress)?;
+    let socket_sender = new_sender(&multicast_ipv4_interface)?;
+    let socket_listener = new_listener(multicast_adress, &multicast_ipv4_interface)?;
     let (sender, mut receiv) = mpsc::channel::<MulticastMessage>(1);
 
     let logs = log.clone();
@@ -88,27 +89,30 @@ async fn receive(
     Ok((message, remote_addr))
 }
 
-fn new_listener(multicast_adress: SocketAddr) -> io::Result<UdpSocket> {
+fn new_listener(
+    multicast_adress: SocketAddr,
+    multicast_ipv4_interface: &Ipv4Addr,
+) -> io::Result<UdpSocket> {
     let ip_addr = multicast_adress.ip();
     let socket = new_socket()?;
 
     match ip_addr {
         IpAddr::V4(ref v4) => {
             // join to the multicast address, with all interfaces
-            socket.join_multicast_v4(v4, &Ipv4Addr::new(0, 0, 0, 0))?;
+            socket.join_multicast_v4(v4, multicast_ipv4_interface)?;
         }
         IpAddr::V6(ref _v6) => {} //don't know how to make it work well windows
     };
-    bind_multicast(&socket, &multicast_adress)?;
+    bind_multicast(&socket, &multicast_adress, multicast_ipv4_interface)?;
     let socket: std::net::UdpSocket = socket.into();
     Ok(UdpSocket::from_std(socket).expect("could not convert to tokio socket"))
 }
 
-fn new_sender() -> io::Result<UdpSocket> {
+fn new_sender(multicast_ipv4_interface: &Ipv4Addr) -> io::Result<UdpSocket> {
     let socket = new_socket()?;
-    socket.set_multicast_if_v4(&Ipv4Addr::new(0, 0, 0, 0))?;
+    socket.set_multicast_if_v4(multicast_ipv4_interface)?;
     socket.bind(&SockAddr::from(SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
+        multicast_ipv4_interface.clone().into(),
         0,
     )))?;
     let socket: std::net::UdpSocket = socket.into();
@@ -129,15 +133,19 @@ fn new_socket() -> io::Result<Socket> {
 ///
 /// see https://msdn.microsoft.com/en-us/library/windows/desktop/ms737550(v=vs.85).aspx
 #[cfg(windows)]
-fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
-    let addr = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), addr.port());
+fn bind_multicast(
+    socket: &Socket,
+    addr: &SocketAddr,
+    multicast_ipv4_interface: &Ipv4Addr,
+) -> io::Result<()> {
+    let addr = SocketAddr::new(multicast_ipv4_interface.clone().into(), addr.port());
     socket.set_reuse_address(true)?;
     socket.bind(&socket2::SockAddr::from(addr))
 }
 
 /// On unixes we bind to the multicast address
 #[cfg(unix)]
-fn bind_multicast(socket: &Socket, addr: &SocketAddr) -> io::Result<()> {
+fn bind_multicast(socket: &Socket, addr: &SocketAddr, _: &Ipv4Addr) -> io::Result<()> {
     socket.set_reuse_address(true)?;
     socket.bind(&socket2::SockAddr::from(*addr))
 }
@@ -150,10 +158,10 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn multicast_test() {
         let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22401);
-
-        let socket_sender = new_sender().unwrap();
-        let socket_listener = new_listener(multicast_adress).unwrap();
-        let socket_listener2 = new_listener(multicast_adress).unwrap();
+        let multicast_ipv4: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
+        let socket_sender = new_sender(&multicast_ipv4).unwrap();
+        let socket_listener = new_listener(multicast_adress, &multicast_ipv4).unwrap();
+        let socket_listener2 = new_listener(multicast_adress, &multicast_ipv4).unwrap();
 
         let first = tokio::spawn(async move {
             let mut buffer: [u8; 4096] = [0; 4096];

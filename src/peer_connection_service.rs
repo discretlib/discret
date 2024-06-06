@@ -88,9 +88,11 @@ impl PeerConnectionService {
         )
         .await?;
 
-        let multicast_adress = SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
+        let multicast_adress: SocketAddr = configuration.multicast_ipv4_group.parse()?; // SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
+        let multicast_ipv4_interface: Ipv4Addr = configuration.multicast_ipv4_interface.parse()?;
         let multicast_discovery = multicast::start_multicast_discovery(
             multicast_adress,
+            multicast_ipv4_interface,
             peer_service.clone(),
             logs.clone(),
         )

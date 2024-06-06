@@ -126,9 +126,7 @@ impl PeerManager {
             return Ok(false);
         }
         if probe_value.eq(&self.probe_value) {
-            let ipv4_adress: SocketAddr = format!("{}:{}", &address.ip(), &self.endpoint.ipv4_port)
-                .parse()
-                .unwrap();
+            let ipv4_adress = SocketAddr::new(address.ip(), self.endpoint.ipv4_port);
             self.logs
                 .info(format!("Detected Local Adress {}", &address.ip()));
             let mut ipv4_header = AnnounceHeader {
