@@ -780,8 +780,8 @@ impl NodeDeletionEntry {
             }
             //deletiong log is written before real deletion but this function is performed inside a transaction
             node.write(conn)?;
-            daily_log.set_need_update(node.room_id, node.deletion_date);
-            daily_log.set_need_update(node.room_id, node.mdate);
+            daily_log.set_need_update(node.room_id, &node.entity, node.deletion_date);
+            daily_log.set_need_update(node.room_id, &node.entity, node.mdate);
         }
         let query = format!("DELETE FROM _node WHERE id in ({})", in_clause);
         let mut stmt = conn.prepare(&query)?;

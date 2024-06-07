@@ -132,6 +132,7 @@ impl LocalPeerService {
             let challenge = random32().to_vec();
             let mut remote_rooms: HashSet<Uid> = HashSet::new();
 
+            //prove identity
             let ret: Result<(), crate::Error> = async {
                 let proof: ProveAnswer =
                     Self::query(&query_service, Query::ProveIdentity(challenge.clone())).await?;
@@ -476,32 +477,58 @@ impl LocalPeerService {
         let remote_log: Vec<DailyLog> = Self::query(query_service, Query::RoomLog(room_id)).await?;
         let local_log = db.get_room_log(room_id).await?;
 
-        let mut local_map = HashMap::with_capacity(local_log.len());
+        let mut local_map: HashMap<i64, HashMap<String, DailyLog>> =
+            HashMap::with_capacity(local_log.len());
+
         for log in local_log {
-            local_map.insert(log.date, log);
+            let room_entry = local_map.entry(log.date).or_default();
+
+            room_entry.insert(log.entity.clone(), log);
         }
         let mut modified = false;
         for remote in &remote_log {
-            let local_log = local_map.get(&remote.date);
-            match local_log {
-                Some(local_log) => {
-                    if !local_log.daily_hash.eq(&remote.daily_hash) {
-                        if Self::synchronise_day(
-                            room_id,
-                            remote.date,
-                            db,
-                            query_service,
-                            verify_service,
-                        )
-                        .await?
-                        {
-                            modified = true;
+            let local_room_date = local_map.get(&remote.date);
+            match local_room_date {
+                Some(local_room_date) => {
+                    let local_entity_log = local_room_date.get(&remote.entity);
+
+                    match local_entity_log {
+                        Some(local_log) => {
+                            if !local_log.daily_hash.eq(&remote.daily_hash) {
+                                if Self::synchronise_day(
+                                    room_id,
+                                    remote.entity.clone(),
+                                    remote.date,
+                                    db,
+                                    query_service,
+                                    verify_service,
+                                )
+                                .await?
+                                {
+                                    modified = true;
+                                }
+                            }
+                        }
+                        None => {
+                            if Self::synchronise_day(
+                                room_id,
+                                remote.entity.clone(),
+                                remote.date,
+                                db,
+                                query_service,
+                                verify_service,
+                            )
+                            .await?
+                            {
+                                modified = true;
+                            }
                         }
                     }
                 }
                 None => {
                     if Self::synchronise_day(
                         room_id,
+                        remote.entity.clone(),
                         remote.date,
                         db,
                         query_service,
@@ -539,14 +566,24 @@ impl LocalPeerService {
         };
 
         if sync_day {
-            Self::synchronise_day(
-                remote_room.room_id,
-                remote_room.last_data_date.unwrap(), //checked by sync_day
-                db,
+            let remote_log: Vec<DailyLog> = Self::query(
                 query_service,
-                verify_service,
+                Query::RoomLogAt(remote_room.room_id, remote_room.last_data_date.unwrap()),
             )
-            .await
+            .await?;
+
+            for log in remote_log {
+                Self::synchronise_day(
+                    remote_room.room_id,
+                    log.entity,
+                    remote_room.last_data_date.unwrap(), //checked by sync_day
+                    db,
+                    query_service,
+                    verify_service,
+                )
+                .await?;
+            }
+            Ok(true)
         } else {
             Ok(false)
         }
@@ -554,6 +591,7 @@ impl LocalPeerService {
 
     async fn synchronise_day(
         room_id: Uid,
+        entity: String,
         date: i64,
         db: &GraphDatabaseService,
         query_service: &QueryService,
@@ -562,8 +600,11 @@ impl LocalPeerService {
         let mut has_changes = false;
 
         //edge deletion
-        let edge_deletion: Vec<EdgeDeletionEntry> =
-            Self::query(query_service, Query::EdgeDeletionLog(room_id, date)).await?;
+        let edge_deletion: Vec<EdgeDeletionEntry> = Self::query(
+            query_service,
+            Query::EdgeDeletionLog(room_id, entity.clone(), date),
+        )
+        .await?;
         if !edge_deletion.is_empty() {
             has_changes = true;
             let edge_deletion = verify_service.verify_edge_log(edge_deletion).await?;
@@ -720,6 +761,33 @@ impl LocalPeerService {
 
         query_service.send(query, answer).await;
         Ok(())
+    }
+
+    async fn query_multiple<T: DeserializeOwned + Send + 'static>(
+        query_service: &QueryService,
+        query: Query,
+    ) -> Result<mpsc::Receiver<Result<T, Error>>, Error> {
+        let (sender, receiv) = mpsc::channel(1);
+        let answer: AnswerFn = Box::new(move |succes, serialized| {
+            let answer = if succes {
+                match bincode::deserialize::<T>(&serialized) {
+                    Ok(result) => Ok(result),
+                    Err(_) => Err(Error::Parsing),
+                }
+            } else {
+                match bincode::deserialize::<Error>(&serialized) {
+                    Ok(result) => Err(result),
+                    Err(_) => Err(Error::Parsing),
+                }
+            };
+
+            Box::pin(async move {
+                let _ = sender.send(answer).await;
+            })
+        });
+
+        query_service.send(query, answer).await;
+        Ok(receiv)
     }
 
     ///

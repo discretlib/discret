@@ -354,7 +354,6 @@ impl MutationParser {
                             )?;
                         }
                         Rule::integer => {
-                            // println!("{:#?}", content_pair);
                             MutationParser::parse_int_type(
                                 field_model,
                                 &mut mutation_field,
@@ -363,7 +362,6 @@ impl MutationParser {
                         }
 
                         Rule::string => {
-                            // println!("{:#?}", content_pair);
                             MutationParser::parse_string_type(
                                 field_model,
                                 &mut mutation_field,
@@ -372,7 +370,6 @@ impl MutationParser {
                         }
 
                         Rule::null => {
-                            // println!("{:#?}", content_pair);
                             MutationParser::parse_null_type(field_model, &mut mutation_field)?;
                         }
 
@@ -386,7 +383,6 @@ impl MutationParser {
                         }
 
                         _ => {
-                            //println!("{:#?}", content_pair);
                             unreachable!()
                         }
                     }
@@ -394,7 +390,6 @@ impl MutationParser {
                     entity.add_field(mutation_field)?;
                 }
                 _ => {
-                    // println!("{:#?}", entity_pair);
                     unreachable!()
                 }
             }
@@ -717,8 +712,6 @@ mod tests {
             &data_model,
         )
         .unwrap();
-
-        //println!("{:#?}", _mutation);
     }
 
     #[test]

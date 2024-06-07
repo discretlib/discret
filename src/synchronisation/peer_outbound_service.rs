@@ -78,6 +78,7 @@ impl InboundQueryService {
                 peer.send(
                     msg.id,
                     true,
+                    true,
                     ProveAnswer {
                         verifying_key: res.0,
                         invitation: None,
@@ -93,12 +94,13 @@ impl InboundQueryService {
                 if !key.is_empty() {
                     let res = peer.load_allowed_room(key.clone()).await;
                     match res {
-                        Ok(room_list) => peer.send(msg.id, true, room_list).await?,
+                        Ok(room_list) => peer.send(msg.id, true, true, room_list).await?,
                         Err(e) => {
                             log_service.error("RoomList".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("RoomList".to_string()),
                             )
                             .await?;
@@ -112,12 +114,13 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_room_definition(room_id).await;
                     match res {
-                        Ok(definition) => peer.send(msg.id, true, definition).await?,
+                        Ok(definition) => peer.send(msg.id, true, true, definition).await?,
                         Err(e) => {
                             log_service.error("RoomDefinition".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("RoomDefinition".to_string()),
                             )
                             .await?;
@@ -127,6 +130,7 @@ impl InboundQueryService {
                     peer.send(
                         msg.id,
                         false,
+                        true,
                         Error::Authorisation("RoomDefinition".to_string()),
                     )
                     .await?;
@@ -138,20 +142,26 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_room_node(room_id).await;
                     match res {
-                        Ok(definition) => peer.send(msg.id, true, definition).await?,
+                        Ok(definition) => peer.send(msg.id, true, true, definition).await?,
                         Err(e) => {
                             log_service.error("RoomNode".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("RoomNode".to_string()),
                             )
                             .await?;
                         }
                     }
                 } else {
-                    peer.send(msg.id, false, Error::Authorisation("RoomNode".to_string()))
-                        .await?;
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("RoomNode".to_string()),
+                    )
+                    .await?;
                 }
 
                 Ok(())
@@ -161,30 +171,71 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_room_log(room_id).await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("RoomLog".to_string(), e.into());
-                            peer.send(msg.id, false, Error::RemoteTechnical("RoomLog".to_string()))
-                                .await?
+                            peer.send(
+                                msg.id,
+                                false,
+                                true,
+                                Error::RemoteTechnical("RoomLog".to_string()),
+                            )
+                            .await?
                         }
                     }
                 } else {
-                    peer.send(msg.id, false, Error::Authorisation("RoomLog".to_string()))
-                        .await?
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("RoomLog".to_string()),
+                    )
+                    .await?
                 }
 
                 Ok(())
             }
+
+            Query::RoomLogAt(room_id, date) => {
+                if peer.allowed_room.contains(&room_id) {
+                    let res = peer.db.get_room_log_at(room_id, date).await;
+                    match res {
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
+                        Err(e) => {
+                            log_service.error("RoomLog".to_string(), e.into());
+                            peer.send(
+                                msg.id,
+                                false,
+                                true,
+                                Error::RemoteTechnical("RoomLog".to_string()),
+                            )
+                            .await?
+                        }
+                    }
+                } else {
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("RoomLog".to_string()),
+                    )
+                    .await?
+                }
+
+                Ok(())
+            }
+
             Query::RoomDailyNodes(room_id, date) => {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_room_daily_nodes(room_id, date).await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("RoomDailyNodes".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("RoomDailyNodes".to_string()),
                             )
                             .await?
@@ -194,6 +245,7 @@ impl InboundQueryService {
                     peer.send(
                         msg.id,
                         false,
+                        true,
                         Error::Authorisation("RoomDailyNodes".to_string()),
                     )
                     .await?
@@ -204,32 +256,42 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_full_nodes(room_id, node_ids).await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("FullNodes".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("FullNodes".to_string()),
                             )
                             .await?
                         }
                     }
                 } else {
-                    peer.send(msg.id, false, Error::Authorisation("FullNodes".to_string()))
-                        .await?
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("FullNodes".to_string()),
+                    )
+                    .await?
                 }
                 Ok(())
             }
-            Query::EdgeDeletionLog(room_id, date) => {
+            Query::EdgeDeletionLog(room_id, entity, date) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_room_edge_deletion_log(room_id, date).await;
+                    let res = peer
+                        .db
+                        .get_room_edge_deletion_log(room_id, entity, date)
+                        .await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("EdgeDeletionLog".to_string(), e.into());
                             peer.send(
                                 msg.id,
+                                true,
                                 false,
                                 Error::RemoteTechnical("EdgeDeletionLog".to_string()),
                             )
@@ -240,6 +302,7 @@ impl InboundQueryService {
                     peer.send(
                         msg.id,
                         false,
+                        true,
                         Error::Authorisation("EdgeDeletionLog".to_string()),
                     )
                     .await?
@@ -250,12 +313,13 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_room_node_deletion_log(room_id, date).await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("NodeDeletionLog".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("NodeDeletionLog".to_string()),
                             )
                             .await?
@@ -265,6 +329,7 @@ impl InboundQueryService {
                     peer.send(
                         msg.id,
                         false,
+                        true,
                         Error::Authorisation("NodeDeletionLog".to_string()),
                     )
                     .await?
@@ -276,20 +341,26 @@ impl InboundQueryService {
                 if peer.allowed_room.contains(&room_id) {
                     let res = peer.db.get_peer_nodes(room_id, keys).await;
                     match res {
-                        Ok(log) => peer.send(msg.id, true, log).await?,
+                        Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
                             log_service.error("PeerNodes".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
+                                true,
                                 Error::RemoteTechnical("PeerNodes".to_string()),
                             )
                             .await?
                         }
                     }
                 } else {
-                    peer.send(msg.id, false, Error::Authorisation("PeerNodes".to_string()))
-                        .await?
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("PeerNodes".to_string()),
+                    )
+                    .await?
                 }
                 Ok(())
             }
@@ -323,11 +394,18 @@ impl RemotePeerHandle {
         Ok(rooms)
     }
 
-    async fn send<T: Serialize>(&self, id: u64, success: bool, msg: T) -> Result<(), crate::Error> {
+    async fn send<T: Serialize>(
+        &self,
+        id: u64,
+        success: bool,
+        complete: bool,
+        msg: T,
+    ) -> Result<(), crate::Error> {
         let serialized = bincode::serialize(&msg)?;
         let answer = Answer {
             id,
             success,
+            complete,
             serialized,
         };
         self.reply

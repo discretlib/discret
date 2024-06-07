@@ -103,8 +103,6 @@ mod tests {
             &data_model,
         )
         .unwrap();
-
-        // println!("{:#?}", _query);
     }
 
     #[test]

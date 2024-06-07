@@ -380,7 +380,6 @@ impl AuthorisationNode {
 
         for user in &self.user_admin_nodes {
             let user = user.parse()?;
-            //println!("{}", base64_encode(&user.verifying_key));
             authorisation.add_user_admin(user)?;
         }
         Ok(authorisation)
@@ -689,7 +688,6 @@ pub fn prepare_new_room(room_node: &RoomNode) -> Result<()> {
                 }
 
                 for user_admin in &auth.user_admin_nodes {
-                    //println!("{}", base64_encode(&user_admin.node._verifying_key));
                     if !room.is_admin(&user_admin.node.verifying_key, user_admin.node.mdate) {
                         return Err(Error::InvalidNode(
                             "New RoomNode User Administrator not authorised".to_string(),
@@ -1016,7 +1014,6 @@ mod tests {
             .unwrap();
 
         node.check_consistency().unwrap();
-        // println!("{:#?}", node);
         assert_eq!(1, node.admin_edges.len());
         assert_eq!(1, node.admin_edges.len());
 
@@ -1465,7 +1462,6 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        //   println!("{:#?}", &node.auth_nodes);
         //serialize and deserialize to get rid of the local_id
         let ser = bincode::serialize(&node).unwrap();
         let node: RoomNode = bincode::deserialize(&ser).unwrap();

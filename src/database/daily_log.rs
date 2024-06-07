@@ -19,7 +19,7 @@ use super::sqlite_database::Writeable;
 ///
 #[derive(Default, Debug)]
 pub struct DailyMutations {
-    room_dates: HashMap<Uid, HashSet<i64>>,
+    room_dates: HashMap<Uid, HashMap<String, HashSet<i64>>>,
 }
 impl DailyMutations {
     #[cfg(test)]
@@ -29,30 +29,35 @@ impl DailyMutations {
         }
     }
 
-    pub fn set_need_update(&mut self, room: Uid, mut_date: i64) {
-        let entry = self.room_dates.entry(room).or_default();
-        entry.insert(date(mut_date));
-        //   println!("insert node daily");
+    pub fn set_need_update(&mut self, room: Uid, entity: &String, mut_date: i64) {
+        let room_entry = self.room_dates.entry(room).or_default();
+        let entity_entry = room_entry.entry(entity.to_owned()).or_default();
+        entity_entry.insert(date(mut_date));
     }
 
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        //println!("Writing daily");
         let mut node_daily_stmt = conn.prepare_cached(
             "INSERT INTO _daily_log (
                     room_id,
+                    entity,
                     date,
                     entry_number,
                     daily_hash,
                     history_hash,
                     need_recompute
-                ) values (?,?, 0, NULL, NULL, 1)
+                ) values (?,?,?, 0, NULL, NULL, 1)
                 ON CONFLICT(room_id, date) 
                 DO UPDATE SET daily_hash = NULL , need_recompute = 1;
             ",
         )?;
         for room in &self.room_dates {
-            for date in room.1 {
-                node_daily_stmt.execute((room.0, date))?;
+            let room_id = room.0;
+            for entity in room.1 {
+                let entity_id = entity.0;
+                for date in entity.1 {
+                    //  println!("{} {} {}", base64_encode(room_id), entity_id, date);
+                    node_daily_stmt.execute((room_id, entity_id, date))?;
+                }
             }
         }
         Ok(())
@@ -72,36 +77,44 @@ impl DailyLogsUpdate {
     pub fn compute(&mut self, conn: &Connection) -> Result<(), rusqlite::Error> {
         let mut daily_log_stmt = conn.prepare_cached(
             " 
-            SELECT room_id, date, need_recompute, daily_hash, history_hash
+            SELECT room_id, entity, date, need_recompute, daily_hash, history_hash
             FROM _daily_log daily
             WHERE date >= (
                 IFNULL (
                     (
                         SELECT max(date) from _daily_log 
-                        WHERE daily.room_id = room_id
+                        WHERE 
+                            daily.room_id = room_id AND
+                            daily.entity = entity
                         AND date < (
                             SELECT min(date) from _daily_log 
-                            WHERE daily.room_id = room_id
-                            AND need_recompute = 1
+                            WHERE 
+                                daily.room_id = room_id AND
+                                daily.entity = entity AND
+                                need_recompute = 1
                         )
                     ),(		
                         SELECT min(date) from _daily_log 
-                        WHERE daily.room_id = room_id
-                        AND need_recompute = 1
+                        WHERE 
+                            daily.room_id = room_id AND
+                            daily.entity = entity AND
+                            need_recompute = 1
                     )
                 )
             ) 
-            ORDER BY room_id, date
+            ORDER BY room_id, entity, date
         ",
         )?;
 
-        let compute_sql = "
+        let mut compute_stmt = conn.prepare_cached(
+            "
                 -- node deletion 
-                SELECT signature 
+                SELECT signature
                 FROM _node_deletion_log 
                 WHERE 
                     room_id = ?1 AND
-                    deletion_date >= ?2 AND deletion_date < ?3 
+                    entity = ?2 AND
+                    deletion_date >= ?3 AND deletion_date < ?4 
                 
                 -- edge deletion 
                 UNION ALL
@@ -109,7 +122,8 @@ impl DailyLogsUpdate {
                 FROM _edge_deletion_log 
                 WHERE 
                     room_id = ?1 AND 
-                    deletion_date >= ?2 AND deletion_date < ?3 
+                    src_entity = ?2 AND
+                    deletion_date >= ?3 AND deletion_date < ?4 
                 
                 -- nodes 
                 UNION ALL
@@ -117,12 +131,13 @@ impl DailyLogsUpdate {
                 FROM _node 
                 WHERE
                     room_id = ?1 AND
-                    mdate >= ?2 AND mdate < ?3  
+                    _entity = ?2 AND 
+                    mdate >= ?3 AND mdate < ?4 
                     
                 --applies to the whole union
                 ORDER by signature
-        ";
-        let mut compute_stmt = conn.prepare_cached(&compute_sql)?;
+        ",
+        )?;
 
         let mut update_computed_stmt = conn.prepare_cached(
             "
@@ -134,6 +149,7 @@ impl DailyLogsUpdate {
                 need_recompute = 0
             WHERE
                 room_id = ? AND
+                entity = ? AND
                 date = ?
             ",
         )?;
@@ -145,6 +161,7 @@ impl DailyLogsUpdate {
                 history_hash = ?
             WHERE
                 room_id = ? AND
+                entity = ? AND
                 date = ?
             ",
         )?;
@@ -152,17 +169,21 @@ impl DailyLogsUpdate {
         let mut rows = daily_log_stmt.query([])?;
 
         let mut previous_room: Uid = [0; 16];
+        let mut previous_entity: String = "-".to_string();
         let mut previous_hash: Option<Vec<u8>> = None;
         let mut previous_history: Option<Vec<u8>> = None;
 
         while let Some(row) = rows.next()? {
             let room: Uid = row.get(0)?;
-            let date: i64 = row.get(1)?;
-            let need_recompute: bool = row.get(2)?;
-            let daily_hash: Option<Vec<u8>> = row.get(3)?;
-            let history_hash: Option<Vec<u8>> = row.get(4)?;
+            let entity: String = row.get(1)?;
+            let date: i64 = row.get(2)?;
+            let need_recompute: bool = row.get(3)?;
+
+            let daily_hash: Option<Vec<u8>> = row.get(4)?;
+            let history_hash: Option<Vec<u8>> = row.get(5)?;
+
             if !need_recompute {
-                if previous_room.eq(&room) {
+                if previous_room.eq(&room) && previous_entity.eq(&entity) {
                     if let Some(previous) = &previous_history {
                         let mut hasher = blake3::Hasher::new();
                         hasher.update(previous);
@@ -171,7 +192,7 @@ impl DailyLogsUpdate {
                         }
                         let hash = hasher.finalize().as_bytes().to_vec();
                         // update
-                        update_history_stmt.execute((&hash, &room, date))?;
+                        update_history_stmt.execute((&hash, &room, &entity, date))?;
                         previous_history = Some(hash);
                     } else {
                         previous_history = history_hash;
@@ -182,8 +203,10 @@ impl DailyLogsUpdate {
                     previous_history = None;
                 }
                 previous_room = room;
+                previous_entity = entity;
             } else {
-                let mut comp_rows = compute_stmt.query((&room, date, date_next_day(date)))?;
+                let mut comp_rows =
+                    compute_stmt.query((&room, &entity, date, date_next_day(date)))?;
 
                 let mut entry_number: u32 = 0;
                 let mut hasher = blake3::Hasher::new();
@@ -223,11 +246,13 @@ impl DailyLogsUpdate {
                     &daily_hash,
                     &history_hash,
                     &room,
+                    &entity,
                     date,
                 ))?;
 
                 self.add_log(DailyLog {
                     room_id: room.clone(),
+                    entity: entity.clone(),
                     date,
                     entry_number,
                     daily_hash: daily_hash.clone(),
@@ -237,6 +262,7 @@ impl DailyLogsUpdate {
                 previous_hash = daily_hash;
                 previous_history = history_hash;
                 previous_room = room;
+                previous_entity = entity;
             }
         }
         Ok(())
@@ -252,6 +278,7 @@ impl DailyLogsUpdate {
 pub struct DailyLog {
     pub room_id: Uid,
     pub date: i64,
+    pub entity: String,
     pub entry_number: u32,
     pub daily_hash: Option<Vec<u8>>,
     pub history_hash: Option<Vec<u8>>,
@@ -262,6 +289,7 @@ impl DailyLog {
         conn.execute(
             "CREATE TABLE _daily_log (
             room_id BLOB NOT NULL,
+            entity TEXT NOT NULL,
             date INTEGER NOT NULL,
             entry_number INTEGER NOT NULL DEFAULT 0,
             daily_hash BLOB,
@@ -272,7 +300,7 @@ impl DailyLog {
             [],
         )?;
         conn.execute(
-            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (room_id, need_recompute,  date)",
+            "CREATE INDEX _daily_log_recompute_room_date ON _daily_log (room_id, entity, need_recompute,  date)",
             [],
         )?;
 
@@ -295,6 +323,7 @@ impl DailyLog {
         let mut stmt = conn.prepare_cached(
             "SELECT 
                 room_id ,
+                entity, 
                 date ,
                 entry_number ,
                 daily_hash ,
@@ -302,7 +331,7 @@ impl DailyLog {
                 need_recompute 
             FROM _daily_log
             WHERE room_id = ?
-            ORDER BY date ASC
+            ORDER BY date, entity ASC
             ",
         )?;
         let mut rows = stmt.query([room_id])?;
@@ -310,11 +339,52 @@ impl DailyLog {
         while let Some(row) = rows.next()? {
             res.push(Self {
                 room_id: row.get(0)?,
-                date: row.get(1)?,
-                entry_number: row.get(2)?,
-                daily_hash: row.get(3)?,
-                history_hash: row.get(4)?,
-                need_recompute: row.get(5)?,
+                entity: row.get(1)?,
+                date: row.get(2)?,
+                entry_number: row.get(3)?,
+                daily_hash: row.get(4)?,
+                history_hash: row.get(5)?,
+                need_recompute: row.get(6)?,
+            });
+        }
+        Ok(res)
+    }
+
+    ///
+    /// Get the daily log for a room at a specific date
+    ///
+    pub fn get_room_log_at(
+        room_id: &Uid,
+        date: i64,
+        conn: &Connection,
+    ) -> Result<Vec<Self>, rusqlite::Error> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT 
+                room_id ,
+                entity, 
+                date ,
+                entry_number ,
+                daily_hash ,
+                history_hash ,
+                need_recompute 
+            FROM _daily_log
+            WHERE 
+                room_id = ? AND
+                date = ?
+            ORDER BY date, entity ASC
+            ",
+        )?;
+        let mut rows = stmt.query((room_id, date))?;
+        let mut res = Vec::new();
+        while let Some(row) = rows.next()? {
+            res.push(Self {
+                room_id: row.get(0)?,
+                entity: row.get(1)?,
+                date: row.get(2)?,
+                entry_number: row.get(3)?,
+                daily_hash: row.get(4)?,
+                history_hash: row.get(5)?,
+                need_recompute: row.get(6)?,
             });
         }
         Ok(res)
@@ -405,20 +475,21 @@ impl DailyLog {
 
     #[cfg(test)]
     pub fn write(&self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        //println!("Writing daily");
         let mut node_daily_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO _daily_log (
                     room_id,
+                    entity,
                     date,
                     entry_number,
                     daily_hash,
                     history_hash,
                     need_recompute
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ",
         )?;
         node_daily_stmt.execute((
             &self.room_id,
+            &self.entity,
             &self.date,
             &self.entry_number,
             &self.daily_hash,
@@ -691,6 +762,7 @@ mod tests {
 
         let daily_log_1 = DailyLog {
             room_id: room_id,
+            entity: "0.1".to_string(),
             date: 500,
             entry_number: 1,
             daily_hash: Some(random32().to_vec()),
@@ -701,6 +773,7 @@ mod tests {
 
         let daily_log_0 = DailyLog {
             room_id: room_id,
+            entity: "0.1".to_string(),
             date: 200,
             entry_number: 1,
             daily_hash: Some(random32().to_vec()),
@@ -733,6 +806,7 @@ mod tests {
             RoomChangelog::log_room_definition(&room_id, 100, &conn).unwrap();
             let daily_log = DailyLog {
                 room_id: room_id,
+                entity: "0.1".to_string(),
                 date,
                 entry_number: 1,
                 daily_hash: Some(random32().to_vec()),

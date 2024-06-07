@@ -97,7 +97,6 @@ impl GraphDatabaseService {
                         let q = db.get_cached_query(&query);
                         match q {
                             Ok(cache) => {
-                                //     println!("{}", &cache.1.sql_queries[0].sql_query);
                                 db.query(cache.0, cache.1, parameters, reply).await;
                             }
                             Err(err) => {
@@ -442,6 +441,21 @@ impl GraphDatabaseService {
     }
 
     ///
+    /// get the complete dayly log for a specific room
+    ///
+    pub async fn get_room_log_at(&self, room_id: Uid, date: i64) -> Result<Vec<DailyLog>> {
+        let (reply, receive) = oneshot::channel::<Result<Vec<DailyLog>>>();
+        self.db
+            .reader
+            .send_async(Box::new(move |conn| {
+                let room_log = DailyLog::get_room_log_at(&room_id, date, conn).map_err(Error::from);
+                let _ = reply.send(room_log);
+            }))
+            .await?;
+        receive.await?
+    }
+
+    ///
     /// get node deletions for a room at a specific day
     ///
     pub async fn get_room_node_deletion_log(
@@ -478,14 +492,15 @@ impl GraphDatabaseService {
     pub async fn get_room_edge_deletion_log(
         &self,
         room_id: Uid,
+        entity: String,
         del_date: i64,
     ) -> Result<Vec<EdgeDeletionEntry>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                let deteletions =
-                    EdgeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let deteletions = EdgeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
+                    .map_err(Error::from);
                 let _ = reply.send(deteletions);
             }))
             .await?;
@@ -1095,17 +1110,6 @@ mod tests {
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
-        // let paths = fs::read_dir(path).unwrap();
-
-        // for path in paths {
-        //     let dir = path.unwrap().path();
-        //     let paths = fs::read_dir(dir).unwrap();
-        //     for file in paths {
-        //         let files = file.unwrap().path();
-        //         // println!("Name: {}", files.display());
-        //         //let _ = fs::remove_file(&files);
-        //     }
-        // }
     }
 
     use crate::{

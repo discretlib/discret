@@ -253,8 +253,6 @@ mod tests {
         assert_eq!(None, query.alias);
         assert_eq!("id3", query.id_param);
         assert_eq!(0, query.references.len());
-
-        //println!("{:#?}", deletion);
     }
 
     #[test]
@@ -399,8 +397,6 @@ mod tests {
         .expect_err(
             "'parent' cannot be empty to delete it compretely set it to null in a mutation query",
         );
-
-        //println!("{:#?}", deletion);
     }
 
     #[test]

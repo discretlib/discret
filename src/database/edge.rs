@@ -397,6 +397,7 @@ impl EdgeDeletionEntry {
 
     pub fn get_entries(
         room_id: &Uid,
+        entity: String,
         del_date: i64,
         conn: &Connection,
     ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
@@ -415,11 +416,12 @@ impl EdgeDeletionEntry {
             FROM _edge_deletion_log
             WHERE 
                 room_id = ? AND
-                deletion_date >= ?2 AND deletion_date < ?3 
+                src_entity = ? AND
+                deletion_date >= ? AND deletion_date < ? 
         ",
         )?;
 
-        let mut rows = stmt.query((room_id, date(del_date), date_next_day(del_date)))?;
+        let mut rows = stmt.query((room_id, entity, date(del_date), date_next_day(del_date)))?;
         let mut result = Vec::new();
         while let Some(row) = rows.next()? {
             result.push(Self {
@@ -489,7 +491,7 @@ impl EdgeDeletionEntry {
         let mut stmt = conn.prepare_cached(query)?;
         for e in edges {
             stmt.execute((&e.src, &e.src_entity, &e.label, &e.dest, &e.cdate))?;
-            daily_log.set_need_update(e.room_id, e.deletion_date);
+            daily_log.set_need_update(e.room_id, &e.src_entity, e.deletion_date);
             e.write(conn)?;
         }
         Ok(())
@@ -647,7 +649,8 @@ mod tests {
 
         log.write(&conn).unwrap();
 
-        let entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
+        let entries =
+            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
         assert_eq!(1, entries.len());
         let entry = &entries[0];
         entry.verify().unwrap();
@@ -680,7 +683,8 @@ mod tests {
         let mut log = EdgeDeletionEntry::build(room_id, &e, now(), &signing_key);
         log.write(&conn).unwrap();
 
-        let entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
+        let entries =
+            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
         assert_eq!(1, entries.len());
         let entry = &entries[0];
         entry.verify().unwrap();
@@ -698,7 +702,8 @@ mod tests {
         let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();
         assert!(edge.is_some());
 
-        let mut entries = EdgeDeletionEntry::get_entries(&room_id, now(), &conn).unwrap();
+        let mut entries =
+            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
         EdgeDeletionEntry::delete_all(&mut entries, &mut DailyMutations::new(), &conn).unwrap();
 
         let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();

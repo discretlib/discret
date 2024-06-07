@@ -12,36 +12,6 @@ pub mod peer_inbound_service;
 pub mod peer_outbound_service;
 pub mod room_locking_service;
 
-/// Queries have 10 seconds to returns before closing connection
-pub static NETWORK_TIMEOUT_SEC: u64 = 10;
-
-#[derive(Serialize, Deserialize)]
-pub enum Query {
-    ProveIdentity(Vec<u8>),
-    RoomList,
-    RoomDefinition(Uid),
-    RoomNode(Uid),
-    RoomLog(Uid),
-    RoomDailyNodes(Uid, i64),
-    EdgeDeletionLog(Uid, i64),
-    NodeDeletionLog(Uid, i64),
-    FullNodes(Uid, Vec<Uid>),
-    PeerNodes(Uid, Vec<Vec<u8>>),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct QueryProtocol {
-    id: u64,
-    query: Query,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Answer {
-    id: u64,
-    success: bool,
-    serialized: Vec<u8>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Error)]
 pub enum Error {
     #[error("Authorisation for Query {0}")]
@@ -58,6 +28,38 @@ pub enum Error {
 
     #[error("Technical")]
     Technical,
+}
+
+/// Queries have 10 seconds to returns before closing connection
+pub static NETWORK_TIMEOUT_SEC: u64 = 10;
+
+#[derive(Serialize, Deserialize)]
+pub enum Query {
+    ProveIdentity(Vec<u8>),
+    RoomList,
+    RoomDefinition(Uid),
+    RoomNode(Uid),
+    RoomLog(Uid),
+    RoomLogAt(Uid, i64),
+    RoomDailyNodes(Uid, i64),
+    EdgeDeletionLog(Uid, String, i64),
+    NodeDeletionLog(Uid, i64),
+    FullNodes(Uid, Vec<Uid>),
+    PeerNodes(Uid, Vec<Vec<u8>>),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct QueryProtocol {
+    pub id: u64,
+    pub query: Query,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Answer {
+    pub id: u64,
+    pub success: bool,
+    pub complete: bool,
+    pub serialized: Vec<u8>,
 }
 
 #[derive(Clone)]

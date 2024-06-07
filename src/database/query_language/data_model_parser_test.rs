@@ -2,11 +2,11 @@
 mod tests {
 
     use crate::database::{
-        system_entities::{
-            PEER_FIELD, BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
-            MODIFICATION_DATE_FIELD, SIGNATURE_FIELD, VERIFYING_KEY_FIELD,
-        },
         query_language::{data_model_parser::*, FieldType, ParamValue},
+        system_entities::{
+            BINARY_FIELD, CREATION_DATE_FIELD, ENTITY_FIELD, ID_FIELD, JSON_FIELD,
+            MODIFICATION_DATE_FIELD, PEER_FIELD, SIGNATURE_FIELD, VERIFYING_KEY_FIELD,
+        },
     };
     use std::any::Any;
 
@@ -112,8 +112,6 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(false, father.nullable);
-
-        //println!("{:#?}", datamodel)
     }
 
     #[test]

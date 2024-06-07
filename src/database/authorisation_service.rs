@@ -717,7 +717,6 @@ impl RoomAuthorisations {
         }
         //check if user can mutate the room
         if need_room_admin {
-            //   println!("need_room_mutation {}", need_room_mutation);
             if !room.is_admin(verifying_key, insert_entity.node_to_mutate.date) {
                 return Err(Error::AuthorisationRejected(
                     node_insert.entity.clone(),
@@ -984,7 +983,6 @@ impl RoomAuthorisations {
             self.add_room(room);
         }
 
-        // println!("{}", serde_json::to_string_pretty(&object)?);
         Ok(())
     }
 

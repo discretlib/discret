@@ -887,7 +887,7 @@ impl QueryParser {
                                 Rule::json_array_selector =>  selector_pair.as_str().to_string(),
                                 _=> unreachable!()
                             };
-                           // println!("{:#?}", selector);
+                      
                             let operation = values.next().unwrap().as_str().to_string();
 
                             let val_pair = values.next().unwrap().into_inner().next().unwrap();

@@ -426,10 +426,10 @@ impl FullNode {
         if let Some(room_id) = &self.node.room_id {
             if let Some(old_id) = &self.old_room_id {
                 if !room_id.eq(old_id) {
-                    daily_log.set_need_update(old_id.clone(), self.old_mdate);
+                    daily_log.set_need_update(old_id.clone(), &self.node._entity, self.old_mdate);
                 }
             }
-            daily_log.set_need_update(room_id.clone(), self.node.mdate);
+            daily_log.set_need_update(room_id.clone(), &self.node._entity, self.node.mdate);
         }
     }
 }
@@ -815,7 +815,6 @@ mod tests {
             .await
             .unwrap();
 
-        // println!("{:?}", result);
         assert_eq!(result, "{\n\"Person\":[{\"name\":\"me\",\"parents\":[{\"name\":\"mother\"},{\"name\":\"father\"}]}]\n}");
     }
 }

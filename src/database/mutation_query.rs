@@ -35,7 +35,6 @@ pub struct NodeToMutate {
 impl NodeToMutate {
     pub fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
         if let Some(node) = &mut self.node {
-            // println!("{}", self.enable_full_text);
             node.write(
                 conn,
                 self.enable_full_text,
@@ -508,16 +507,19 @@ impl InsertEntity {
         }
 
         if let Some(room_id) = &self.node_to_mutate.room_id {
-            daily_log.set_need_update(room_id.clone(), self.node_to_mutate.date);
+            if let Some(node) = &self.node_to_mutate.node {
+                daily_log.set_need_update(room_id.clone(), &node._entity, self.node_to_mutate.date);
+            }
+
             if let Some(node) = &self.node_to_mutate.old_node {
                 if let Some(room_id) = &node.room_id {
-                    daily_log.set_need_update(room_id.clone(), node.mdate);
+                    daily_log.set_need_update(room_id.clone(), &node._entity, node.mdate);
                 }
             }
         }
 
         for edg in &self.edge_deletions_log {
-            daily_log.set_need_update(edg.room_id, edg.deletion_date);
+            daily_log.set_need_update(edg.room_id, &edg.src_entity, edg.deletion_date);
         }
     }
 
@@ -740,11 +742,7 @@ mod tests {
         let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
-        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
         assert_eq!(2, mutation_query.mutate_entities.len());
-        // let insert_ent = mutation_query.insert_enties[0];
-
-        //println!("{:#?}", mutation_query);
     }
 
     #[test]
@@ -786,11 +784,8 @@ mod tests {
         let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
-        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
-        assert_eq!(2, mutation_query.mutate_entities.len());
-        // let insert_ent = mutation_query.insert_enties[0];
 
-        //println!("{:#?}", mutation_query);
+        assert_eq!(2, mutation_query.mutate_entities.len());
     }
 
     #[test]
@@ -848,7 +843,6 @@ mod tests {
         let mutation_query = MutationQuery::execute(&mut param, mutation.clone(), &conn).unwrap();
 
         let _js = mutation_query.to_json().unwrap();
-        // println!("{}", serde_json::to_string_pretty(&js).unwrap());
 
         let insert_ent = &mutation_query.mutate_entities[0];
         assert_eq!(5, insert_ent.edge_insertions.len());
@@ -900,13 +894,12 @@ mod tests {
         let insert_entity = &mutation_query.mutate_entities[0];
 
         let person_id = base64_encode(&insert_entity.node_to_mutate.id);
-        //println!("{}", person_id);
+
         let pet_id = base64_encode(
             &insert_entity.sub_nodes.get("pet").unwrap()[0]
                 .node_to_mutate
                 .id,
         );
-        // println!("{}", pet_id);
 
         let mut param = Parameters::new();
         param.add("person_id", person_id).unwrap();
@@ -931,7 +924,7 @@ mod tests {
 
         let mutation = Arc::new(mutation);
         let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
-        //  println!("{:#?}", mutation_query);
+
         mutation_query.write(&conn).unwrap();
 
         let query_parser = QueryParser::parse(
@@ -956,14 +949,11 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        // println!("{}", sql.sql_queries.sql_queries[0].sql_query);
 
         let result = sql.read(&conn).unwrap();
         let expected =
             "{\n\"Person\":[{\"name\":\"Me\",\"pet\":[{\"name\":\"koko\",\"age\":12}]}]\n}";
         assert_eq!(expected, result);
-
-        //println!("{:#?}", result);
     }
 
     #[test]

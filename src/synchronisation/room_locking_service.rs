@@ -88,7 +88,6 @@ impl RoomLockService {
                     for _ in 0..lock_request.rooms.len().clone() {
                         if let Some(room) = lock_request.rooms.pop_back() {
                             if locked.contains(&room) {
-                                //  println!("{} locked by {}", base64_encode(&room), peer);
                                 lock_request.rooms.push_front(room);
                             } else {
                                 if let Ok(_) = lock_request.reply.send(room.clone()) {
@@ -175,7 +174,6 @@ mod tests {
             let local_rooms = rooms.clone();
             let peer = random32();
             tasks.push(tokio::spawn(async move {
-                //  println!("Peer {} started", peer_id);
                 let (sender, mut receiver) = mpsc::unbounded_channel::<Uid>();
                 service
                     .clone()
@@ -183,15 +181,12 @@ mod tests {
                     .await;
                 for _ in 0..num_entries {
                     let room = receiver.recv().await.unwrap();
-                    // sleep(Duration::from_millis(10)).await;
-                    // println!("Peer {} acquired {}", peer_id, base64_encode(&room));
                     service.unlock(room).await;
                 }
                 format!("---------peer {} finished", base64_encode(&peer))
             }));
         }
         for task in tasks {
-            //println!("{}", task.await.unwrap());
             task.await.unwrap();
         }
     }

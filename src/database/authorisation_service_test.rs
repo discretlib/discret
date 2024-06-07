@@ -25,7 +25,6 @@ mod tests {
             let paths = fs::read_dir(dir).unwrap();
             for file in paths {
                 let files = file.unwrap().path();
-                // println!("Name: {}", files.display());
                 let _ = fs::remove_file(&files);
             }
         }
@@ -98,7 +97,6 @@ mod tests {
             )
             .await
             .unwrap();
-        //println!("{:#?}", result);
         let expected = "{\n\"sys.Room\":[{\"admin\":[{\"enabled\":true}],\"authorisations\":[{\"name\":\"what\",\"rights\":[{\"entity\":\"Person\",\"mutate_self\":true,\"mutate_all\":true}]}]}]\n}";
         assert_eq!(result, expected);
     }
@@ -291,8 +289,6 @@ mod tests {
         let expected =
             "{\n\"ns.Person\":[{\"name\":\"another me\",\"pets\":[{\"name\":\"kiki\"}]}]\n}";
         assert_eq!(result, expected);
-        //println!("{:#?}", result);
-        //println!("{}", result);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -765,8 +761,6 @@ mod tests {
         )
         .await
         .expect("can insert a Pet in the second room");
-
-        //println!("{:#?}", result);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -984,8 +978,6 @@ mod tests {
 
         let expected = "{\n\"Person\":[{\"name\":\"me\",\"parents\":[{\"name\":\"mother\"}]}]\n}";
         assert_eq!(result, expected);
-        //println!("{:#?}", result);
-        //println!("{}", result);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1112,7 +1104,7 @@ mod tests {
         .await
         .unwrap();
         let log_entries = app
-            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), now())
+            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
             .await
             .unwrap();
 
@@ -1137,7 +1129,7 @@ mod tests {
         .await
         .unwrap();
         let log_entries = app
-            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), now())
+            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
             .await
             .unwrap();
 

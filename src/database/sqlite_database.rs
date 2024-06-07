@@ -811,7 +811,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r#"{"name":"Steven","surname":"Bob"}"#, res[0]);
-        // println!("{}", res);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -902,7 +901,6 @@ mod tests {
             .query_async(SELECT_ALL.to_string(), Vec::new(), STRING_MAPPING)
             .await
             .unwrap();
-        // println!("{}", res.len());
         assert_eq!(loop_number, res.len());
     }
 

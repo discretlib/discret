@@ -380,7 +380,7 @@ mod tests {
 
         
         let id = mutation_query.mutate_entities[0].node_to_mutate.id;
-        println!("{}", uid_encode(&id));
+     
          let query_parser = QueryParser::parse(
             "
             query sample{
@@ -396,7 +396,7 @@ mod tests {
         .unwrap();
 
         let query = PreparedQueries::build(&query_parser).unwrap();
-   //     println!("{}", query.sql_queries[0].sql_query);
+  
         let mut param = Parameters::new();
         param.add("id",  uid_encode(&id)).unwrap();
 
@@ -408,9 +408,6 @@ mod tests {
         let _ = sql
             .read(&conn)
           .unwrap();
-
-     //   println!("{}",result);
-
         
     }
 
@@ -505,7 +502,6 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-      //  println!("{}", sql.sql_queries.sql_queries[0].sql_query);
 
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"}],\"pet\":{\"name\":\"Truffle\"},\"remps_pets\":[{\"name\":\"World\",\"pet\":{\"name\":\"kiki\"}}]}]\n}";
@@ -601,8 +597,7 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-      //  println!("{}", sql.sql_queries.sql_queries[0].sql_query);
-
+      
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"ns.Person\":[{\"name\":\"John\",\"parents\":[{\"name\":\"World\"}],\"pet\":{\"name\":\"Truffle\"},\"remps_pets\":[{\"name\":\"World\",\"pet\":{\"name\":\"kiki\"}}]}]\n}";
         assert_eq!(expected, result);
@@ -726,7 +721,6 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        println!("{}", sql.sql_queries.sql_queries[0].sql_query);
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"ns.Person\":[{\"name\":\"Sarah\",\"age\":12}]\n}";
         assert_eq!(expected, result);
@@ -803,8 +797,6 @@ mod tests {
         .unwrap();
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-       // println!("{}", &query.sql_queries[0].sql_query);
-
         let mut sql = Query {
             parameters: Parameters::new(),
             parser: Arc::new(query_parser),
@@ -814,9 +806,6 @@ mod tests {
         let expected =
             "{\n\"ns.Person\":[{\"name\":\"Silvie\",\"age\":46},{\"name\":\"John\",\"age\":42}]\n}";
         assert_eq!(expected, result);
-
-        //println!("{:#?}", result.as_str().unwrap());
-        // println!("{}", result.as_str().unwrap());
     }
 
     #[test]
@@ -930,7 +919,6 @@ mod tests {
         let expected =
             "{\n\"ns.Person\":[{\"name\":\"Jean\",\"age\":53,\"weight\":100.0,\"is_human\":false}]\n}";
         assert_eq!(expected, result);
-       // println!("{:#?}", result);
     }
 
     #[test]
@@ -996,14 +984,13 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
         let result = sql.read(&conn).unwrap();
 
         let expected =
              "{\n\"ns.Person\":[{\"name\":\"John\",\"surname\":\"John\",\"pseudo\":\"John\",\"is_human\":true}]\n}";
         assert_eq!(expected, result);
 
-        //println!("{:#?}", result.as_str().unwrap());
     }
 
     #[test]
@@ -1133,13 +1120,12 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        
         let result = sql.read(&conn).unwrap();
 
         let expected ="{\n\"ns.Person\":[{\"nat\":\"sa\",\"avg\":73.3333333333333,\"count\":3,\"max\":85.0,\"min\":65.0,\"sum\":220.0}]\n}";
         assert_eq!(expected, result);
-        // println!("{:#?}", _result.as_str().unwrap());
-        //println!("{}", _result.as_str().unwrap());
+
     }
 
     #[test]
@@ -1196,14 +1182,12 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
         let result = sql.read(&conn).unwrap();
 
         let expected =
             "{\n\"ns.Person\":[{\"name\":\"John\",\"comment\":\"Lorem ipsum sit doler et ames\"}]\n}";
         assert_eq!(expected, result);
-        // println!("{:#?}", result.as_str().unwrap());
-        //println!("{}", result.as_str().unwrap());
     }
 
 
@@ -1261,13 +1245,11 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        
         let result = sql.read(&conn).unwrap();
 
         let expected = "{\n\"ns.Person\":[]\n}";
         assert_eq!(expected, result);
-        // println!("{:#?}", result.as_str().unwrap());
-        //println!("{}", result.as_str().unwrap());
     }
 
     #[test]
@@ -1511,14 +1493,12 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-        //println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+        
         let result = sql.read(&conn).unwrap();
 
         let expected = 
         "{\n\"ns.Person\":[{\"name\":\"Alice\",\"data\":{\"val\":\"hello json\"},\"array\":\"hello json\"}]\n}";
         assert_eq!(expected, result);
-        // println!("{}", result);
-        // println!("{:#?}", result);
 
     }
 
@@ -1633,14 +1613,10 @@ mod tests {
             parser: Arc::new(query_parser),
             sql_queries: Arc::new(query),
         };
-         //   println!("{}", sql.sql_queries.sql_queries[0].sql_query);
+
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"parents\":[{\"name\":\"Ada Father\"},{\"name\":\"Ada Mother\"}],\"parents_pets\":[{\"name\":\"Ada Father\",\"pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"pet\":{\"name\":\"Lulu\"}}]},{\"name\":\"John\",\"parents\":[{\"name\":\"John Father\"},{\"name\":\"John Mother\"}],\"parents_pets\":[{\"name\":\"John Father\",\"pet\":{\"name\":\"Kiki\"}}]}]\n}";
         assert_eq!(expected, result);
-
-        // println!("{:#?}", result);
-        // let res:serde_json::Value = serde_json::from_str(&result).unwrap();
-        // println!("{}", serde_json::to_string_pretty(&res).unwrap());
         
     }
 
@@ -1741,11 +1717,6 @@ mod tests {
         let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"has_pet\":null},{\"name\":\"Ada Father\",\"has_pet\":{\"name\":\"Waf\"}},{\"name\":\"Ada Mother\",\"has_pet\":{\"name\":\"Lulu\"}},{\"name\":\"John\",\"has_pet\":{\"name\":\"Truffle\"}},{\"name\":\"John Father\",\"has_pet\":{\"name\":\"Kiki\"}},{\"name\":\"John Mother\",\"has_pet\":null}]\n}";
         assert_eq!(expected, result);
 
-
-        // println!("{:#?}", result);
-        // let res:serde_json::Value = serde_json::from_str(&result).unwrap();
-        // println!("{}", serde_json::to_string_pretty(&res).unwrap());
-        
     }
 
     #[test]
@@ -1819,11 +1790,9 @@ mod tests {
             &data_model,
         )
         .unwrap();
-
         
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-       // println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
         let mut sql = Query {
             parameters: param,
@@ -1831,7 +1800,7 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        //println!("{:#?}",&result);
+
         let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"},\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
         
@@ -1857,10 +1826,8 @@ mod tests {
         )
         .unwrap();
 
-        
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-       // println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
         let mut sql = Query {
             parameters: param,
@@ -1868,16 +1835,8 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-       // println!("{:#?}",&result);
         let expected = "{\n\"ns.Person\":[{\"name\":\"Ada\",\"sys_peer\":null,\"parents\":[{\"name\":\"Ada Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"Ada Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]},{\"name\":\"John\",\"sys_peer\":null,\"parents\":[{\"name\":\"John Father\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}},{\"name\":\"John Mother\",\"sys_peer\":{\"pub_key\":\"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu\"}}]}]\n}";
         assert_eq!(expected, result);
-         
-
-              
-      
-      //  let res:serde_json::Value = serde_json::from_str(&result).unwrap();
-        // println!("{}", serde_json::to_string_pretty(&res).unwrap());
-        
     }
 
     #[test]
@@ -1996,7 +1955,6 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        //println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
         let mut sql = Query {
             parameters: param,
@@ -2004,7 +1962,6 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        //println!("{:#?}",&result);
         let expected = "{\n\"ns.Person\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada\",\"parents\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Father\"},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"Ada Mother\"}]},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John\",\"parents\":[{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Father\"},{\"sys_room\":{\"authorisations\":[{\"name\":\"admin\"}]},\"name\":\"John Mother\"}]}]\n}";
         assert_eq!(expected, result);
         
@@ -2037,7 +1994,6 @@ mod tests {
         
         let query = PreparedQueries::build(&query_parser).unwrap();
 
-        //println!("{}", &query.sql_queries[0].sql_query);
         let param = Parameters::new();
         let mut sql = Query {
             parameters: param,
@@ -2045,7 +2001,6 @@ mod tests {
             sql_queries: Arc::new(query),
         };
         let result = sql.read(&conn).unwrap();
-        //println!("{:#?}",&result);
         let expected = "{\n\"ns.Person\":[]\n}";
         assert_eq!(expected, result);
     }

@@ -123,11 +123,11 @@ impl DeletionQuery {
 
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for edg in &self.edge_log {
-            daily_log.set_need_update(edg.room_id, edg.deletion_date);
+            daily_log.set_need_update(edg.room_id, &edg.src_entity, edg.deletion_date);
         }
         for log in &self.node_log {
-            daily_log.set_need_update(log.room_id, log.mdate);
-            daily_log.set_need_update(log.room_id, log.deletion_date);
+            daily_log.set_need_update(log.room_id, &log.entity, log.mdate);
+            daily_log.set_need_update(log.room_id, &log.entity, log.deletion_date);
         }
     }
 }
@@ -252,8 +252,6 @@ mod tests {
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[]\n}";
         assert_eq!(result, expected);
-
-        println!("{:#?}", result);
     }
 
     #[test]
@@ -365,7 +363,5 @@ mod tests {
         let result = sql.read(&conn).unwrap();
         let expected = "{\n\"Person\":[]\n}";
         assert_eq!(result, expected);
-
-        //println!("{:#?}", result);
     }
 }
