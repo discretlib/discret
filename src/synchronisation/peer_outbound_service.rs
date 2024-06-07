@@ -225,9 +225,9 @@ impl InboundQueryService {
                 Ok(())
             }
 
-            Query::RoomDailyNodes(room_id, date) => {
+            Query::RoomDailyNodes(room_id, entity, date) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_room_daily_nodes(room_id, date).await;
+                    let res = peer.db.get_room_daily_nodes(room_id, entity, date).await;
                     match res {
                         Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
@@ -309,9 +309,12 @@ impl InboundQueryService {
                 }
                 Ok(())
             }
-            Query::NodeDeletionLog(room_id, date) => {
+            Query::NodeDeletionLog(room_id, entity, date) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_room_node_deletion_log(room_id, date).await;
+                    let res = peer
+                        .db
+                        .get_room_node_deletion_log(room_id, entity, date)
+                        .await;
                     match res {
                         Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {

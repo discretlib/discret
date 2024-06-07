@@ -766,7 +766,7 @@ mod tests {
         second_app.add_room_node(node.clone()).await.unwrap();
 
         let node_ids = first_app
-            .get_room_daily_nodes(room_id.clone(), now())
+            .get_room_daily_nodes(room_id.clone(), "0".to_string(), now())
             .await
             .unwrap();
         assert_eq!(3, node_ids.len());

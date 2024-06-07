@@ -461,6 +461,7 @@ impl GraphDatabaseService {
     pub async fn get_room_node_deletion_log(
         &self,
         room_id: Uid,
+        entity: String,
         del_date: i64,
     ) -> Result<Vec<NodeDeletionEntry>> {
         let (send_response, receive_response) =
@@ -468,8 +469,8 @@ impl GraphDatabaseService {
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                let deteletions =
-                    NodeDeletionEntry::get_entries(&room_id, del_date, conn).map_err(Error::from);
+                let deteletions = NodeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
+                    .map_err(Error::from);
                 let _ = send_response.send(deteletions);
             }))
             .await?;
@@ -523,13 +524,14 @@ impl GraphDatabaseService {
     pub async fn get_room_daily_nodes(
         &self,
         room_id: Uid,
+        entity: String,
         date: i64,
     ) -> Result<HashSet<NodeIdentifier>> {
         let (reply, receive) = oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_node = Node::get_daily_nodes_for_room(&room_id, date, conn);
+                let room_node = Node::get_daily_nodes_for_room(&room_id, entity, date, conn);
                 let _ = reply.send(room_node);
             }))
             .await?;

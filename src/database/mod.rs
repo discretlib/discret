@@ -39,6 +39,9 @@ pub enum Error {
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
 
+    #[error(transparent)]
+    Bincode(#[from] Box<bincode::ErrorKind>),
+
     #[error("{0}")]
     DatabaseRowToLong(String),
 

@@ -41,9 +41,9 @@ pub enum Query {
     RoomNode(Uid),
     RoomLog(Uid),
     RoomLogAt(Uid, i64),
-    RoomDailyNodes(Uid, i64),
     EdgeDeletionLog(Uid, String, i64),
-    NodeDeletionLog(Uid, i64),
+    NodeDeletionLog(Uid, String, i64),
+    RoomDailyNodes(Uid, String, i64),
     FullNodes(Uid, Vec<Uid>),
     PeerNodes(Uid, Vec<Vec<u8>>),
 }

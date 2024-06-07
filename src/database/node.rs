@@ -461,6 +461,7 @@ impl Node {
     //
     pub fn get_daily_nodes_for_room(
         room_id: &Uid,
+        entity: String,
         day: i64,
         conn: &Connection,
     ) -> Result<HashSet<NodeIdentifier>> {
@@ -468,11 +469,13 @@ impl Node {
 
         let query = "SELECT id, mdate, _signature
             FROM _node 
-            WHERE room_id=? AND
-            mdate >= ? AND mdate < ? ";
+            WHERE 
+                room_id = ? AND
+                _entity = ? AND
+                mdate >= ? AND mdate < ? ";
         let mut stmt = conn.prepare_cached(&query)?;
 
-        let mut rows = stmt.query((room_id, date(day), date_next_day(day)))?;
+        let mut rows = stmt.query((room_id, entity, date(day), date_next_day(day)))?;
 
         while let Some(row) = rows.next()? {
             let node = NodeIdentifier {
@@ -692,6 +695,7 @@ impl NodeDeletionEntry {
 
     pub fn get_entries(
         room_id: &Uid,
+        entity: String,
         del_date: i64,
         conn: &Connection,
     ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
@@ -708,11 +712,12 @@ impl NodeDeletionEntry {
             FROM _node_deletion_log
             WHERE 
                 room_id = ? AND
-                deletion_date >= ?2 AND deletion_date < ?3 
+                entity = ? AND
+                deletion_date >= ? AND deletion_date < ? 
         ",
         )?;
 
-        let mut rows = stmt.query((room_id, date(del_date), date_next_day(del_date)))?;
+        let mut rows = stmt.query((room_id, entity, date(del_date), date_next_day(del_date)))?;
         let mut result = Vec::new();
         while let Some(row) = rows.next()? {
             result.push(Self {
@@ -1043,9 +1048,13 @@ mod tests {
         let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
-        let deletion_logs =
-            NodeDeletionEntry::get_entries(&room_id, date(node_deletion_log.deletion_date), &conn)
-                .unwrap();
+        let deletion_logs = NodeDeletionEntry::get_entries(
+            &room_id,
+            entity.to_string(),
+            date(node_deletion_log.deletion_date),
+            &conn,
+        )
+        .unwrap();
 
         let entry = &deletion_logs[0];
 
@@ -1091,7 +1100,8 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let mut ids = Node::get_daily_nodes_for_room(&room_id1, date, &conn).unwrap();
+        let mut ids =
+            Node::get_daily_nodes_for_room(&room_id1, entity.to_string(), date, &conn).unwrap();
         assert_eq!(3, ids.len());
 
         let date2 = now();
@@ -1099,7 +1109,8 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let ids_2 = Node::get_daily_nodes_for_room(&room_id1, date, &conn).unwrap();
+        let ids_2 =
+            Node::get_daily_nodes_for_room(&room_id1, entity.to_string(), date, &conn).unwrap();
         assert_eq!(2, ids_2.len());
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();
@@ -1125,9 +1136,13 @@ mod tests {
         let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
-        let deletion_logs =
-            NodeDeletionEntry::get_entries(&room_id, date(node_deletion_log.deletion_date), &conn)
-                .unwrap();
+        let deletion_logs = NodeDeletionEntry::get_entries(
+            &room_id,
+            entity.to_string(),
+            date(node_deletion_log.deletion_date),
+            &conn,
+        )
+        .unwrap();
 
         let entry = &deletion_logs[0];
 

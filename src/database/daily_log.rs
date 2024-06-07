@@ -319,7 +319,7 @@ impl DailyLog {
     ///
     /// Get the daily log for a room
     ///
-    pub fn get_room_log(room_id: &Uid, conn: &Connection) -> Result<Vec<Self>, rusqlite::Error> {
+    pub fn get_room_log(room_id: &Uid, conn: &Connection) -> Result<Vec<Self>, super::Error> {
         let mut stmt = conn.prepare_cached(
             "SELECT 
                 room_id ,
@@ -337,7 +337,7 @@ impl DailyLog {
         let mut rows = stmt.query([room_id])?;
         let mut res = Vec::new();
         while let Some(row) = rows.next()? {
-            res.push(Self {
+            let log = Self {
                 room_id: row.get(0)?,
                 entity: row.get(1)?,
                 date: row.get(2)?,
@@ -345,7 +345,10 @@ impl DailyLog {
                 daily_hash: row.get(4)?,
                 history_hash: row.get(5)?,
                 need_recompute: row.get(6)?,
-            });
+            };
+            let size = bincode::serialized_size(&log)?;
+            println!("size {}", size);
+            res.push(log);
         }
         Ok(res)
     }

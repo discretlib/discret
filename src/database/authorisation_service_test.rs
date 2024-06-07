@@ -1081,7 +1081,7 @@ mod tests {
         .unwrap();
 
         let del_log = app
-            .get_room_node_deletion_log(uid_decode(&room_id).unwrap(), now())
+            .get_room_node_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
             .await
             .unwrap();
         assert_eq!(1, del_log.len());

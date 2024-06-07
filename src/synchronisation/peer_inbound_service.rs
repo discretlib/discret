@@ -612,8 +612,11 @@ impl LocalPeerService {
         }
 
         //node deletion
-        let node_deletion: Vec<NodeDeletionEntry> =
-            Self::query(query_service, Query::NodeDeletionLog(room_id, date)).await?;
+        let node_deletion: Vec<NodeDeletionEntry> = Self::query(
+            query_service,
+            Query::NodeDeletionLog(room_id, entity.clone(), date),
+        )
+        .await?;
         if !node_deletion.is_empty() {
             has_changes = true;
             let node_deletion = verify_service.verify_node_log(node_deletion).await?;
@@ -632,8 +635,11 @@ impl LocalPeerService {
         }
 
         //node insertion
-        let remote_nodes: HashSet<NodeIdentifier> =
-            Self::query(query_service, Query::RoomDailyNodes(room_id, date)).await?;
+        let remote_nodes: HashSet<NodeIdentifier> = Self::query(
+            query_service,
+            Query::RoomDailyNodes(room_id, entity.clone(), date),
+        )
+        .await?;
 
         let filtered = db.filter_existing_node(remote_nodes, date).await?;
         if !filtered.is_empty() {
