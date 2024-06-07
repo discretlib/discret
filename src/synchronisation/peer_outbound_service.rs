@@ -169,20 +169,24 @@ impl InboundQueryService {
 
             Query::RoomLog(room_id) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_room_log(room_id).await;
-                    match res {
-                        Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            log_service.error("RoomLog".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("RoomLog".to_string()),
-                            )
-                            .await?
+                    let mut res_reply = peer.db.get_room_log(room_id).await;
+
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                log_service.error("RoomLog".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("RoomLog".to_string()),
+                                )
+                                .await?
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 } else {
                     peer.send(
                         msg.id,

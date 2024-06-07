@@ -59,6 +59,7 @@ pub struct GraphDatabaseService {
     //  interactive_sender: mpsc::Sender<Message>,
     pub auth: AuthorisationService,
     pub db: Database,
+    pub buffer_size: usize,
 }
 impl GraphDatabaseService {
     pub async fn start(
@@ -72,7 +73,7 @@ impl GraphDatabaseService {
     ) -> Result<(Self, Vec<u8>, Uid)> {
         let (peer_sender, mut peer_receiver) = mpsc::channel::<Message>(configuration.parallelism);
         //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
-
+        let buffer_size = (configuration.write_buffer_length * 1024) - 32;
         let private_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
 
         let mut db = GraphDatabase::new(
@@ -179,6 +180,7 @@ impl GraphDatabaseService {
                 peer_sender,
                 auth,
                 db: database,
+                buffer_size,
             },
             verifying_key,
             private_room_id,
@@ -428,16 +430,26 @@ impl GraphDatabaseService {
     ///
     /// get the complete dayly log for a specific room
     ///
-    pub async fn get_room_log(&self, room_id: Uid) -> Result<Vec<DailyLog>> {
-        let (reply, receive) = oneshot::channel::<Result<Vec<DailyLog>>>();
-        self.db
+    pub async fn get_room_log(&self, room_id: Uid) -> mpsc::Receiver<Result<Vec<DailyLog>>> {
+        let (reply, receive) = mpsc::channel::<Result<Vec<DailyLog>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+        let errors = self
+            .db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_log = DailyLog::get_room_log(&room_id, conn).map_err(Error::from);
-                let _ = reply.send(room_log);
+                let error = DailyLog::get_room_log(&room_id, buffer_size, &creply, conn)
+                    .map_err(Error::from);
+                if let Err(error) = error {
+                    let _ = creply.blocking_send(Err(error));
+                }
             }))
-            .await?;
-        receive.await?
+            .await;
+
+        if let Err(error) = errors {
+            let _ = reply.blocking_send(Err(error));
+        }
+        receive
     }
 
     ///

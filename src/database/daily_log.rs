@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::{
     date_utils::{date, date_next_day},
@@ -319,7 +320,12 @@ impl DailyLog {
     ///
     /// Get the daily log for a room
     ///
-    pub fn get_room_log(room_id: &Uid, conn: &Connection) -> Result<Vec<Self>, super::Error> {
+    pub fn get_room_log(
+        room_id: &Uid,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<Self>, super::Error>>,
+        conn: &Connection,
+    ) -> Result<(), super::Error> {
         let mut stmt = conn.prepare_cached(
             "SELECT 
                 room_id ,
@@ -336,6 +342,7 @@ impl DailyLog {
         )?;
         let mut rows = stmt.query([room_id])?;
         let mut res = Vec::new();
+        let mut len = 0;
         while let Some(row) = rows.next()? {
             let log = Self {
                 room_id: row.get(0)?,
@@ -347,10 +354,23 @@ impl DailyLog {
                 need_recompute: row.get(6)?,
             };
             let size = bincode::serialized_size(&log)?;
-            println!("size {}", size);
+            if (len + size) > batch_size as u64 {
+                let ready = res;
+                res = Vec::new();
+                len = 0;
+
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            }
+            len += size;
             res.push(log);
         }
-        Ok(res)
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 
     ///
@@ -741,7 +761,8 @@ mod tests {
             }
         }
 
-        let room_log = app.get_room_log(bin_room_id.clone()).await.unwrap();
+        let mut room_log_receiv = app.get_room_log(bin_room_id.clone()).await;
+        let room_log = room_log_receiv.recv().await.unwrap().unwrap();
         assert_eq!(1, room_log.len());
         let rlog = &room_log[0];
         assert_eq!(date(now()), rlog.date);

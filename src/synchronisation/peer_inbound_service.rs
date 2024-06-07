@@ -39,12 +39,20 @@ use super::{
 
 static QUERY_SEND_BUFFER: usize = 10;
 
-pub type AnswerFn = Box<dyn FnOnce(bool, Vec<u8>) -> Pin<Box<AsnwerResultFut>> + Send + 'static>;
+pub type AnswerFn =
+    Box<dyn FnOnce(bool, bool, Vec<u8>) -> Pin<Box<AsnwerResultFut>> + Send + 'static>;
+pub type AnswerMultipleFn =
+    Box<dyn Fn(bool, bool, Vec<u8>) -> Pin<Box<AsnwerResultFut>> + Send + 'static>;
 
 pub type AsnwerResultFut = dyn Future<Output = ()> + Send + 'static;
+
+pub enum QueryFn {
+    Once(Query, AnswerFn),
+    Multiple(Query, AnswerMultipleFn),
+}
 #[derive(Clone)]
 pub struct QueryService {
-    sender: mpsc::Sender<(Query, AnswerFn)>,
+    sender: mpsc::Sender<QueryFn>,
 }
 impl QueryService {
     pub fn start(
@@ -52,28 +60,40 @@ impl QueryService {
         mut remote_receiver: mpsc::Receiver<Answer>,
         log_service: LogService,
     ) -> Self {
-        let (sender, mut local_receiver) = mpsc::channel::<(Query, AnswerFn)>(QUERY_SEND_BUFFER);
+        let (sender, mut local_receiver) = mpsc::channel::<QueryFn>(QUERY_SEND_BUFFER);
 
         tokio::spawn(async move {
             let mut next_message_id: u64 = 0;
             let mut sent_query: HashMap<u64, AnswerFn> = HashMap::new();
-
+            let mut sent_query_multiple: HashMap<u64, AnswerMultipleFn> = HashMap::new();
             loop {
                 tokio::select! {
                     msg = local_receiver.recv() =>{
                         match msg {
                             Some(msg) => {
-                                let id = next_message_id;
-                                let query = msg.0;
-                                let query_prot = QueryProtocol { id, query };
-
-                                if let Err(e)  = remote_sender.send(query_prot).await {
-                                    log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
-                                    break;
+                                match msg{
+                                    QueryFn::Once(query, fun) => {
+                                        let id = next_message_id;
+                                        let query_prot = QueryProtocol { id, query };
+                                        if let Err(e)  = remote_sender.send(query_prot).await {
+                                            log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
+                                            break;
+                                        }
+                                        sent_query.insert(id, fun);
+                                        next_message_id += 1;
+                                    },
+                                    QueryFn::Multiple(query, fun) => {
+                                        let id = next_message_id;
+                                        let query_prot = QueryProtocol { id, query };
+                                        if let Err(e)  = remote_sender.send(query_prot).await {
+                                            log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
+                                            break;
+                                        }
+                                        sent_query_multiple.insert(id, fun);
+                                        next_message_id += 1;
+                                    },
                                 }
-                                let answer_func = msg.1;
-                                sent_query.insert(id, answer_func);
-                                next_message_id += 1;
+
                             },
                             None => {
 
@@ -86,7 +106,12 @@ impl QueryService {
                         match msg {
                             Some(msg) => {
                                 if let Some(func) = sent_query.remove(&msg.id) {
-                                    func(msg.success, msg.serialized).await;
+                                    func(msg.success,msg.complete, msg.serialized).await;
+                                }else if let Some(func) = sent_query_multiple.get(&msg.id) {
+                                    func(msg.success,msg.complete, msg.serialized).await;
+                                    if msg.complete{
+                                        sent_query_multiple.remove(&msg.id);
+                                    }
                                 }
                             }
                             None => {
@@ -103,8 +128,8 @@ impl QueryService {
         Self { sender }
     }
 
-    async fn send(&self, query: Query, answer: AnswerFn) {
-        let _ = self.sender.send((query, answer)).await;
+    async fn send(&self, query: QueryFn) {
+        let _ = self.sender.send(query).await;
     }
 }
 
@@ -474,9 +499,24 @@ impl LocalPeerService {
         query_service: &QueryService,
         verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
-        let remote_log: Vec<DailyLog> = Self::query(query_service, Query::RoomLog(room_id)).await?;
-        let local_log = db.get_room_log(room_id).await?;
+        let mut remote_log_receiver: Receiver<Result<Vec<DailyLog>, Error>> =
+            Self::query_multiple(query_service, Query::RoomLog(room_id)).await?;
+        let mut remote_log: Vec<DailyLog> = Vec::new();
+        while let Some(log) = remote_log_receiver.recv().await {
+            match log {
+                Ok(mut log) => remote_log.append(&mut log),
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+        }
 
+        let mut local_log_receiver = db.get_room_log(room_id).await;
+        let mut local_log: Vec<DailyLog> = Vec::new();
+        while let Some(log) = local_log_receiver.recv().await {
+            match log {
+                Ok(mut log) => local_log.append(&mut log),
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+        }
         let mut local_map: HashMap<i64, HashMap<String, DailyLog>> =
             HashMap::with_capacity(local_log.len());
 
@@ -714,7 +754,7 @@ impl LocalPeerService {
     ) -> Result<T, Error> {
         let (send, recieve) = oneshot::channel::<Result<T, Error>>();
 
-        let answer: AnswerFn = Box::new(move |succes, serialized| {
+        let answer: AnswerFn = Box::new(move |succes, _, serialized| {
             let answer = if succes {
                 match bincode::deserialize::<T>(&serialized) {
                     Ok(result) => Ok(result),
@@ -726,11 +766,12 @@ impl LocalPeerService {
                     Err(_) => Err(Error::Parsing),
                 }
             };
+
             let _ = send.send(answer);
             Box::pin(async {})
         });
 
-        query_service.send(query, answer).await;
+        query_service.send(QueryFn::Once(query, answer)).await;
         match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
             Ok(r) => match r {
                 Ok(result) => return result,
@@ -747,7 +788,7 @@ impl LocalPeerService {
         query: Query,
         sender: mpsc::Sender<Result<T, Error>>,
     ) -> Result<(), Error> {
-        let answer: AnswerFn = Box::new(move |succes, serialized| {
+        let answer: AnswerFn = Box::new(move |succes, _, serialized| {
             let answer = if succes {
                 match bincode::deserialize::<T>(&serialized) {
                     Ok(result) => Ok(result),
@@ -759,13 +800,12 @@ impl LocalPeerService {
                     Err(_) => Err(Error::Parsing),
                 }
             };
-
             Box::pin(async move {
                 let _ = sender.send(answer).await;
             })
         });
+        query_service.send(QueryFn::Once(query, answer)).await;
 
-        query_service.send(query, answer).await;
         Ok(())
     }
 
@@ -774,25 +814,29 @@ impl LocalPeerService {
         query: Query,
     ) -> Result<mpsc::Receiver<Result<T, Error>>, Error> {
         let (sender, receiv) = mpsc::channel(1);
-        let answer: AnswerFn = Box::new(move |succes, serialized| {
-            let answer = if succes {
-                match bincode::deserialize::<T>(&serialized) {
-                    Ok(result) => Ok(result),
-                    Err(_) => Err(Error::Parsing),
-                }
+        let answer: AnswerMultipleFn = Box::new(move |succes, complete, serialized| {
+            if !complete {
+                let answer = if succes {
+                    match bincode::deserialize::<T>(&serialized) {
+                        Ok(result) => Ok(result),
+                        Err(_) => Err(Error::Parsing),
+                    }
+                } else {
+                    match bincode::deserialize::<Error>(&serialized) {
+                        Ok(result) => Err(result),
+                        Err(_) => Err(Error::Parsing),
+                    }
+                };
+                let sender = sender.clone();
+                Box::pin(async move {
+                    let _ = sender.send(answer).await;
+                })
             } else {
-                match bincode::deserialize::<Error>(&serialized) {
-                    Ok(result) => Err(result),
-                    Err(_) => Err(Error::Parsing),
-                }
-            };
-
-            Box::pin(async move {
-                let _ = sender.send(answer).await;
-            })
+                Box::pin(async {})
+            }
         });
 
-        query_service.send(query, answer).await;
+        query_service.send(QueryFn::Multiple(query, answer)).await;
         Ok(receiv)
     }
 
