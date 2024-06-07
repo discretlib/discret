@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -60,7 +62,7 @@ pub enum Error {
 
 #[derive(Clone)]
 pub enum LocalEvent {
-    RoomDefinitionChanged(Room),
+    RoomDefinitionChanged(Arc<Room>),
     RoomDataChanged(Vec<Uid>),
 }
 

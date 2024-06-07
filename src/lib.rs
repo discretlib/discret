@@ -34,7 +34,7 @@
 //!     - State sponsored surveillance: A state watching the network could determine which peer connect to which, giving a lot of knowledge about your social network.
 //!
 //!
-
+#![forbid(unsafe_code)]
 #![allow(dead_code)]
 
 mod configuration;

@@ -80,7 +80,6 @@ impl Node {
 
         conn.execute("CREATE  INDEX _node_id__entity ON _node (id, _entity)", [])?;
 
-        //used during daily node log update
         conn.execute(
             "CREATE INDEX _node_room_id_mdate_idx ON _node (room_id, mdate)",
             [],

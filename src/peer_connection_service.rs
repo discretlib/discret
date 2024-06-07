@@ -346,18 +346,18 @@ impl PeerConnectionService {
     ) {
         match event {
             Event::DataChanged(daily_log) => {
-                match daily_log {
+                match daily_log.as_ref() {
                     Ok(daily_log) => {
                         let mut rooms = Vec::new();
-                        for room in daily_log.room_dates {
-                            rooms.push(room.0);
+                        for room in &daily_log.room_dates {
+                            rooms.push(room.0.clone());
                         }
                         let _ = local_event_broadcast.send(LocalEvent::RoomDataChanged(rooms));
                     }
                     Err(err) => {
                         log_service.error(
                             "ComputedDailyLog".to_string(),
-                            crate::Error::ComputeDailyLog(err),
+                            crate::Error::ComputeDailyLog(err.to_string()),
                         );
                     }
                 };

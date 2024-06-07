@@ -162,8 +162,7 @@ pub struct Configuration {
 impl Default for Configuration {
     fn default() -> Self {
         Self {
-            //    max_connected_peers: 512,
-            parallelism: 1,
+            parallelism: 4,
             auto_accept_local_device: true,
             auto_allow_new_peers: false,
             max_object_size_in_kb: 256,
