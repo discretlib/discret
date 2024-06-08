@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::database::VEC_OVERHEAD;
 use crate::security::{base64_decode, Uid};
 
 use crate::database::{
@@ -13,6 +14,7 @@ use crate::database::{
 
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 ///
 /// data structure to get a node and all its edges
@@ -42,8 +44,10 @@ impl FullNode {
     pub fn get_nodes_filtered_by_room(
         room_id: &Uid,
         node_ids: Vec<Uid>,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<FullNode>>>,
         conn: &Connection,
-    ) -> Result<Vec<FullNode>> {
+    ) -> Result<()> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
         while let Some(_) = it.next() {
@@ -122,8 +126,29 @@ impl FullNode {
             }
         }
 
-        let res: Vec<FullNode> = map.into_iter().map(|(_, node)| node).collect();
-        Ok(res)
+        let mut res: Vec<FullNode> = Vec::new();
+        let mut len = 0;
+        for entry in map {
+            let node = entry.1;
+            let size = bincode::serialized_size(&node)?;
+            let insert_len = len + size + VEC_OVERHEAD;
+            if insert_len > batch_size as u64 {
+                let ready = res;
+                res = Vec::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+            res.push(node);
+        }
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 
     pub fn get_local_nodes(node_ids: Vec<Uid>, conn: &Connection) -> Result<Vec<FullNode>> {
@@ -493,7 +518,13 @@ mod tests {
 
         let mut node_ids = Vec::new();
         node_ids.push(raw_node.id);
-        let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
+
+        let batch_size = 4096;
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+        FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, batch_size, &reply, &conn)
+            .unwrap();
+
+        let nodes = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(1, nodes.len());
         assert_eq!(raw_node.id, nodes[0].node.id);
 
@@ -523,7 +554,10 @@ mod tests {
         let mut node_ids = Vec::new();
         node_ids.push(node_with_one_edge.id);
 
-        let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+        FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, batch_size, &reply, &conn)
+            .unwrap();
+        let nodes = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_one_edge.id, full.node.id);
@@ -568,7 +602,10 @@ mod tests {
         let mut node_ids = Vec::new();
         node_ids.push(node_with_two_edge.id);
 
-        let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+        FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, batch_size, &reply, &conn)
+            .unwrap();
+        let nodes = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(1, nodes.len());
         let full = &nodes[0];
         assert_eq!(node_with_two_edge.id, full.node.id);
@@ -579,7 +616,10 @@ mod tests {
         node_ids.push(node_with_one_edge.id);
         node_ids.push(node_with_two_edge.id);
 
-        let nodes = FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, &conn).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+        FullNode::get_nodes_filtered_by_room(&room_id1, node_ids, batch_size, &reply, &conn)
+            .unwrap();
+        let nodes = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(3, nodes.len());
     }
 
@@ -786,10 +826,9 @@ mod tests {
         let filtered_nodes: HashSet<NodeIdentifier> = bincode::deserialize(&ser).unwrap();
 
         let filtered_id: Vec<Uid> = filtered_nodes.into_iter().map(|e| e.id).collect();
-        let full_nodes: Vec<FullNode> = first_app
-            .get_full_nodes(room_id.clone(), filtered_id)
-            .await
-            .unwrap();
+
+        let mut full_nodes_recv = first_app.get_full_nodes(room_id.clone(), filtered_id).await;
+        let full_nodes = full_nodes_recv.recv().await.unwrap().unwrap();
         assert_eq!(3, full_nodes.len());
 
         //full_nodes sent over network

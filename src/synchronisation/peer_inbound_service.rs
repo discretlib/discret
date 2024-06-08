@@ -411,7 +411,7 @@ impl LocalPeerService {
         }
 
         let mut peers_receiv: Receiver<Result<Vec<Node>, Error>> =
-            Self::query_multiple(query_service, Query::PeersForRoom(room_id)).await?;
+            Self::query_multiple(query_service, Query::PeersForRoom(room_id)).await;
 
         let mut new_peers: Vec<Uid> = Vec::new();
         let mut peer_nodes: Vec<Node> = Vec::new();
@@ -537,7 +537,7 @@ impl LocalPeerService {
         verify_service: &SignatureVerificationService,
     ) -> Result<bool, crate::Error> {
         let mut remote_log_receiver: Receiver<Result<Vec<DailyLog>, Error>> =
-            Self::query_multiple(query_service, Query::RoomLog(room_id)).await?;
+            Self::query_multiple(query_service, Query::RoomLog(room_id)).await;
         let mut remote_log: Vec<DailyLog> = Vec::new();
         while let Some(log) = remote_log_receiver.recv().await {
             match log {
@@ -717,7 +717,7 @@ impl LocalPeerService {
                 query_service,
                 Query::RoomDailyNodes(room_id, entity.clone(), date),
             )
-            .await?;
+            .await;
         let mut remote_nodes = HashSet::new();
         while let Some(nodes) = remote_nodes_receiv.recv().await {
             match nodes {
@@ -737,53 +737,110 @@ impl LocalPeerService {
             return Ok(has_changes);
         }
         let max_nodes = 128;
+        let mut current_list = Vec::with_capacity(max_nodes);
+        let mut tasks = Vec::new();
 
-        //put in a block to remove the reply:Sender<> at the top that would
-        //prevent the loop in the process_handle to end when all messages are processed
-        let process_handle = {
-            let (reply, mut receiver) =
-                mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
-
+        //request nodes in batch to avoid to much memory usage
+        for node_identifier in filtered {
+            current_list.push(node_identifier.id);
+            if current_list.len() == max_nodes {
+                let list = current_list;
+                let qs = query_service.clone();
+                let db = db.clone();
+                let verify_service = verify_service.clone();
+                let room_id = room_id;
+                let spawn: tokio::task::JoinHandle<Result<(), crate::Error>> =
+                    tokio::spawn(async move {
+                        let mut result_recv: Receiver<Result<Vec<FullNode>, Error>> =
+                            LocalPeerService::query_multiple(&qs, Query::FullNodes(room_id, list))
+                                .await;
+                        while let Some(nodes) = result_recv.recv().await {
+                            let nodes = nodes?;
+                            let nodes = verify_service.verify_full_nodes(nodes).await?;
+                            db.add_full_nodes(room_id, nodes).await?;
+                        }
+                        Ok(())
+                    });
+                tasks.push(spawn);
+                current_list = Vec::with_capacity(max_nodes);
+            }
+        }
+        if !current_list.is_empty() {
+            let qs = query_service.clone();
             let db = db.clone();
             let verify_service = verify_service.clone();
             let room_id = room_id;
-            let process_handle = tokio::spawn(async move {
-                while let Some(nodes) =
-                    timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
-                {
-                    let nodes = nodes?;
-                    let nodes = verify_service.verify_full_nodes(nodes).await?;
-                    db.add_full_nodes(room_id, nodes).await?;
-                }
-                Ok::<(), crate::Error>(())
-            });
-            let mut current_list = Vec::with_capacity(max_nodes);
+            let spawn: tokio::task::JoinHandle<Result<(), crate::Error>> =
+                tokio::spawn(async move {
+                    let mut result_recv: Receiver<Result<Vec<FullNode>, Error>> =
+                        LocalPeerService::query_multiple(
+                            &qs,
+                            Query::FullNodes(room_id, current_list),
+                        )
+                        .await;
+                    while let Some(nodes) = result_recv.recv().await {
+                        let nodes = nodes?;
+                        let nodes = verify_service.verify_full_nodes(nodes).await?;
+                        db.add_full_nodes(room_id, nodes).await?;
+                    }
+                    Ok(())
+                });
+            tasks.push(spawn);
+        }
 
-            for node_identifier in filtered {
-                current_list.push(node_identifier.id);
-                if current_list.len() == max_nodes {
-                    Self::query_mpsc(
-                        query_service,
-                        Query::FullNodes(room_id, current_list),
-                        reply.clone(),
-                    )
-                    .await?;
-
-                    current_list = Vec::with_capacity(max_nodes);
-                }
+        let tasks = futures::future::join_all(tasks).await;
+        for task in tasks {
+            if let Err(e) = task {
+                return Err(crate::Error::from(e));
             }
-            if !current_list.is_empty() {
-                Self::query_mpsc(
-                    query_service,
-                    Query::FullNodes(room_id, current_list),
-                    reply.clone(),
-                )
-                .await?;
-            }
-            process_handle
-        };
+        }
 
-        process_handle.await??;
+        // //put in a block to remove the reply:Sender<> at the top that would
+        // //prevent the loop in the process_handle to end when all messages are processed
+        // let process_handle = {
+        //     let (reply, mut receiver) =
+        //         mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
+
+        //     let db = db.clone();
+        //     let verify_service = verify_service.clone();
+        //     let room_id = room_id;
+        //     let process_handle = tokio::spawn(async move {
+        //         while let Some(nodes) =
+        //             timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
+        //         {
+        //             let nodes = nodes?;
+        //             let nodes = verify_service.verify_full_nodes(nodes).await?;
+        //             db.add_full_nodes(room_id, nodes).await?;
+        //         }
+        //         Ok::<(), crate::Error>(())
+        //     });
+        //     let mut current_list = Vec::with_capacity(max_nodes);
+
+        //     for node_identifier in filtered {
+        //         current_list.push(node_identifier.id);
+        //         if current_list.len() == max_nodes {
+        //             Self::query_mpsc(
+        //                 query_service,
+        //                 Query::FullNodes(room_id, current_list),
+        //                 reply.clone(),
+        //             )
+        //             .await?;
+
+        //             current_list = Vec::with_capacity(max_nodes);
+        //         }
+        //     }
+        //     if !current_list.is_empty() {
+        //         Self::query_mpsc(
+        //             query_service,
+        //             Query::FullNodes(room_id, current_list),
+        //             reply.clone(),
+        //         )
+        //         .await?;
+        //     }
+        //     process_handle
+        // };
+
+        // process_handle.await??;
 
         Ok(has_changes)
     }
@@ -832,36 +889,10 @@ impl LocalPeerService {
         }
     }
 
-    async fn query_mpsc<T: DeserializeOwned + Send + 'static>(
-        query_service: &QueryService,
-        query: Query,
-        sender: mpsc::Sender<Result<T, Error>>,
-    ) -> Result<(), Error> {
-        let answer: AnswerFn = Box::new(move |succes, _, serialized| {
-            let answer = if succes {
-                match bincode::deserialize::<T>(&serialized) {
-                    Ok(result) => Ok(result),
-                    Err(_) => Err(Error::Parsing),
-                }
-            } else {
-                match bincode::deserialize::<Error>(&serialized) {
-                    Ok(result) => Err(result),
-                    Err(_) => Err(Error::Parsing),
-                }
-            };
-            Box::pin(async move {
-                let _ = sender.send(answer).await;
-            })
-        });
-        query_service.send(QueryFn::Once(query, answer)).await;
-
-        Ok(())
-    }
-
     async fn query_multiple<T: DeserializeOwned + Send + 'static>(
         query_service: &QueryService,
         query: Query,
-    ) -> Result<mpsc::Receiver<Result<T, Error>>, Error> {
+    ) -> mpsc::Receiver<Result<T, Error>> {
         let (sender, receiv) = mpsc::channel(1);
         let answer: AnswerMultipleFn = Box::new(move |succes, complete, serialized| {
             if !complete {
@@ -886,7 +917,7 @@ impl LocalPeerService {
         });
 
         query_service.send(QueryFn::Multiple(query, answer)).await;
-        Ok(receiv)
+        receiv
     }
 
     ///

@@ -267,20 +267,23 @@ impl InboundQueryService {
             }
             Query::FullNodes(room_id, node_ids) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_full_nodes(room_id, node_ids).await;
-                    match res {
-                        Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            log_service.error("FullNodes".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("FullNodes".to_string()),
-                            )
-                            .await?
+                    let mut res_reply = peer.db.get_full_nodes(room_id, node_ids).await;
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                log_service.error("FullNodes".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("FullNodes".to_string()),
+                                )
+                                .await?
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 } else {
                     peer.send(
                         msg.id,

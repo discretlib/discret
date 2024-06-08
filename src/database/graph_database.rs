@@ -595,16 +595,36 @@ impl GraphDatabaseService {
     ///
     /// get full node definition
     ///
-    pub async fn get_full_nodes(&self, room_id: Uid, node_ids: Vec<Uid>) -> Result<Vec<FullNode>> {
-        let (reply, receive) = oneshot::channel::<Result<Vec<FullNode>>>();
-        self.db
+    pub async fn get_full_nodes(
+        &self,
+        room_id: Uid,
+        node_ids: Vec<Uid>,
+    ) -> mpsc::Receiver<Result<Vec<FullNode>>> {
+        let (reply, receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+
+        let errors = self
+            .db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_node = FullNode::get_nodes_filtered_by_room(&room_id, node_ids, conn);
-                let _ = reply.send(room_node);
+                let error = FullNode::get_nodes_filtered_by_room(
+                    &room_id,
+                    node_ids,
+                    buffer_size,
+                    &creply,
+                    conn,
+                );
+
+                if let Err(error) = error {
+                    let _ = creply.blocking_send(Err(error));
+                }
             }))
-            .await?;
-        receive.await?
+            .await;
+        if let Err(error) = errors {
+            let _ = reply.send(Err(error)).await;
+        }
+        receive
     }
 
     ///
