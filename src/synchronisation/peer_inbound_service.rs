@@ -266,13 +266,17 @@ impl LocalPeerService {
     ) -> Result<(), crate::Error> {
         match event {
             RemoteEvent::Ready => {
-                let rooms: VecDeque<Uid> = Self::query(query_service, Query::RoomList).await?;
-                for room in &rooms {
-                    remote_rooms.insert(room.clone());
+                let mut rooms_rcv: Receiver<Result<VecDeque<Uid>, Error>> =
+                    Self::query_multiple(query_service, Query::RoomList).await;
+                while let Some(rooms) = rooms_rcv.recv().await {
+                    let rooms = rooms?;
+                    for room in &rooms {
+                        remote_rooms.insert(room.clone());
+                    }
+                    lock_service
+                        .request_locks(circuit_id, rooms, lock_reply.clone())
+                        .await;
                 }
-                lock_service
-                    .request_locks(circuit_id, rooms, lock_reply.clone())
-                    .await;
             }
 
             RemoteEvent::RoomDefinitionChanged(room) => {
@@ -281,6 +285,7 @@ impl LocalPeerService {
                 q.push_back(room);
                 lock_service.request_locks(circuit_id, q, lock_reply).await;
             }
+
             RemoteEvent::RoomDataChanged(room) => {
                 if remote_rooms.contains(&room) {
                     let mut q = VecDeque::new();

@@ -381,7 +381,10 @@ impl GraphDatabaseService {
     ///
     /// get all room id ordered by last modification date
     ///
-    pub async fn get_rooms_for_peer(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Uid>> {
+    pub async fn get_rooms_for_peer(
+        &self,
+        verifying_key: Vec<u8>,
+    ) -> mpsc::Receiver<Result<VecDeque<Uid>>> {
         let (reply, receive) = oneshot::channel::<HashSet<Uid>>();
         let _ = self
             .auth
@@ -393,25 +396,34 @@ impl GraphDatabaseService {
             .await;
 
         let res = receive.await;
-        let (reply, receive) = oneshot::channel::<Result<VecDeque<Uid>>>();
+
+        let (reply, receive) = mpsc::channel::<Result<VecDeque<Uid>>>(1);
 
         match res {
             Ok(room_ids) => {
-                let _ = self
+                let creply = reply.clone();
+                let buffer_size = self.buffer_size;
+                let errors = self
                     .db
                     .reader
                     .send_async(Box::new(move |conn| {
-                        let log = DailyLog::sort_rooms(&room_ids, conn).map_err(Error::from);
-                        let _ = reply.send(log);
+                        let error = DailyLog::sort_rooms(&room_ids, buffer_size, &creply, conn)
+                            .map_err(Error::from);
+                        if let Err(error) = error {
+                            let _ = creply.blocking_send(Err(error));
+                        }
                     }))
                     .await;
+                if let Err(error) = errors {
+                    let _ = reply.send(Err(error)).await;
+                }
             }
             Err(e) => {
                 let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
             }
         }
 
-        receive.await?
+        receive
     }
 
     ///

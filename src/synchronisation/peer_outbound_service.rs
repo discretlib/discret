@@ -91,28 +91,30 @@ impl InboundQueryService {
                 if !key.is_empty() {
                     let init_rooms = peer.allowed_room.is_empty();
 
-                    let rooms = peer.db.get_rooms_for_peer(key.clone()).await;
-
-                    match rooms {
-                        Ok(room_list) => {
-                            if init_rooms {
-                                for room in &room_list {
-                                    peer.allowed_room.insert(room.clone());
+                    let mut res_reply = peer.db.get_rooms_for_peer(key.clone()).await;
+                    while let Some(rooms) = res_reply.recv().await {
+                        match rooms {
+                            Ok(room_list) => {
+                                if init_rooms {
+                                    for room in &room_list {
+                                        peer.allowed_room.insert(room.clone());
+                                    }
                                 }
+                                peer.send(msg.id, true, false, room_list).await?;
                             }
-                            peer.send(msg.id, true, true, room_list).await?;
-                        }
-                        Err(e) => {
-                            log_service.error("RoomList".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("RoomList".to_string()),
-                            )
-                            .await?;
+                            Err(e) => {
+                                log_service.error("RoomList".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("RoomList".to_string()),
+                                )
+                                .await?;
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 }
                 Ok(())
             }

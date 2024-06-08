@@ -421,8 +421,10 @@ impl DailyLog {
     ///
     pub fn sort_rooms(
         room_ids: &HashSet<Uid>,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<VecDeque<Uid>, super::Error>>,
         conn: &Connection,
-    ) -> Result<VecDeque<Uid>, rusqlite::Error> {
+    ) -> Result<(), super::Error> {
         let it = &mut room_ids.iter().peekable();
         let mut id_date_list: Vec<(Uid, i64)> = Vec::with_capacity(room_ids.len());
         struct QueryParams<'a> {
@@ -495,7 +497,30 @@ impl DailyLog {
         }
         id_date_list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        Ok(id_date_list.into_iter().map(|a| a.0).collect())
+        let mut res = VecDeque::new();
+        let mut len = 0;
+        for uid in id_date_list {
+            let uid = uid.0;
+            let insert_len = len + uid.len() + VEC_OVERHEAD as usize;
+
+            if insert_len > batch_size {
+                let ready = res;
+                res = VecDeque::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+            res.push_back(uid);
+        }
+
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -620,8 +645,10 @@ mod tests {
         database::{
             graph_database::GraphDatabaseService,
             query_language::parameter::{Parameters, ParametersAdd},
+            Error,
         },
         date_utils::{date, now},
+        default_uid,
         event_service::EventService,
         security::{base64_encode, new_uid, random32},
     };
@@ -819,12 +846,12 @@ mod tests {
         //RoomDefinitionLog
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn room_log_sort() {
+    #[test]
+    fn room_log_sort() {
         let conn = Connection::open_in_memory().unwrap();
         DailyLog::create_tables(&conn).unwrap();
         let mut rooms = HashMap::new();
-        let mut num_room = 721;
+        let num_room = 721;
         let mut room_ids = HashSet::new();
         for _ in 0..num_room {
             let room_id = new_uid();
@@ -848,17 +875,24 @@ mod tests {
         RoomChangelog::log_room_definition(&empty_room_id, 100, &conn).unwrap();
         rooms.insert(empty_room_id, i64::MAX);
         room_ids.insert(empty_room_id);
-        num_room += 1;
 
-        let mut room_ids = DailyLog::sort_rooms(&room_ids, &conn).unwrap();
-        assert_eq!(num_room, room_ids.len());
+        let batch_size = 256;
+
+        let (reply, mut receive) = mpsc::channel::<Result<VecDeque<Uid>, Error>>(100000);
+        DailyLog::sort_rooms(&room_ids, batch_size, &reply, &conn).unwrap();
+        drop(reply);
         let mut last = i64::MIN;
-        for room_id in &room_ids {
-            let date = *rooms.get(room_id).unwrap();
-            assert!(date >= last);
-            last = date;
+        let mut last_id = default_uid();
+        while let Some(room_ids) = receive.blocking_recv() {
+            let mut room_ids = room_ids.unwrap();
+            for room_id in &room_ids {
+                let date = *rooms.get(room_id).unwrap();
+                assert!(date >= last);
+                last = date;
+            }
+            last_id = room_ids.pop_back().unwrap();
         }
-        let last_id = room_ids.pop_back().unwrap();
+
         assert_eq!(empty_room_id, last_id);
     }
 }
