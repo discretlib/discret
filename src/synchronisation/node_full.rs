@@ -765,10 +765,10 @@ mod tests {
         let node: RoomNode = bincode::deserialize(&ser).unwrap();
         second_app.add_room_node(node.clone()).await.unwrap();
 
-        let node_ids = first_app
+        let mut node_ids_receiv = first_app
             .get_room_daily_nodes(room_id.clone(), "0".to_string(), now())
-            .await
-            .unwrap();
+            .await;
+        let node_ids = node_ids_receiv.recv().await.unwrap().unwrap();
         assert_eq!(3, node_ids.len());
 
         //node_ids sent over network

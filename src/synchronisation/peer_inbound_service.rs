@@ -374,6 +374,9 @@ impl LocalPeerService {
         verify_service: &SignatureVerificationService,
         peer_service: PeerConnectionService,
     ) -> Result<(), crate::Error> {
+        //
+        // update room definition
+        //
         let remote_room_def: Option<RoomDefinitionLog> =
             Self::query(query_service, Query::RoomDefinition(room_id)).await?;
         let local_room_def = db.get_room_definition(room_id).await?;
@@ -391,15 +394,49 @@ impl LocalPeerService {
         )
         .await?;
 
-        let peers = db.users_for_room(room_id).await?;
-        let missing_peers = db.missing_peers(peers).await?;
+        //
+        //retrieve the peers for the room and insert/update the changes
+        //
+        let mut local_peers_receiv = db.peers_for_room(room_id).await;
+        let mut local_peers = HashMap::new();
+        while let Some(node) = local_peers_receiv.recv().await {
+            match node {
+                Ok(nodes) => {
+                    for node in nodes {
+                        local_peers.insert(node.id, node);
+                    }
+                }
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+        }
 
-        let peer_nodes: Vec<Node> = Self::query(
-            query_service,
-            Query::PeerNodes(room_id, missing_peers.into_iter().collect()),
-        )
-        .await?;
-        let new_peers: Vec<Uid> = peer_nodes.iter().map(|n| n.id).collect();
+        let mut peers_receiv: Receiver<Result<Vec<Node>, Error>> =
+            Self::query_multiple(query_service, Query::PeersForRoom(room_id)).await?;
+
+        let mut new_peers: Vec<Uid> = Vec::new();
+        let mut peer_nodes: Vec<Node> = Vec::new();
+        while let Some(node) = peers_receiv.recv().await {
+            match node {
+                Ok(nodes) => {
+                    for node in nodes {
+                        let local = local_peers.get(&node.id);
+                        match local {
+                            Some(local_node) => {
+                                if local_node.mdate < node.mdate {
+                                    peer_nodes.push(node);
+                                }
+                            }
+                            None => {
+                                new_peers.push(node.id);
+                                peer_nodes.push(node);
+                            }
+                        }
+                    }
+                }
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+        }
+
         let peer_nodes: Vec<Node> = verify_service.verify_nodes(peer_nodes).await?;
         db.add_peer_nodes(peer_nodes).await?;
 
@@ -675,11 +712,23 @@ impl LocalPeerService {
         }
 
         //node insertion
-        let remote_nodes: HashSet<NodeIdentifier> = Self::query(
-            query_service,
-            Query::RoomDailyNodes(room_id, entity.clone(), date),
-        )
-        .await?;
+        let mut remote_nodes_receiv: Receiver<Result<HashSet<NodeIdentifier>, Error>> =
+            Self::query_multiple(
+                query_service,
+                Query::RoomDailyNodes(room_id, entity.clone(), date),
+            )
+            .await?;
+        let mut remote_nodes = HashSet::new();
+        while let Some(nodes) = remote_nodes_receiv.recv().await {
+            match nodes {
+                Ok(nodes) => {
+                    for node in nodes {
+                        remote_nodes.insert(node);
+                    }
+                }
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+        }
 
         let filtered = db.filter_existing_node(remote_nodes, date).await?;
         if !filtered.is_empty() {

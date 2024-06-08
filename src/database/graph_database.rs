@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 use super::mutation_query::MutationResult;
 use super::sqlite_database::WriteStmt;
 use super::system_entities::{self, AllowedPeer, Peer, PeerNodes};
+use super::MESSAGE_OVERHEAD;
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -73,7 +74,7 @@ impl GraphDatabaseService {
     ) -> Result<(Self, Vec<u8>, Uid)> {
         let (peer_sender, mut peer_receiver) = mpsc::channel::<Message>(configuration.parallelism);
         //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
-        let buffer_size = (configuration.write_buffer_length * 1024) - 32;
+        let buffer_size = (configuration.write_buffer_length * 1024) - MESSAGE_OVERHEAD;
         let private_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
 
         let mut db = GraphDatabase::new(
@@ -380,11 +381,11 @@ impl GraphDatabaseService {
     ///
     /// get all room id ordered by last modification date
     ///
-    pub async fn get_rooms_for_user(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Uid>> {
+    pub async fn get_rooms_for_peer(&self, verifying_key: Vec<u8>) -> Result<VecDeque<Uid>> {
         let (reply, receive) = oneshot::channel::<HashSet<Uid>>();
         let _ = self
             .auth
-            .send(AuthorisationMessage::RoomForUser(
+            .send(AuthorisationMessage::RoomsForPeer(
                 verifying_key,
                 now(),
                 reply,
@@ -409,6 +410,7 @@ impl GraphDatabaseService {
                 let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
             }
         }
+
         receive.await?
     }
 
@@ -447,7 +449,7 @@ impl GraphDatabaseService {
             .await;
 
         if let Err(error) = errors {
-            let _ = reply.blocking_send(Err(error));
+            let _ = reply.send(Err(error)).await;
         }
         receive
     }
@@ -538,16 +540,31 @@ impl GraphDatabaseService {
         room_id: Uid,
         entity: String,
         date: i64,
-    ) -> Result<HashSet<NodeIdentifier>> {
-        let (reply, receive) = oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
-        self.db
+    ) -> mpsc::Receiver<Result<HashSet<NodeIdentifier>>> {
+        let (reply, receive) = mpsc::channel::<Result<HashSet<NodeIdentifier>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+        let errors = self
+            .db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_node = Node::get_daily_nodes_for_room(&room_id, entity, date, conn);
-                let _ = reply.send(room_node);
+                let error = Node::get_daily_nodes_for_room(
+                    &room_id,
+                    entity,
+                    date,
+                    buffer_size,
+                    &creply,
+                    conn,
+                );
+                if let Err(error) = error {
+                    let _ = creply.blocking_send(Err(error));
+                }
             }))
-            .await?;
-        receive.await?
+            .await;
+        if let Err(error) = errors {
+            let _ = reply.send(Err(error)).await;
+        }
+        receive
     }
 
     ///
@@ -591,42 +608,6 @@ impl GraphDatabaseService {
     }
 
     ///
-    /// retrieve sys.Peer node
-    ///
-    pub async fn get_peer_nodes(&self, room_id: Uid, keys: Vec<Vec<u8>>) -> Result<Vec<Node>> {
-        let (reply, receive) = oneshot::channel::<Result<Vec<Vec<u8>>>>();
-        let _ = self
-            .auth
-            .send(AuthorisationMessage::ValidatePeerNodesRequest(
-                room_id, keys, reply,
-            ))
-            .await;
-        let valid_rs = receive.await;
-        if let Err(e) = valid_rs {
-            return Err(e.into());
-        }
-
-        let (reply, receive) = oneshot::channel::<Result<Vec<Node>>>();
-
-        match valid_rs.unwrap() {
-            Ok(list) => {
-                let _ = self
-                    .db
-                    .reader
-                    .send_async(Box::new(move |conn| {
-                        let nodes_rs = Peer::get_peers(list, conn);
-                        let _ = reply.send(nodes_rs);
-                    }))
-                    .await;
-            }
-            Err(e) => {
-                let _ = reply.send(Err(e.into()));
-            }
-        }
-        receive.await?
-    }
-
-    ///
     /// insert sys.Peer nodes
     ///
     pub async fn add_peer_nodes(&self, nodes: Vec<Node>) -> Result<()> {
@@ -646,28 +627,41 @@ impl GraphDatabaseService {
     ///
     /// retrieve users for a room
     ///
-    pub async fn users_for_room(&self, room_id: Uid) -> Result<HashSet<Vec<u8>>> {
-        let (reply, receive) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
+    pub async fn peers_for_room(&self, room_id: Uid) -> mpsc::Receiver<Result<Vec<Node>>> {
+        let (u_reply, u_receive) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
         let _ = self
             .auth
-            .send(AuthorisationMessage::UserForRoom(room_id, reply))
+            .send(AuthorisationMessage::UserForRoom(room_id, u_reply))
             .await;
-        receive.await?
-    }
 
-    ///
-    /// retrieve id of users defined in room users but not in the sys.Peer entity
-    ///
-    pub async fn missing_peers(&self, peers: HashSet<Vec<u8>>) -> Result<HashSet<Vec<u8>>> {
-        let (reply, receive) = oneshot::channel::<Result<HashSet<Vec<u8>>>>();
-        self.db
-            .reader
-            .send_async(Box::new(move |conn| {
-                let room_node = Peer::get_missing(peers, conn);
-                let _ = reply.send(room_node);
-            }))
-            .await?;
-        receive.await?
+        let (reply, receive) = mpsc::channel::<Result<Vec<Node>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+
+        match u_receive.await {
+            Ok(r) => match r {
+                Ok(keys) => {
+                    let _ = self
+                        .db
+                        .reader
+                        .send_async(Box::new(move |conn| {
+                            let error = Peer::get_peers(keys, buffer_size, &creply, conn);
+                            if let Err(error) = error {
+                                let _ = creply.blocking_send(Err(error));
+                            }
+                        }))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(Error::from(e))).await;
+                }
+            },
+            Err(e) => {
+                let _ = reply.send(Err(Error::from(e))).await;
+            }
+        }
+
+        receive
     }
 
     ///

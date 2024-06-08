@@ -45,7 +45,7 @@ pub enum Query {
     NodeDeletionLog(Uid, String, i64),
     RoomDailyNodes(Uid, String, i64),
     FullNodes(Uid, Vec<Uid>),
-    PeerNodes(Uid, Vec<Vec<u8>>),
+    PeersForRoom(Uid),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,6 +97,7 @@ mod tests {
         configuration::Configuration,
         database::{
             graph_database::GraphDatabaseService,
+            node::Node,
             query_language::parameter::{Parameters, ParametersAdd},
             sqlite_database::RowMappingFn,
         },

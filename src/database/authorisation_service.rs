@@ -35,7 +35,7 @@ pub enum AuthorisationMessage {
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
-    RoomForUser(Vec<u8>, i64, Sender<HashSet<Uid>>),
+    RoomsForPeer(Vec<u8>, i64, Sender<HashSet<Uid>>),
     AddFullNode(Vec<FullNode>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(
         Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
@@ -258,8 +258,8 @@ impl AuthorisationService {
                     let _ = query.reply.send(Err(e));
                 }
             },
-            AuthorisationMessage::RoomForUser(verifying_key, date, reply) => {
-                let rooms = auth.rooms_for_user(&verifying_key, date);
+            AuthorisationMessage::RoomsForPeer(verifying_key, date, reply) => {
+                let rooms = auth.rooms_for_peer(&verifying_key, date);
                 let _ = reply.send(rooms);
             }
 
@@ -864,7 +864,7 @@ impl RoomAuthorisations {
         Ok(need_room_admin)
     }
 
-    pub fn rooms_for_user(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
+    pub fn rooms_for_peer(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
         let mut result = HashSet::new();
         for room in &self.rooms {
             if room.1.is_user_valid_at(&verifying_key, date) {

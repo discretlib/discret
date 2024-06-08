@@ -16,6 +16,10 @@ pub mod sqlite_database;
 pub mod system_entities;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub const VEC_OVERHEAD: u64 = 4;
+pub const MESSAGE_OVERHEAD: usize = 16;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
@@ -143,4 +147,41 @@ pub enum Error {
 
     #[error("{0}")]
     QueryParsing(String),
+}
+#[cfg(test)]
+mod tests {
+    use crate::database::{node::Node, VEC_OVERHEAD};
+
+    #[test]
+    fn test_buffer_size() {
+        let mut v = Vec::new();
+        let node = Node {
+            ..Default::default()
+        };
+        let node_size = bincode::serialized_size(&node).unwrap();
+        println!("node: {}", node_size);
+        v.push(node);
+
+        let vec_size = bincode::serialized_size(&v).unwrap();
+        println!("vec_: {}", vec_size);
+
+        let capa = 2621440;
+        let datav = vec![0; capa];
+
+        let mut v = Vec::new();
+        let mut size = 0;
+        for i in 0..10 {
+            let node = Node {
+                _binary: Some(datav.clone()),
+                _entity: i.to_string(),
+                ..Default::default()
+            };
+
+            size += bincode::serialized_size(&node).unwrap();
+            size += VEC_OVERHEAD;
+            v.push(node);
+        }
+        println!("comp: {}", size);
+        println!("repo: {}", bincode::serialized_size(&v).unwrap());
+    }
 }

@@ -6,7 +6,7 @@ use std::{
 use super::{
     daily_log::DailyMutations,
     sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
-    Error, Result,
+    Error, Result, VEC_OVERHEAD,
 };
 use crate::{
     date_utils::{date, date_next_day, now},
@@ -15,6 +15,7 @@ use crate::{
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 impl Default for Node {
     fn default() -> Self {
@@ -78,14 +79,11 @@ impl Node {
             [],
         )?;
 
-        conn.execute("CREATE  INDEX _node_id__entity ON _node (id, _entity)", [])?;
-
         conn.execute(
-            "CREATE INDEX _node_room_id_mdate_idx ON _node (room_id, mdate)",
+            "CREATE  INDEX _node_id__entity ON _node (id, _entity, mdate)",
             [],
         )?;
 
-        //used to full scan entity
         conn.execute(
             "CREATE INDEX _node_entity ON _node (_entity, room_id, mdate)",
             [],
@@ -463,29 +461,49 @@ impl Node {
         room_id: &Uid,
         entity: String,
         day: i64,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<HashSet<NodeIdentifier>>>,
         conn: &Connection,
-    ) -> Result<HashSet<NodeIdentifier>> {
-        let mut id_set = HashSet::new();
-
+    ) -> Result<()> {
         let query = "SELECT id, mdate, _signature
             FROM _node 
             WHERE 
                 room_id = ? AND
                 _entity = ? AND
-                mdate >= ? AND mdate < ? ";
+                mdate >= ? AND mdate < ? 
+            ORDER BY mdate DESC";
         let mut stmt = conn.prepare_cached(&query)?;
 
         let mut rows = stmt.query((room_id, entity, date(day), date_next_day(day)))?;
-
+        let mut res = HashSet::new();
+        let mut len = 0;
         while let Some(row) = rows.next()? {
             let node = NodeIdentifier {
                 id: row.get(0)?,
                 mdate: row.get(1)?,
                 signature: row.get(2)?,
             };
-            id_set.insert(node);
+
+            let size = bincode::serialized_size(&node)?;
+            let insert_len = len + size + VEC_OVERHEAD;
+            if insert_len > batch_size as u64 {
+                let ready = res;
+                res = HashSet::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+
+            res.insert(node);
         }
-        Ok(id_set)
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 
     //
@@ -1099,9 +1117,18 @@ mod tests {
         };
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<HashSet<NodeIdentifier>>>(1);
 
-        let mut ids =
-            Node::get_daily_nodes_for_room(&room_id1, entity.to_string(), date, &conn).unwrap();
+        Node::get_daily_nodes_for_room(
+            &room_id1,
+            entity.to_string(),
+            date,
+            1024 * 8,
+            &reply,
+            &conn,
+        )
+        .unwrap();
+        let mut ids = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(3, ids.len());
 
         let date2 = now();
@@ -1109,8 +1136,17 @@ mod tests {
         node3.sign(&signing_key).unwrap();
         node3.write(&conn, false, &None, &None).unwrap();
 
-        let ids_2 =
-            Node::get_daily_nodes_for_room(&room_id1, entity.to_string(), date, &conn).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<HashSet<NodeIdentifier>>>(1);
+        Node::get_daily_nodes_for_room(
+            &room_id1,
+            entity.to_string(),
+            date,
+            1024 * 8,
+            &reply,
+            &conn,
+        )
+        .unwrap();
+        let ids_2 = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(2, ids_2.len());
 
         Node::retain_missing_id(&mut ids, date, &conn).unwrap();

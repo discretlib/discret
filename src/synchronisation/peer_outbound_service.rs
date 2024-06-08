@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use serde::Serialize;
 use tokio::sync::{
@@ -92,9 +89,19 @@ impl InboundQueryService {
                 let key = verifying_key.lock().await;
 
                 if !key.is_empty() {
-                    let res = peer.load_allowed_room(key.clone()).await;
-                    match res {
-                        Ok(room_list) => peer.send(msg.id, true, true, room_list).await?,
+                    let init_rooms = peer.allowed_room.is_empty();
+
+                    let rooms = peer.db.get_rooms_for_peer(key.clone()).await;
+
+                    match rooms {
+                        Ok(room_list) => {
+                            if init_rooms {
+                                for room in &room_list {
+                                    peer.allowed_room.insert(room.clone());
+                                }
+                            }
+                            peer.send(msg.id, true, true, room_list).await?;
+                        }
                         Err(e) => {
                             log_service.error("RoomList".to_string(), e.into());
                             peer.send(
@@ -170,7 +177,6 @@ impl InboundQueryService {
             Query::RoomLog(room_id) => {
                 if peer.allowed_room.contains(&room_id) {
                     let mut res_reply = peer.db.get_room_log(room_id).await;
-
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
@@ -231,20 +237,23 @@ impl InboundQueryService {
 
             Query::RoomDailyNodes(room_id, entity, date) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_room_daily_nodes(room_id, entity, date).await;
-                    match res {
-                        Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            log_service.error("RoomDailyNodes".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("RoomDailyNodes".to_string()),
-                            )
-                            .await?
+                    let mut res_reply = peer.db.get_room_daily_nodes(room_id, entity, date).await;
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                log_service.error("RoomDailyNodes".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("RoomDailyNodes".to_string()),
+                                )
+                                .await?
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 } else {
                     peer.send(
                         msg.id,
@@ -344,22 +353,26 @@ impl InboundQueryService {
                 Ok(())
             }
 
-            Query::PeerNodes(room_id, keys) => {
+            Query::PeersForRoom(room_id) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer.db.get_peer_nodes(room_id, keys).await;
-                    match res {
-                        Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            log_service.error("PeerNodes".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("PeerNodes".to_string()),
-                            )
-                            .await?
+                    let mut res_reply = peer.db.peers_for_room(room_id).await;
+
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                log_service.error("PeerNodes".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("PeerNodes".to_string()),
+                                )
+                                .await?
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 } else {
                     peer.send(
                         msg.id,
@@ -386,19 +399,6 @@ pub struct RemotePeerHandle {
 impl RemotePeerHandle {
     fn add_allowed_room(&mut self, room: Uid) {
         self.allowed_room.insert(room);
-    }
-
-    async fn load_allowed_room(
-        &mut self,
-        verifying_key: Vec<u8>,
-    ) -> Result<VecDeque<Uid>, crate::Error> {
-        let rooms = self.db.get_rooms_for_user(verifying_key).await?;
-        if self.allowed_room.is_empty() {
-            for room in &rooms {
-                self.allowed_room.insert(room.clone());
-            }
-        }
-        Ok(rooms)
     }
 
     async fn send<T: Serialize>(

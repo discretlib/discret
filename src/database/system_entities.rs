@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     base64_encode,
+    database::VEC_OVERHEAD,
     security::{uid_encode, Ed25519SigningKey, MeetingToken},
     Parameters, ParametersAdd, Uid,
 };
@@ -253,9 +254,13 @@ impl Peer {
         Ok(result)
     }
 
-    pub fn get_peers(keys: Vec<Vec<u8>>, conn: &Connection) -> Result<Vec<Node>, Error> {
+    pub fn get_peers(
+        keys: HashSet<Vec<u8>>,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<Node>, super::Error>>,
+        conn: &Connection,
+    ) -> Result<(), Error> {
         let it = &mut keys.iter().peekable();
-        let mut result = Vec::with_capacity(keys.len());
 
         //limit the IN clause to a reasonable size, avoiding the 32766 parameter limit in sqlite
         let row_per_query = 500;
@@ -291,6 +296,9 @@ impl Peer {
         if !current_query.ids.is_empty() {
             query_list.push(current_query);
         }
+        let mut res = Vec::new();
+        let mut len = 0;
+
         for i in 0..query_list.len() {
             let current_query = &query_list[i];
             let ids = &current_query.ids;
@@ -319,10 +327,27 @@ impl Peer {
                     _signature: row.get(8)?,
                     _local_id: None,
                 };
-                result.push(node)
+                let size = bincode::serialized_size(&node)?;
+                let insert_len = len + size + VEC_OVERHEAD;
+                if insert_len > batch_size as u64 {
+                    let ready = res;
+                    res = Vec::new();
+                    len = 0;
+                    let s = sender.blocking_send(Ok(ready));
+                    if s.is_err() {
+                        break;
+                    }
+                } else {
+                    len = insert_len;
+                }
+
+                res.push(node)
             }
         }
-        Ok(result)
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 }
 
@@ -711,7 +736,11 @@ mod tests {
         assert_eq!(missing.len(), num_peer);
 
         let keys = missing.into_iter().collect();
-        let nodes = Peer::get_peers(keys, &conn1).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<Node>, Error>>(1);
+
+        Peer::get_peers(keys, 400 * 1024, &reply, &conn1).unwrap();
+
+        let nodes = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(nodes.len(), num_peer);
 
         let mut pn = PeerNodes { nodes };

@@ -9,7 +9,7 @@ use crate::{
     security::Uid,
 };
 
-use super::sqlite_database::Writeable;
+use super::{sqlite_database::Writeable, VEC_OVERHEAD};
 
 ///
 /// Stores the modified dates for each rooms during the batch insert.
@@ -354,17 +354,19 @@ impl DailyLog {
                 need_recompute: row.get(6)?,
             };
             let size = bincode::serialized_size(&log)?;
-            if (len + size) > batch_size as u64 {
+            let insert_len = len + size + VEC_OVERHEAD;
+            if insert_len > batch_size as u64 {
                 let ready = res;
                 res = Vec::new();
                 len = 0;
-
                 let s = sender.blocking_send(Ok(ready));
                 if s.is_err() {
                     break;
                 }
+            } else {
+                len = insert_len;
             }
-            len += size;
+
             res.push(log);
         }
         if !res.is_empty() {
