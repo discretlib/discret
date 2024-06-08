@@ -1103,11 +1103,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let log_entries = app
-            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
-            .await
-            .unwrap();
 
+        let mut log_entries_recv = app
+            .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
+            .await;
+        let log_entries = log_entries_recv.recv().await.unwrap().unwrap();
         assert_eq!(1, log_entries.len());
         let deletion_entry = &log_entries[0];
         deletion_entry.verify().unwrap();
@@ -1128,11 +1128,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let log_entries = app
+        let mut log_entries_recv = app
             .get_room_edge_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
-            .await
-            .unwrap();
-
+            .await;
+        let log_entries = log_entries_recv.recv().await.unwrap().unwrap();
         assert_eq!(2, log_entries.len());
     }
 }

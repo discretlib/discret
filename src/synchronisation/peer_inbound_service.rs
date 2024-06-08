@@ -677,15 +677,19 @@ impl LocalPeerService {
         let mut has_changes = false;
 
         //edge deletion
-        let edge_deletion: Vec<EdgeDeletionEntry> = Self::query(
-            query_service,
-            Query::EdgeDeletionLog(room_id, entity.clone(), date),
-        )
-        .await?;
-        if !edge_deletion.is_empty() {
-            has_changes = true;
-            let edge_deletion = verify_service.verify_edge_log(edge_deletion).await?;
-            db.delete_edges(edge_deletion).await?;
+        let mut edge_deletion_recv: Receiver<Result<Vec<EdgeDeletionEntry>, Error>> =
+            Self::query_multiple(
+                query_service,
+                Query::EdgeDeletionLog(room_id, entity.clone(), date),
+            )
+            .await;
+        while let Some(edge_deletion) = edge_deletion_recv.recv().await {
+            let edge_deletion = edge_deletion?;
+            if !edge_deletion.is_empty() {
+                has_changes = true;
+                let edge_deletion = verify_service.verify_edge_log(edge_deletion).await?;
+                db.delete_edges(edge_deletion).await?;
+            }
         }
 
         //node deletion
@@ -740,7 +744,7 @@ impl LocalPeerService {
         let mut current_list = Vec::with_capacity(max_nodes);
         let mut tasks = Vec::new();
 
-        //request nodes in batch to avoid to much memory usage
+        //request nodes in batch to reduce memory usage
         for node_identifier in filtered {
             current_list.push(node_identifier.id);
             if current_list.len() == max_nodes {
@@ -794,53 +798,6 @@ impl LocalPeerService {
                 return Err(crate::Error::from(e));
             }
         }
-
-        // //put in a block to remove the reply:Sender<> at the top that would
-        // //prevent the loop in the process_handle to end when all messages are processed
-        // let process_handle = {
-        //     let (reply, mut receiver) =
-        //         mpsc::channel::<Result<Vec<FullNode>, Error>>(filtered.len() / max_nodes + 1);
-
-        //     let db = db.clone();
-        //     let verify_service = verify_service.clone();
-        //     let room_id = room_id;
-        //     let process_handle = tokio::spawn(async move {
-        //         while let Some(nodes) =
-        //             timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), receiver.recv()).await?
-        //         {
-        //             let nodes = nodes?;
-        //             let nodes = verify_service.verify_full_nodes(nodes).await?;
-        //             db.add_full_nodes(room_id, nodes).await?;
-        //         }
-        //         Ok::<(), crate::Error>(())
-        //     });
-        //     let mut current_list = Vec::with_capacity(max_nodes);
-
-        //     for node_identifier in filtered {
-        //         current_list.push(node_identifier.id);
-        //         if current_list.len() == max_nodes {
-        //             Self::query_mpsc(
-        //                 query_service,
-        //                 Query::FullNodes(room_id, current_list),
-        //                 reply.clone(),
-        //             )
-        //             .await?;
-
-        //             current_list = Vec::with_capacity(max_nodes);
-        //         }
-        //     }
-        //     if !current_list.is_empty() {
-        //         Self::query_mpsc(
-        //             query_service,
-        //             Query::FullNodes(room_id, current_list),
-        //             reply.clone(),
-        //         )
-        //         .await?;
-        //     }
-        //     process_handle
-        // };
-
-        // process_handle.await??;
 
         Ok(has_changes)
     }

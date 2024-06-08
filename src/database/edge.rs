@@ -1,7 +1,7 @@
 use super::{
     daily_log::DailyMutations,
     sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
-    Error, Result,
+    Error, Result, VEC_OVERHEAD,
 };
 use crate::{
     date_utils::{date, date_next_day},
@@ -10,6 +10,7 @@ use crate::{
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 ///
 /// Edge object stores relations between Nodes
@@ -399,8 +400,10 @@ impl EdgeDeletionEntry {
         room_id: &Uid,
         entity: String,
         del_date: i64,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<EdgeDeletionEntry>>>,
         conn: &Connection,
-    ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
+    ) -> Result<()> {
         let mut stmt = conn.prepare_cached(
             "
             SELECT 
@@ -422,9 +425,10 @@ impl EdgeDeletionEntry {
         )?;
 
         let mut rows = stmt.query((room_id, entity, date(del_date), date_next_day(del_date)))?;
-        let mut result = Vec::new();
+        let mut res = Vec::new();
+        let mut len = 0;
         while let Some(row) = rows.next()? {
-            result.push(Self {
+            let deletion_lo = Self {
                 room_id: row.get(0)?,
                 src: row.get(1)?,
                 src_entity: row.get(2)?,
@@ -435,10 +439,26 @@ impl EdgeDeletionEntry {
                 verifying_key: row.get(7)?,
                 signature: row.get(8)?,
                 entity_name: None,
-            })
+            };
+            let size = bincode::serialized_size(&deletion_lo)?;
+            let insert_len = len + size + VEC_OVERHEAD;
+            if insert_len > batch_size as u64 {
+                let ready = res;
+                res = Vec::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+            res.push(deletion_lo);
         }
-
-        Ok(result)
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
     }
 
     ///
@@ -649,8 +669,19 @@ mod tests {
 
         log.write(&conn).unwrap();
 
-        let entries =
-            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
+        let batch_size = 4096;
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<EdgeDeletionEntry>>>(1);
+
+        EdgeDeletionEntry::get_entries(
+            &room_id,
+            e.src_entity.clone(),
+            now(),
+            batch_size,
+            &reply,
+            &conn,
+        )
+        .unwrap();
+        let entries = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(1, entries.len());
         let entry = &entries[0];
         entry.verify().unwrap();
@@ -683,8 +714,19 @@ mod tests {
         let mut log = EdgeDeletionEntry::build(room_id, &e, now(), &signing_key);
         log.write(&conn).unwrap();
 
-        let entries =
-            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
+        let batch_size = 4096;
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<EdgeDeletionEntry>>>(1);
+
+        EdgeDeletionEntry::get_entries(
+            &room_id,
+            e.src_entity.clone(),
+            now(),
+            batch_size,
+            &reply,
+            &conn,
+        )
+        .unwrap();
+        let entries = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(1, entries.len());
         let entry = &entries[0];
         entry.verify().unwrap();
@@ -702,8 +744,18 @@ mod tests {
         let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();
         assert!(edge.is_some());
 
-        let mut entries =
-            EdgeDeletionEntry::get_entries(&room_id, e.src_entity.clone(), now(), &conn).unwrap();
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<EdgeDeletionEntry>>>(1);
+
+        EdgeDeletionEntry::get_entries(
+            &room_id,
+            e.src_entity.clone(),
+            now(),
+            batch_size,
+            &reply,
+            &conn,
+        )
+        .unwrap();
+        let mut entries = receive.blocking_recv().unwrap().unwrap();
         EdgeDeletionEntry::delete_all(&mut entries, &mut DailyMutations::new(), &conn).unwrap();
 
         let edge = Edge::get(&e.src, &e.label, &e.dest, &conn).unwrap();

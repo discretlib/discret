@@ -97,7 +97,6 @@ mod tests {
         configuration::Configuration,
         database::{
             graph_database::GraphDatabaseService,
-            node::Node,
             query_language::parameter::{Parameters, ParametersAdd},
             sqlite_database::RowMappingFn,
         },
