@@ -477,18 +477,43 @@ impl GraphDatabaseService {
         room_id: Uid,
         entity: String,
         del_date: i64,
-    ) -> Result<Vec<NodeDeletionEntry>> {
-        let (send_response, receive_response) =
-            oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
-        self.db
+    ) -> mpsc::Receiver<Result<Vec<NodeDeletionEntry>>> {
+        let (reply, receive) = mpsc::channel::<Result<Vec<NodeDeletionEntry>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+        let errors = self
+            .db
             .reader
             .send_async(Box::new(move |conn| {
-                let deteletions = NodeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
-                    .map_err(Error::from);
-                let _ = send_response.send(deteletions);
+                let error = NodeDeletionEntry::get_entries(
+                    &room_id,
+                    entity,
+                    del_date,
+                    buffer_size,
+                    &creply,
+                    conn,
+                );
+                if let Err(error) = error {
+                    let _ = creply.blocking_send(Err(error));
+                }
             }))
-            .await?;
-        receive_response.await?
+            .await;
+        if let Err(error) = errors {
+            let _ = reply.send(Err(error)).await;
+        }
+        receive
+
+        // let (send_response, receive_response) =
+        //     oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
+        // self.db
+        //     .reader
+        //     .send_async(Box::new(move |conn| {
+        //         let deteletions = NodeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
+        //             .map_err(Error::from);
+        //         let _ = send_response.send(deteletions);
+        //     }))
+        //     .await?;
+        // receive_response.await?
     }
 
     ///
@@ -534,17 +559,6 @@ impl GraphDatabaseService {
             let _ = reply.send(Err(error)).await;
         }
         receive
-
-        // let (reply, receive) = oneshot::channel::<Result<Vec<EdgeDeletionEntry>>>();
-        // self.db
-        //     .reader
-        //     .send_async(Box::new(move |conn| {
-        //         let deteletions = EdgeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
-        //             .map_err(Error::from);
-        //         let _ = reply.send(deteletions);
-        //     }))
-        //     .await?;
-        // receive.await?
     }
 
     ///

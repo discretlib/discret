@@ -1080,10 +1080,10 @@ mod tests {
         .await
         .unwrap();
 
-        let del_log = app
+        let mut del_log_recv = app
             .get_room_node_deletion_log(uid_decode(&room_id).unwrap(), "0".to_string(), now())
-            .await
-            .unwrap();
+            .await;
+        let del_log = del_log_recv.recv().await.unwrap().unwrap();
         assert_eq!(1, del_log.len());
         let deletion_entry = &del_log[0];
         deletion_entry.verify().unwrap();

@@ -331,23 +331,26 @@ impl InboundQueryService {
             }
             Query::NodeDeletionLog(room_id, entity, date) => {
                 if peer.allowed_room.contains(&room_id) {
-                    let res = peer
+                    let mut res_reply = peer
                         .db
                         .get_room_node_deletion_log(room_id, entity, date)
                         .await;
-                    match res {
-                        Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            log_service.error("NodeDeletionLog".to_string(), e.into());
-                            peer.send(
-                                msg.id,
-                                false,
-                                true,
-                                Error::RemoteTechnical("NodeDeletionLog".to_string()),
-                            )
-                            .await?
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                log_service.error("NodeDeletionLog".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("NodeDeletionLog".to_string()),
+                                )
+                                .await?
+                            }
                         }
                     }
+                    peer.send(msg.id, true, true, "").await?;
                 } else {
                     peer.send(
                         msg.id,

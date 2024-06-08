@@ -715,8 +715,10 @@ impl NodeDeletionEntry {
         room_id: &Uid,
         entity: String,
         del_date: i64,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<NodeDeletionEntry>>>,
         conn: &Connection,
-    ) -> std::result::Result<Vec<Self>, rusqlite::Error> {
+    ) -> Result<()> {
         let mut stmt = conn.prepare_cached(
             "
             SELECT 
@@ -736,9 +738,10 @@ impl NodeDeletionEntry {
         )?;
 
         let mut rows = stmt.query((room_id, entity, date(del_date), date_next_day(del_date)))?;
-        let mut result = Vec::new();
+        let mut res = Vec::new();
+        let mut len = 0;
         while let Some(row) = rows.next()? {
-            result.push(Self {
+            let deletion_lo = Self {
                 room_id: row.get(0)?,
                 id: row.get(1)?,
                 entity: row.get(2)?,
@@ -747,10 +750,27 @@ impl NodeDeletionEntry {
                 verifying_key: row.get(5)?,
                 signature: row.get(6)?,
                 entity_name: None,
-            })
+            };
+            let size = bincode::serialized_size(&deletion_lo)?;
+            let insert_len = len + size + VEC_OVERHEAD;
+            if insert_len > batch_size as u64 {
+                let ready = res;
+                res = Vec::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+            res.push(deletion_lo);
+        }
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
         }
 
-        Ok(result)
+        Ok(())
     }
 
     pub fn with_previous_authors(
@@ -1066,14 +1086,19 @@ mod tests {
         let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
 
-        let deletion_logs = NodeDeletionEntry::get_entries(
+        let batch_size = 4096;
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<NodeDeletionEntry>>>(1);
+
+        NodeDeletionEntry::get_entries(
             &room_id,
             entity.to_string(),
             date(node_deletion_log.deletion_date),
+            batch_size,
+            &reply,
             &conn,
         )
         .unwrap();
-
+        let deletion_logs = receive.blocking_recv().unwrap().unwrap();
         let entry = &deletion_logs[0];
 
         assert_eq!(&node.room_id.unwrap(), &entry.room_id);
@@ -1171,15 +1196,19 @@ mod tests {
 
         let mut node_deletion_log = NodeDeletionEntry::build(room_id, &node, now(), &signing_key);
         node_deletion_log.write(&conn).unwrap();
+        let batch_size = 4096;
+        let (reply, mut receive) = mpsc::channel::<Result<Vec<NodeDeletionEntry>>>(1);
 
-        let deletion_logs = NodeDeletionEntry::get_entries(
+        NodeDeletionEntry::get_entries(
             &room_id,
             entity.to_string(),
             date(node_deletion_log.deletion_date),
+            batch_size,
+            &reply,
             &conn,
         )
         .unwrap();
-
+        let deletion_logs = receive.blocking_recv().unwrap().unwrap();
         let entry = &deletion_logs[0];
 
         assert_eq!(&node.room_id.unwrap(), &entry.room_id);

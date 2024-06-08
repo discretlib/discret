@@ -693,28 +693,31 @@ impl LocalPeerService {
         }
 
         //node deletion
-        let node_deletion: Vec<NodeDeletionEntry> = Self::query(
-            query_service,
-            Query::NodeDeletionLog(room_id, entity.clone(), date),
-        )
-        .await?;
-        if !node_deletion.is_empty() {
-            has_changes = true;
-            let node_deletion = verify_service.verify_node_log(node_deletion).await?;
-            let max_deletion = 512;
-            let mut current = Vec::with_capacity(max_deletion);
-            for node_del in node_deletion {
-                current.push(node_del);
-                if current.len() == max_deletion {
+        let mut node_deletion_recv: Receiver<Result<Vec<NodeDeletionEntry>, Error>> =
+            Self::query_multiple(
+                query_service,
+                Query::NodeDeletionLog(room_id, entity.clone(), date),
+            )
+            .await;
+        while let Some(node_deletion) = node_deletion_recv.recv().await {
+            let node_deletion = node_deletion?;
+            if !node_deletion.is_empty() {
+                has_changes = true;
+                let node_deletion = verify_service.verify_node_log(node_deletion).await?;
+                let max_deletion = 512;
+                let mut current = Vec::with_capacity(max_deletion);
+                for node_del in node_deletion {
+                    current.push(node_del);
+                    if current.len() == max_deletion {
+                        db.delete_nodes(current).await?;
+                        current = Vec::with_capacity(max_deletion);
+                    }
+                }
+                if !current.is_empty() {
                     db.delete_nodes(current).await?;
-                    current = Vec::with_capacity(max_deletion);
                 }
             }
-            if !current.is_empty() {
-                db.delete_nodes(current).await?;
-            }
         }
-
         //node insertion
         let mut remote_nodes_receiv: Receiver<Result<HashSet<NodeIdentifier>, Error>> =
             Self::query_multiple(
