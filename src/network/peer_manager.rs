@@ -351,7 +351,7 @@ impl PeerManager {
         endpoint_id: Uid,
         hardware: HardwareFingerprint,
         auto_allow_local: bool,
-    ) -> Result<bool, super::Error> {
+    ) -> Result<bool, crate::Error> {
         let allowed_status = "allowed";
         let pending_status = "pending";
 

@@ -60,14 +60,16 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::{runtime::Runtime, sync::broadcast};
 
-pub type Result<T> = std::result::Result<T, Error>;
+type Result<T> = std::result::Result<T, Error>;
+
 pub use crate::{
     configuration::Configuration,
     database::{
-        mutation_query::MutationResult,
+        mutation_query::{IdTree, MutationResult},
         query::QueryResult,
         query_language::parameter::{Parameters, ParametersAdd},
         room::Room,
+        system_entities::DefaultRoom,
     },
     event_service::Event,
     log_service::{Log, LogMessage},
@@ -238,6 +240,21 @@ impl Discret {
     }
 
     ///
+    /// Create an invitation
+    /// num_use indicate the number of time it can be used before beiing discarded
+    ///   
+    pub async fn invite(&self, num_use: usize, default_room: Option<DefaultRoom>) -> Vec<u8> {
+        todo!()
+    }
+
+    ///
+    /// Accept an invitation
+    ///   
+    pub async fn accept_invite(&self, invitation: Vec<u8>) -> std::result::Result<(), Error> {
+        todo!()
+    }
+
+    ///
     /// This is is your Public identity.
     ///
     /// It is derived from the provided key_material.
@@ -255,6 +272,20 @@ impl Discret {
     ///
     pub fn private_room(&self) -> Uid {
         self.private_room_id
+    }
+
+    ///
+    /// Subscribe for the event queue
+    ///
+    pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
+        self.events.subcribe().await
+    }
+
+    ///
+    /// Subscribe for the log event queue
+    ///
+    pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
+        self.logs.subcribe().await
     }
 
     ///
@@ -277,14 +308,6 @@ impl Discret {
     ///
     pub async fn data_model(&self) -> std::result::Result<String, Error> {
         Ok(self.db.datamodel().await?)
-    }
-
-    pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
-        self.events.subcribe().await
-    }
-
-    pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
-        self.logs.subcribe().await
     }
 }
 

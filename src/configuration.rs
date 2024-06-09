@@ -175,3 +175,9 @@ impl Default for Configuration {
         }
     }
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct Beacon {
+    address: String,
+    cert_hash: String,
+}

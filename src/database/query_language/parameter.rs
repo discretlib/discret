@@ -253,11 +253,47 @@ impl ParametersAdd<bool> for Parameters {
     }
 }
 
+impl ParametersAdd<Option<bool>> for Parameters {
+    fn add(&mut self, key: &str, value: Option<bool>) -> Result<(), Error> {
+        self.exists_err(key)?;
+
+        match value {
+            Some(v) => {
+                self.params
+                    .insert(String::from(key), ParamValue::Boolean(v));
+            }
+            None => {
+                self.params.insert(String::from(key), ParamValue::Null);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl ParametersAdd<i64> for Parameters {
     fn add(&mut self, key: &str, value: i64) -> Result<(), Error> {
         self.exists_err(key)?;
         self.params
             .insert(String::from(key), ParamValue::Integer(value));
+        Ok(())
+    }
+}
+
+impl ParametersAdd<Option<i64>> for Parameters {
+    fn add(&mut self, key: &str, value: Option<i64>) -> Result<(), Error> {
+        self.exists_err(key)?;
+
+        match value {
+            Some(v) => {
+                self.params
+                    .insert(String::from(key), ParamValue::Integer(v));
+            }
+            None => {
+                self.params.insert(String::from(key), ParamValue::Null);
+            }
+        }
+
         Ok(())
     }
 }
@@ -271,11 +307,45 @@ impl ParametersAdd<f64> for Parameters {
     }
 }
 
+impl ParametersAdd<Option<f64>> for Parameters {
+    fn add(&mut self, key: &str, value: Option<f64>) -> Result<(), Error> {
+        self.exists_err(key)?;
+
+        match value {
+            Some(v) => {
+                self.params.insert(String::from(key), ParamValue::Float(v));
+            }
+            None => {
+                self.params.insert(String::from(key), ParamValue::Null);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl ParametersAdd<String> for Parameters {
     fn add(&mut self, key: &str, value: String) -> Result<(), Error> {
         self.exists_err(key)?;
         self.params
             .insert(String::from(key), ParamValue::String(value));
+        Ok(())
+    }
+}
+
+impl ParametersAdd<Option<String>> for Parameters {
+    fn add(&mut self, key: &str, value: Option<String>) -> Result<(), Error> {
+        self.exists_err(key)?;
+
+        match value {
+            Some(v) => {
+                self.params.insert(String::from(key), ParamValue::String(v));
+            }
+            None => {
+                self.params.insert(String::from(key), ParamValue::Null);
+            }
+        }
+
         Ok(())
     }
 }

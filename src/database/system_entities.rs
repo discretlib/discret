@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    base64_encode,
+    base64_decode, base64_encode,
     database::VEC_OVERHEAD,
-    security::{uid_encode, Ed25519SigningKey, MeetingToken},
+    security::{uid_decode, uid_encode, Ed25519SigningKey, MeetingToken},
     Parameters, ParametersAdd, Uid,
 };
 
@@ -125,7 +125,6 @@ sys{
         mutate_all: Boolean,
     }
 
-    //Entities for the peer connection
     Peer {
         pub_key: Base64 ,
         name: String default "anonymous",
@@ -145,21 +144,19 @@ sys{
         status: String default "enabled", //enabled, disabled, pending
     }
 
-    InboundInvitation{
-        invite_id: Base64,
-        beacons: [sys.Beacon],
-        signature: Base64,
-    }
-
-    ProposedInvitation{
+    ProducedInvite{
         remaining_use: Integer,
-        target_room: Base64,
-        target_authorisation: Base64,
+        room: Base64 nullable,
+        authorisation: Base64 nullable,
     }
 
-    Beacon{
-        address : String,
+    Invite{
+        invite_id: Base64,
+        application : String,
+        invite_sign: Base64,
     }
+
+
 }"#;
 
 #[derive(Deserialize)]
@@ -439,7 +436,7 @@ impl AllowedPeer {
         verifying_key: &str,
         meeting_token: &str,
         db: &GraphDatabaseService,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::Error> {
         let query = "query {
             result: sys.Peer(verifying_key=$key){
                 id
@@ -455,7 +452,7 @@ impl AllowedPeer {
         let result: Vec<Peer> = query_result.get("result")?;
 
         if result.is_empty() {
-            return Err(Error::UnknownPeer());
+            return Err(crate::Error::from(Error::UnknownPeer()));
         }
 
         let peer_id = &result[0].id;
@@ -505,7 +502,7 @@ impl AllowedPeer {
     pub async fn get(
         room_id: String,
         db: &GraphDatabaseService,
-    ) -> Result<Vec<AllowedPeer>, Error> {
+    ) -> Result<Vec<AllowedPeer>, crate::Error> {
         let query = "query {
             result: sys.AllowedPeer(room_id=$room_id){
                 meeting_token
@@ -601,7 +598,7 @@ impl AllowedHardware {
         private_room_id: Uid,
         status: &str,
         db: &GraphDatabaseService,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Option<Self>, crate::Error> {
         let mut param = Parameters::new();
         param.add("room_id", uid_encode(&private_room_id))?;
         param.add("id", uid_encode(&id))?;
@@ -668,26 +665,292 @@ impl AllowedHardware {
     }
 }
 
-pub struct InboundInvitation {
-    id: String,
-    invite_id: String,
-    beacons: Vec<Beacon>,
-    static_adress: Option<String>,
-    signature: String,
-}
-
-pub struct ProposedInvitation {
-    id: String,
-    beacons: Vec<Beacon>,
+pub struct ProducedInvite {
+    id: Uid,
     remaining_use: i64,
-    room: String,
-    authorisation: String,
+    room: Option<Uid>,
+    authorisation: Option<Uid>,
+}
+impl ProducedInvite {
+    pub async fn delete(&self, db: &GraphDatabaseService) -> Result<(), Error> {
+        let mut param = Parameters::new();
+        param.add("id", uid_encode(&self.id))?;
+        db.delete(
+            "delete { 
+            sys.ProducedInvite{
+                $id
+            }
+        }",
+            Some(param),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list(
+        room_id: String,
+        db: &GraphDatabaseService,
+    ) -> Result<Vec<Self>, crate::Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+
+        let result = db
+            .query(
+                "query{
+            sys.ProducedInvite(room_id=$room_id, order_by(mdate desc)){
+                id
+                remaining_use
+                room
+                authorisation
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct SerProdInvite {
+            id: String,
+            remaining_use: i64,
+            room: Option<String>,
+            authorisation: Option<String>,
+        }
+
+        let mut list = Vec::new();
+        let q = QueryResult::new(&result)?;
+        let invites: Vec<SerProdInvite> = q.get("sys.ProducedInvite")?;
+        for invite in invites {
+            let id = uid_decode(&invite.id)?;
+            let remaining_use = invite.remaining_use;
+            let room = match invite.room {
+                Some(v) => Some(uid_decode(&v)?),
+                None => None,
+            };
+            let authorisation = match invite.authorisation {
+                Some(v) => Some(uid_decode(&v)?),
+                None => None,
+            };
+
+            list.push(Self {
+                id,
+                remaining_use,
+                room,
+                authorisation,
+            })
+        }
+        Ok(list)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Beacon {
-    id: String,
-    address: String,
+pub struct Invite {
+    invite_id: Uid,
+    application: String,
+    invite_sign: Vec<u8>,
+}
+impl Invite {
+    pub async fn create(
+        room_id: String,
+        num_use: i64,
+        default_room: Option<DefaultRoom>,
+        application: String,
+        db: &GraphDatabaseService,
+    ) -> Result<Self, Error> {
+        let (room, auth) = match default_room {
+            Some(r) => (Some(r.room), Some(r.authorisation)),
+            None => (None, None),
+        };
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+        param.add("num_use", num_use)?;
+        param.add("room", room)?;
+        param.add("auth", auth)?;
+
+        let res = db
+            .mutate(
+                "mutate {
+            sys.ProducedInvite {
+                room_id:$room_id
+                remaining_use: $num_use 
+                room: $room
+                authorisation: $auth 
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        let invite_id = res.first_id();
+        let invite_id = uid_decode(&invite_id)?;
+        let hash_val = Self::hash_val(invite_id, &application);
+        let (_key, invite_sign) = db.sign(hash_val).await;
+
+        Ok(Self {
+            invite_id,
+            application,
+            invite_sign,
+        })
+    }
+
+    pub async fn insert(
+        &self,
+        room_id: String,
+        db: &GraphDatabaseService,
+    ) -> Result<(), crate::Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", room_id.clone())?;
+        param.add("invite_id", uid_encode(&self.invite_id))?;
+
+        let result = db
+            .query(
+                "query{
+            sys.Invite(room_id=$room_id,invite_id=$invite_id ){
+                id
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct InvId {
+            id: String,
+        }
+        let q = QueryResult::new(&result)?;
+        let ids: Vec<InvId> = q.get("sys.Invite")?;
+
+        if !ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+        param.add("invite_id", uid_encode(&self.invite_id))?;
+        param.add("application", self.application.clone())?;
+        param.add("invite_sign", base64_encode(&self.invite_sign))?;
+
+        db.mutate(
+            "mutate {
+            sys.Invite {
+                room_id: $room_id
+                invite_id: $invite_id
+                application: $application
+                invite_sign: $invite_sign
+            }
+        }",
+            Some(param),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete(&self, room_id: String, db: &GraphDatabaseService) -> Result<(), crate::Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+        param.add("invite_id", uid_encode(&self.invite_id))?;
+
+        let result = db
+            .query(
+                "query{
+            sys.Invite(room_id=$room_id, invite_id = $invite_id){
+                    id
+                }
+            }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct InvId {
+            id: String,
+        }
+
+        let q = QueryResult::new(&result)?;
+        let ids: Vec<InvId> = q.get("sys.Invite")?;
+
+        for id in ids {
+            let mut param = Parameters::new();
+            param.add("id", id.id)?;
+
+            db.delete(
+                "delete {
+                sys.Invite{
+                    $id
+                }
+            }",
+                Some(param),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn list(
+        room_id: String,
+        db: &GraphDatabaseService,
+    ) -> Result<Vec<Self>, crate::Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", room_id)?;
+
+        let result = db
+            .query(
+                "query{
+            sys.Invite(room_id=$room_id, order_by(mdate desc)){
+                invite_id
+                application
+                invite_sign
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct SerInvite {
+            invite_id: String,
+            application: String,
+            invite_sign: String,
+        }
+
+        let mut list = Vec::new();
+        let q = QueryResult::new(&result)?;
+        let invites: Vec<SerInvite> = q.get("sys.Invite")?;
+        for invite in invites {
+            let invite_id = uid_decode(&invite.invite_id)?;
+            let application = invite.application;
+            let invite_sign = base64_decode(invite.invite_sign.as_bytes())?;
+
+            list.push(Self {
+                invite_id,
+                application,
+                invite_sign,
+            })
+        }
+        Ok(list)
+    }
+
+    pub fn hash(&self) -> Vec<u8> {
+        Self::hash_val(self.invite_id, &self.application)
+    }
+
+    fn hash_val(invite_id: Uid, application: &String) -> Vec<u8> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&invite_id);
+        hasher.update(application.as_bytes());
+        let hash = hasher.finalize();
+        hash.as_bytes().to_vec()
+    }
+}
+
+///
+/// When creating an invitation, you may specify a default room and authorisation.
+/// New peers joining using this invitation will be inserted in this room.
+///
+pub struct DefaultRoom {
+    pub room: String,
+    pub authorisation: String,
 }
 
 #[cfg(test)]
@@ -945,5 +1208,68 @@ mod tests {
             .unwrap();
 
         assert!(allowed.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invite() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let pub_key = &random32();
+
+        let (db, _verifying_key, private_room) = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            &pub_key,
+            path.clone(),
+            &Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+
+        let invite = Invite::create(
+            uid_encode(&private_room),
+            1,
+            None,
+            "authorisation app".to_string(),
+            &db,
+        )
+        .await
+        .unwrap();
+
+        let prod_list = ProducedInvite::list(uid_encode(&private_room), &db)
+            .await
+            .unwrap();
+
+        assert_eq!(prod_list.len(), 1);
+
+        for prod in prod_list {
+            prod.delete(&db).await.unwrap();
+        }
+
+        invite.insert(uid_encode(&private_room), &db).await.unwrap();
+        invite.insert(uid_encode(&private_room), &db).await.unwrap();
+        invite.insert(uid_encode(&private_room), &db).await.unwrap();
+        invite.insert(uid_encode(&private_room), &db).await.unwrap();
+
+        let prod_list = ProducedInvite::list(uid_encode(&private_room), &db)
+            .await
+            .unwrap();
+        assert_eq!(prod_list.len(), 0);
+
+        let ins_list = Invite::list(uid_encode(&private_room), &db).await.unwrap();
+        assert_eq!(ins_list.len(), 1);
+        invite.delete(uid_encode(&private_room), &db).await.unwrap();
+
+        let ins_list = Invite::list(uid_encode(&private_room), &db).await.unwrap();
+        assert_eq!(ins_list.len(), 0);
+
+        let bin_invite = bincode::serialize(&invite).unwrap();
+        println!("Invite: {}", base64_encode(&bin_invite));
+
+        drop(db);
     }
 }

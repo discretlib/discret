@@ -25,7 +25,7 @@ pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
 
 static MAX_CONNECTION_RETRY: usize = 4;
 
-static CHANNEL_SIZE: usize = 4;
+static CHANNEL_SIZE: usize = 1;
 
 static KEEP_ALIVE_INTERVAL: u64 = 8;
 static MAX_IDLE_TIMEOUT: u32 = 10_000;

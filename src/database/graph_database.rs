@@ -193,11 +193,11 @@ impl GraphDatabaseService {
     ///
     pub async fn delete(
         &self,
-        deletion: &str,
+        delete: &str,
         param_opt: Option<Parameters>,
     ) -> Result<DeletionQuery> {
         let (reply, receive) = oneshot::channel::<Result<DeletionQuery>>();
-        let msg = Message::Delete(deletion.to_string(), param_opt.unwrap_or_default(), reply);
+        let msg = Message::Delete(delete.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.peer_sender.send(msg).await;
         let result = receive.await?;
         let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
@@ -211,12 +211,12 @@ impl GraphDatabaseService {
     ///
     pub async fn mutate_raw(
         &self,
-        mutation: &str,
+        mutate: &str,
         param_opt: Option<Parameters>,
     ) -> Result<MutationQuery> {
         let (reply, receive) = oneshot::channel::<Result<MutationQuery>>();
 
-        let msg = Message::Mutate(mutation.to_string(), param_opt.unwrap_or_default(), reply);
+        let msg = Message::Mutate(mutate.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.peer_sender.send(msg).await;
 
         let result = receive.await?;
@@ -232,10 +232,10 @@ impl GraphDatabaseService {
     ///
     pub async fn mutate(
         &self,
-        mutation: &str,
+        mutate: &str,
         param_opt: Option<Parameters>,
     ) -> Result<MutationResult> {
-        let raw = self.mutate_raw(mutation, param_opt).await;
+        let raw = self.mutate_raw(mutate, param_opt).await;
         match raw {
             Ok(query) => query.result(),
             Err(e) => Err(e),
@@ -738,7 +738,10 @@ impl GraphDatabaseService {
     ///
     /// retrieve id of users defined in room users but not in the sys.Peer entity
     ///
-    pub async fn get_allowed_peers(&self, room_id: Uid) -> Result<Vec<AllowedPeer>> {
+    pub async fn get_allowed_peers(
+        &self,
+        room_id: Uid,
+    ) -> std::result::Result<Vec<AllowedPeer>, crate::Error> {
         AllowedPeer::get(uid_encode(&room_id), &self).await
     }
 }
@@ -1515,19 +1518,5 @@ mod tests {
         )
         .await
         .expect("wildcard auth");
-
-        let mut param = Parameters::new();
-        param.add("room_id", uid_encode(&room_id)).unwrap();
-        app.mutate(
-            r#"mutate{
-                sys.Beacon{
-                        room_id : $room_id
-                        address : "test"
-                }
-            }"#,
-            Some(param),
-        )
-        .await
-        .expect("sys.Beacon can be inserted");
     }
 }

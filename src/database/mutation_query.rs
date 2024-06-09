@@ -462,6 +462,11 @@ pub struct MutationResult {
     pub ids: Vec<IdTree>,
     pub json: String,
 }
+impl MutationResult {
+    pub fn first_id(&self) -> String {
+        self.ids[0].uid.clone()
+    }
+}
 #[derive(Debug)]
 pub struct IdTree {
     pub uid: String,
