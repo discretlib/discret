@@ -144,7 +144,7 @@ sys{
         status: String default "enabled", //enabled, disabled, pending
     }
 
-    ProducedInvite{
+    OwnedInvite{
         remaining_use: Integer,
         room: Base64 nullable,
         authorisation: Base64 nullable,
@@ -665,19 +665,19 @@ impl AllowedHardware {
     }
 }
 
-pub struct ProducedInvite {
+pub struct OwnedInvite {
     id: Uid,
     remaining_use: i64,
     room: Option<Uid>,
     authorisation: Option<Uid>,
 }
-impl ProducedInvite {
+impl OwnedInvite {
     pub async fn delete(&self, db: &GraphDatabaseService) -> Result<(), Error> {
         let mut param = Parameters::new();
         param.add("id", uid_encode(&self.id))?;
         db.delete(
             "delete { 
-            sys.ProducedInvite{
+            sys.OwnedInvite{
                 $id
             }
         }",
@@ -697,7 +697,7 @@ impl ProducedInvite {
         let result = db
             .query(
                 "query{
-            sys.ProducedInvite(room_id=$room_id, order_by(mdate desc)){
+            sys.OwnedInvite(room_id=$room_id, order_by(mdate desc)){
                 id
                 remaining_use
                 room
@@ -718,7 +718,7 @@ impl ProducedInvite {
 
         let mut list = Vec::new();
         let q = QueryResult::new(&result)?;
-        let invites: Vec<SerProdInvite> = q.get("sys.ProducedInvite")?;
+        let invites: Vec<SerProdInvite> = q.get("sys.OwnedInvite")?;
         for invite in invites {
             let id = uid_decode(&invite.id)?;
             let remaining_use = invite.remaining_use;
@@ -770,7 +770,7 @@ impl Invite {
         let res = db
             .mutate(
                 "mutate {
-            sys.ProducedInvite {
+            sys.OwnedInvite {
                 room_id:$room_id
                 remaining_use: $num_use 
                 room: $room
@@ -1240,7 +1240,7 @@ mod tests {
         .await
         .unwrap();
 
-        let prod_list = ProducedInvite::list(uid_encode(&private_room), &db)
+        let prod_list = OwnedInvite::list(uid_encode(&private_room), &db)
             .await
             .unwrap();
 
@@ -1255,7 +1255,7 @@ mod tests {
         invite.insert(uid_encode(&private_room), &db).await.unwrap();
         invite.insert(uid_encode(&private_room), &db).await.unwrap();
 
-        let prod_list = ProducedInvite::list(uid_encode(&private_room), &db)
+        let prod_list = OwnedInvite::list(uid_encode(&private_room), &db)
             .await
             .unwrap();
         assert_eq!(prod_list.len(), 0);

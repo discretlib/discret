@@ -9,7 +9,7 @@ use argon2::{self, Config, Variant, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as enc64, Engine as _};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
-use rcgen::{CertificateParams, KeyPair};
+use rcgen::{CertificateParams, KeyPair, SanType};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Networks, System};
 use thiserror::Error;
@@ -214,8 +214,10 @@ impl VerifyingKey for Ed2519VerifyingKey {
     }
 }
 
-pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
-    let params: CertificateParams = Default::default();
+pub fn generate_x509_certificate(name: &str) -> rcgen::CertifiedKey {
+    let mut params: CertificateParams = Default::default();
+
+    params.subject_alt_names = vec![SanType::DnsName(name.try_into().unwrap())];
     let key_pair = KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
     // let cert: rcgen::CertifiedKey = rcgen::generate_simple_self_signed(vec![name]).unwrap();
@@ -223,28 +225,32 @@ pub fn generate_x509_certificate() -> rcgen::CertifiedKey {
 }
 
 ///
-/// The quick connection initiate connection with a domain name that is mandatory during TLS negociations for certificate validation.
-/// We are bypassing the TLS cerficate validation, so we don't need this domain name.
-/// But... this is transmitted in clear text over the network as part of the QUIC handshake. Setting a static name would make it trivial
-/// to detect that the discret protocol is used.
-/// Let's make it a litte bit harder by creating a random domain name
+/// The quick connection initiate connection with a domain name used during TLS negociations to avoid man in the middle attack.
+/// As we are using p2p and self signed certificates, we don't have a domain name to connect to so we need to create a random name.
+/// This name is transmitted in clear text over the network as part of the QUIC handshake.
+/// If the name is too weird (like a base64 encoded value), it is easy to detect that the connection is a Discret connection, and not a standard HTTP3 one.
+/// Let's be a little bit sneaky by creating a plausible domain names.
 ///
 pub fn random_domain_name() -> String {
-    let min_value = 4;
-    let max_value = 9;
+    let min_value = 5;
+    let max_value = 8;
     let divider = max_value - min_value;
     let offset: usize = OsRng.next_u32().try_into().unwrap();
     let num = offset % divider;
 
-    let consonants = vec![
-        'b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'q', 'r', 's', 't', 'v',
+    let alphabet = vec![
+        'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+        'v', 'w', 'x', 'z',
     ];
-    let vowels = vec!['a', 'e', 'i', 'o', 'u'];
-    let extension = vec![".com", ".org", ".net", ".us", ".co", ".biz", ".info"];
+    let vowels = vec!['a', 'e', 'i', 'o', 'u', 'y'];
+    let extension = vec![
+        ".com", ".org", ".net", ".us", ".co", ".biz", ".info", ".fr", ".uk", ".me", ".cn", ".de",
+        ".ly", ".in",
+    ];
     let size = num + min_value;
     let mut domain = String::new();
 
-    let mut vowel = false;
+    let mut vowel = OsRng.next_u32() % 2 == 1;
     for _ in 0..size {
         let mut index: usize = OsRng.next_u32().try_into().unwrap();
         if vowel {
@@ -252,8 +258,8 @@ pub fn random_domain_name() -> String {
             domain.push(vowels[index]);
             vowel = false;
         } else {
-            index = index % consonants.len();
-            domain.push(consonants[index]);
+            index = index % alphabet.len();
+            domain.push(alphabet[index]);
             vowel = true;
         }
     }
@@ -609,7 +615,8 @@ mod tests {
     #[test]
     pub fn random_domain() {
         for _ in 0..50 {
-            assert!(random_domain_name().len() <= 13);
+            // println!("{}", random_domain_name());
+            assert!(random_domain_name().len() <= 14);
         }
     }
 }

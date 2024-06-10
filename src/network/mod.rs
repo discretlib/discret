@@ -16,8 +16,15 @@ use crate::{
 pub struct ConnectionInfo {
     pub endpoint_id: Uid,
     pub remote_id: Uid,
-    pub connnection_id: Uid,
+    pub connection_id: Uid,
     pub hardware: Option<HardwareFingerprint>,
+}
+
+pub enum ConnectionType {
+    SamePeer(HardwareFingerprint),
+    OtherPeer(),
+    Invite(Uid, Vec<u8>),
+    OwnedInvite(Uid, Vec<u8>),
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -219,11 +219,11 @@ impl PeerConnectionService {
                     peer_manager.add_connection(
                         circuit_id,
                         connection,
-                        connection_info.connnection_id,
+                        connection_info.connection_id,
                     )
                 };
 
-                let connection_id = connection_info.connnection_id;
+                let connection_id = connection_info.connection_id;
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let inbound_query_service = InboundQueryService::start(
@@ -463,7 +463,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     let info1 = ConnectionInfo {
         endpoint_id: new_uid(),
         remote_id: new_uid(),
-        connnection_id: new_uid(),
+        connection_id: new_uid(),
         hardware: Some(security::HardwareFingerprint::new().unwrap()),
     };
 
@@ -484,7 +484,7 @@ pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnection
     let info1 = ConnectionInfo {
         endpoint_id: new_uid(),
         remote_id: new_uid(),
-        connnection_id: new_uid(),
+        connection_id: new_uid(),
 
         hardware: Some(security::HardwareFingerprint::new().unwrap()),
     };
