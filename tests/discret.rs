@@ -178,7 +178,7 @@ async fn invites() {
         )
         .await
         .unwrap();
-    /*
+
     let invite = discret1
         .invite(
             1,
@@ -187,7 +187,8 @@ async fn invites() {
                 authorisation: auth_id,
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let key_material = random32();
     let discret2: Discret = Discret::new(
@@ -223,5 +224,4 @@ async fn invites() {
 
     let s = tokio::time::timeout(Duration::from_secs(1), handle).await;
     assert!(s.is_ok());
-    */
 }

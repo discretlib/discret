@@ -1,6 +1,10 @@
 use crate::{
-    database::system_entities::{Invite, OwnedInvite},
-    uid_encode, Error,
+    base64_encode,
+    database::{
+        node::Node,
+        system_entities::{Invite, OwnedInvite, Peer, Status},
+    },
+    uid_encode, DefaultRoom, Error, Parameters, ParametersAdd,
 };
 use quinn::{Connection, VarInt};
 use std::{
@@ -8,6 +12,7 @@ use std::{
     net::SocketAddr,
 };
 use tokio::sync::mpsc;
+use x25519_dalek::PublicKey;
 
 use crate::{
     base64_decode,
@@ -38,7 +43,11 @@ pub const REASON_UNKNOWN: u16 = 2;
 
 //with a 7 byte token, fits into a 4096 message
 pub const MAX_ANNOUNCE_TOKENS: usize = 512;
+
+const DERIVE_STRING: &str = "P";
+
 pub struct PeerManager {
+    app_name: String,
     endpoint: DiscretEndpoint,
     multicast_discovery: mpsc::Sender<MulticastMessage>,
     private_room_id: Uid,
@@ -68,6 +77,7 @@ pub struct PeerManager {
 }
 impl PeerManager {
     pub async fn new(
+        app_name: String,
         endpoint: DiscretEndpoint,
         multicast_discovery: mpsc::Sender<MulticastMessage>,
         db: GraphDatabaseService,
@@ -88,14 +98,14 @@ impl PeerManager {
 
         let owned_invites = OwnedInvite::list_valid(uid_encode(&private_room_id), &db).await?;
         for owned in &owned_invites {
-            let token = MeetingSecret::derive_token("PeerManager", &owned.id);
+            let token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
             let entry = allowed_token.entry(token).or_default();
             entry.push(TokenType::OwnedInvite(owned.clone()));
         }
         let invites = Invite::list(uid_encode(&private_room_id), &db).await?;
         for invite in &invites {
             let uid = &invite.invite_id;
-            let token = MeetingSecret::derive_token("PeerManager", uid);
+            let token = MeetingSecret::derive_token(DERIVE_STRING, uid);
             let entry = allowed_token.entry(token).or_default();
             entry.push(TokenType::Invite(invite.clone()));
         }
@@ -106,6 +116,7 @@ impl PeerManager {
             .await;
 
         Ok(Self {
+            app_name,
             endpoint,
             multicast_discovery,
             private_room_id,
@@ -553,7 +564,7 @@ impl PeerManager {
 
     pub fn validate_associated_owned_invite(
         &self,
-        invite: Uid,
+        invite: &Uid,
         token: MeetingToken,
     ) -> Result<(), crate::Error> {
         let o = self.allowed_token.get(&token);
@@ -563,7 +574,7 @@ impl PeerManager {
                 for token_type in token_types {
                     match token_type {
                         TokenType::OwnedInvite(owned) => {
-                            if owned.id.eq(&invite) {
+                            if owned.id.eq(invite) {
                                 valid = true;
                             }
                         }
@@ -586,7 +597,7 @@ impl PeerManager {
 
     pub fn validate_associated_invite(
         &self,
-        owned_invite: Uid,
+        owned_invite: &Uid,
         token: MeetingToken,
     ) -> Result<(), crate::Error> {
         let o = self.allowed_token.get(&token);
@@ -596,7 +607,7 @@ impl PeerManager {
                 for token_type in token_types {
                     match token_type {
                         TokenType::Invite(invite) => {
-                            if invite.invite_id.eq(&owned_invite) {
+                            if invite.invite_id.eq(owned_invite) {
                                 valid = true;
                             }
                         }
@@ -615,5 +626,146 @@ impl PeerManager {
                 "Owned Invite Connection: Invalid Meeting Token".to_string(),
             )),
         }
+    }
+
+    pub async fn create_invite(
+        &mut self,
+        num_use: i64,
+        default_room: Option<DefaultRoom>,
+    ) -> Result<Vec<u8>, crate::Error> {
+        let (invite, owned) = Invite::create(
+            uid_encode(&self.private_room_id),
+            num_use,
+            default_room,
+            self.app_name.to_string(),
+            &self.db,
+        )
+        .await?;
+
+        let token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
+        let entry = self.allowed_token.entry(token).or_default();
+        entry.push(TokenType::OwnedInvite(owned.clone()));
+        self.owned_invites.push(owned);
+        self.send_annouces().await?;
+
+        Ok(bincode::serialize(&invite)?)
+    }
+
+    pub async fn accept_invite(&mut self, invite: &Vec<u8>) -> Result<(), crate::Error> {
+        let inv: Invite = bincode::deserialize(&invite)?;
+        if !inv.application.eq(&self.app_name) {
+            return Err(Error::InvalidInvite(format!(
+                "this invite is for app {} and not for {}",
+                &inv.application, &self.app_name
+            )));
+        }
+        inv.insert(uid_encode(&self.private_room_id), &self.db)
+            .await?;
+        let token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
+        let entry = self.allowed_token.entry(token).or_default();
+        entry.push(TokenType::Invite(inv.clone()));
+        self.invites.push(inv);
+        self.send_annouces().await?;
+        Ok(())
+    }
+
+    pub async fn invite_accepted(
+        &mut self,
+        id: Uid,
+        peer: Node,
+        owned: bool,
+    ) -> Result<(), crate::Error> {
+        let verifying_key = base64_encode(&peer.verifying_key);
+
+        let pub_key = Peer::pub_key(&peer)?;
+        let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
+        let token = self.meeting_secret.token(&peer_public);
+
+        self.db.add_peer_nodes(vec![peer.clone()]).await?;
+        let room_id = uid_encode(&self.private_room_id);
+        let allowed = AllowedPeer::add(
+            &room_id,
+            &verifying_key,
+            &base64_encode(&token),
+            Status::Enabled,
+            &self.db,
+        )
+        .await?;
+
+        let entry = self.allowed_token.entry(token).or_default();
+        entry.push(TokenType::AllowedPeer(allowed.clone()));
+        self.allowed_peers.push(allowed);
+
+        if owned {
+            if OwnedInvite::decrease_and_delete(room_id.clone(), id, &self.db).await? {
+                let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
+                let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
+                if let Some(tokens) = o {
+                    let index = tokens.iter().position(|tt| {
+                        if let TokenType::OwnedInvite(owned) = tt {
+                            owned.id.eq(&id)
+                        } else {
+                            false
+                        }
+                    });
+
+                    if let Some(index) = index {
+                        let owned = &tokens[index];
+                        if let TokenType::OwnedInvite(owned) = owned {
+                            if let Some(room) = owned.room {
+                                if let Some(auth) = owned.authorisation {
+                                    println!("inserting new user");
+                                    let room = uid_encode(&room);
+                                    let auth = uid_encode(&auth);
+                                    let verif_key = base64_encode(&peer.verifying_key);
+
+                                    let mut param = Parameters::new();
+                                    param.add("id", room)?;
+                                    param.add("auth", auth)?;
+                                    param.add("verif_key", verif_key)?;
+                                    self.db
+                                        .mutate(
+                                            r#"mutate {
+                                        sys.Room{
+                                            id:$id
+                                            authorisations:[{
+                                                id:$auth
+                                                users: [{
+                                                    verif_key:$verif_key
+                                                    enabled:true
+                                                }]
+                                            }]
+                                        }
+                                    }"#,
+                                            Some(param),
+                                        )
+                                        .await?;
+                                }
+                            }
+                        }
+                        tokens.remove(index);
+                    }
+                }
+                self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
+            }
+        } else {
+            let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
+            let o = self.allowed_token.get_mut(&token);
+            if let Some(tokens) = o {
+                let index = tokens.iter().position(|tt| {
+                    if let TokenType::Invite(i) = tt {
+                        i.invite_id.eq(&id)
+                    } else {
+                        false
+                    }
+                });
+                if let Some(index) = index {
+                    tokens.remove(index);
+                }
+            }
+            Invite::delete(room_id.clone(), id, &self.db).await?;
+            self.invites = Invite::list(room_id.clone(), &self.db).await?;
+        }
+        Ok(())
     }
 }

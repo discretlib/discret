@@ -142,6 +142,9 @@ pub enum Error {
     #[error("The requested node does not belong to the right room")]
     InvalidNodeRequest(),
 
+    #[error("{0}")]
+    InvalidPeerNode(String),
+
     #[error("Unknown Peer")]
     UnknownPeer(),
 

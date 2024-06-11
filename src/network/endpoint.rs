@@ -18,6 +18,7 @@ use tokio::{
 };
 
 use crate::{
+    database::node::Node,
     log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{self, hash, new_uid, random_domain_name, HardwareFingerprint, MeetingToken, Uid},
@@ -58,7 +59,7 @@ impl DiscretEndpoint {
     pub async fn start(
         peer_service: PeerConnectionService,
         log: LogService,
-        verifying_key: Vec<u8>,
+        peer: Node,
         num_buffers: usize,
         max_buffer_size: usize,
     ) -> Result<Self, Error> {
@@ -117,7 +118,7 @@ impl DiscretEndpoint {
                             &logs,
                             &ipv4,
                             &ipv6,
-                            &verifying_key,
+                            peer.clone(),
                             send_hardware,
                             &hardware,
                             &i_buff,
@@ -264,7 +265,7 @@ impl DiscretEndpoint {
         log: &LogService,
         ipv4_endpoint: &Endpoint,
         ipv6_endpoint: &Option<Endpoint>,
-        verifying_key: &Vec<u8>,
+        peer: Node,
         send_hardware: bool,
         hardware: &HardwareFingerprint,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
@@ -287,7 +288,7 @@ impl DiscretEndpoint {
             }
         };
         let peer_service = peer_service.clone();
-        let verifying_key = verifying_key.clone();
+
         let hardware = hardware.clone();
 
         let input_buffers = input_buffers.clone();
@@ -311,7 +312,7 @@ impl DiscretEndpoint {
                                         let conn_type: ConnectionType = if send_hardware {
                                             ConnectionType::SelfPeer(hardware.clone())
                                         } else {
-                                            ConnectionType::OtherPeer(verifying_key)
+                                            ConnectionType::OtherPeer(peer.verifying_key.clone())
                                         };
 
                                         ConnectionInfo {
@@ -323,10 +324,8 @@ impl DiscretEndpoint {
                                         }
                                     }
                                     TokenType::OwnedInvite(owned_inv) => {
-                                        let conn_type = ConnectionType::OwnedInvite(
-                                            owned_inv.id,
-                                            verifying_key,
-                                        );
+                                        let conn_type =
+                                            ConnectionType::OwnedInvite(owned_inv.id, peer.clone());
                                         ConnectionInfo {
                                             endpoint_id,
                                             remote_id,
@@ -337,7 +336,7 @@ impl DiscretEndpoint {
                                     }
                                     TokenType::Invite(invite) => {
                                         let conn_type =
-                                            ConnectionType::Invite(invite.invite_id, verifying_key);
+                                            ConnectionType::Invite(invite.invite_id, peer.clone());
                                         ConnectionInfo {
                                             endpoint_id,
                                             remote_id,

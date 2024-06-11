@@ -696,6 +696,22 @@ impl GraphDatabaseService {
     }
 
     ///
+    /// get sys.Peer node
+    ///
+    pub async fn get_peer_node(&self, verifying_key: Vec<u8>) -> Result<Option<Node>> {
+        let (reply, receive) = oneshot::channel::<Result<Option<Node>>>();
+
+        self.db
+            .reader
+            .send_async(Box::new(move |conn| {
+                let result = Peer::get_node(verifying_key, conn).map_err(Error::from);
+                let _ = reply.send(result);
+            }))
+            .await?;
+        receive.await?
+    }
+
+    ///
     /// retrieve users for a room
     ///
     pub async fn peers_for_room(&self, room_id: Uid) -> mpsc::Receiver<Result<Vec<Node>>> {
@@ -742,7 +758,12 @@ impl GraphDatabaseService {
         &self,
         room_id: Uid,
     ) -> std::result::Result<Vec<AllowedPeer>, crate::Error> {
-        AllowedPeer::get(uid_encode(&room_id), &self).await
+        AllowedPeer::get(
+            uid_encode(&room_id),
+            system_entities::Status::Enabled,
+            &self,
+        )
+        .await
     }
 }
 

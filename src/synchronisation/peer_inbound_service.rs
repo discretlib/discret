@@ -23,6 +23,7 @@ use crate::{
         graph_database::GraphDatabaseService,
         node::{Node, NodeDeletionEntry, NodeIdentifier},
         room_node::RoomNode,
+        system_entities::Peer,
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
@@ -136,6 +137,54 @@ impl QueryService {
 
 pub struct LocalPeerService {}
 impl LocalPeerService {
+    pub async fn initialise_connection(
+        connection_info: &ConnectionInfo,
+        expected_peer: &Vec<u8>,
+        query_service: &QueryService,
+        remote_verifying_key: &Arc<Mutex<Vec<u8>>>,
+        peer_service: &PeerConnectionService,
+        event_sender: &Sender<RemoteEvent>,
+    ) -> Result<bool, crate::Error> {
+        let challenge = random32().to_vec();
+
+        let proof = Self::query(query_service, Query::ProveIdentity(challenge.clone())).await;
+        if proof.is_err() {
+            return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
+        }
+        let proof: ProveAnswer = proof.unwrap();
+        if expected_peer.eq(&proof.verifying_key) {
+            proof.verify(&challenge)?;
+            let mut key = remote_verifying_key.lock().await;
+            *key = proof.verifying_key.clone();
+        } else {
+            return Err(crate::Error::InvalidConnection("invalid Peer".to_string()));
+        }
+
+        match &connection_info.conn_type {
+            crate::network::ConnectionType::Invite(id, peer) => {
+                Peer::validate(expected_peer, peer)?;
+                peer_service.invite_accepted(*id, peer.clone(), true).await;
+            }
+            crate::network::ConnectionType::OwnedInvite(id, peer) => {
+                Peer::validate(expected_peer, peer)?;
+                peer_service.invite_accepted(*id, peer.clone(), false).await;
+            }
+            _ => {}
+        }
+
+        let res = Self::send_event(&event_sender, RemoteEvent::Ready)
+            .await
+            .map_err(|_| crate::Error::TimeOut("Ready".to_string()));
+        if res.is_err() {
+            return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
+        }
+
+        peer_service
+            .connected(proof.verifying_key, connection_info.conn_id)
+            .await;
+        Ok(true)
+    }
+
     pub fn start(
         mut remote_event: Receiver<RemoteEvent>,
         mut local_event: broadcast::Receiver<LocalEvent>,
@@ -156,41 +205,36 @@ impl LocalPeerService {
         let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Uid>();
 
         tokio::spawn(async move {
-            let challenge = random32().to_vec();
-            let mut remote_rooms: HashSet<Uid> = HashSet::new();
-
-            //prove identity
-            let ret: Result<(), crate::Error> = async {
-                let proof: ProveAnswer =
-                    Self::query(&query_service, Query::ProveIdentity(challenge.clone())).await?;
-                proof.verify(&challenge)?;
-
-                if expected_peer.eq(&proof.verifying_key) {
-                    let mut key = remote_verifying_key.lock().await;
-                    *key = proof.verifying_key.clone();
-                } else {
+            match Self::initialise_connection(
+                &connection_info,
+                &expected_peer,
+                &query_service,
+                &remote_verifying_key,
+                &peer_service,
+                &event_sender,
+            )
+            .await
+            {
+                Ok(success) => {
+                    if !success {
+                        let key = remote_verifying_key.lock().await;
+                        peer_service
+                            .disconnect(key.clone(), circuit_id, connection_info.conn_id)
+                            .await;
+                        return;
+                    }
                 }
-
-                Self::send_event(&event_sender, RemoteEvent::Ready)
-                    .await
-                    .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
-
-                peer_service
-                    .connected(proof.verifying_key, connection_info.conn_id)
-                    .await;
-                Ok(())
-            }
-            .await;
-
-            if let Err(_) = ret {
-                //log_service.error("LocalPeerServiceInit".to_string(), e);
-                let key = remote_verifying_key.lock().await;
-                peer_service
-                    .disconnect(key.clone(), circuit_id, connection_info.conn_id)
-                    .await;
-                return;
+                Err(e) => {
+                    log_service.error("LocalPeerServiceInit".to_string(), e);
+                    let key = remote_verifying_key.lock().await;
+                    peer_service
+                        .disconnect(key.clone(), circuit_id, connection_info.conn_id)
+                        .await;
+                    return;
+                }
             }
 
+            let mut remote_rooms: HashSet<Uid> = HashSet::new();
             let acquired_lock = Arc::new(Mutex::new(HashSet::<Uid>::new()));
             loop {
                 tokio::select! {
@@ -422,7 +466,6 @@ impl LocalPeerService {
         let mut peers_receiv: Receiver<Result<Vec<Node>, Error>> =
             Self::query_multiple(query_service, Query::PeersForRoom(room_id)).await;
 
-        let mut new_peers: Vec<Uid> = Vec::new();
         let mut peer_nodes: Vec<Node> = Vec::new();
         while let Some(node) = peers_receiv.recv().await {
             match node {
@@ -436,7 +479,6 @@ impl LocalPeerService {
                                 }
                             }
                             None => {
-                                new_peers.push(node.id);
                                 peer_nodes.push(node);
                             }
                         }
@@ -447,11 +489,11 @@ impl LocalPeerService {
         }
 
         let peer_nodes: Vec<Node> = verify_service.verify_nodes(peer_nodes).await?;
-        db.add_peer_nodes(peer_nodes).await?;
+        db.add_peer_nodes(peer_nodes.clone()).await?;
 
         let _ = peer_service
             .sender
-            .send(PeerConnectionMessage::NewPeer(new_peers))
+            .send(PeerConnectionMessage::NewPeer(peer_nodes))
             .await;
 
         if Self::synchronise_room_data(

@@ -8,7 +8,7 @@ use std::{
 use quinn::Connection;
 
 use crate::{
-    database::graph_database::GraphDatabaseService,
+    database::{graph_database::GraphDatabaseService, node::Node, system_entities::Peer},
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
@@ -26,10 +26,10 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    Configuration, Result,
+    Configuration, DefaultRoom, Result,
 };
 use tokio::{
-    sync::{broadcast, mpsc, Mutex},
+    sync::{broadcast, mpsc, oneshot, Mutex},
     time,
 };
 
@@ -47,9 +47,12 @@ pub enum PeerConnectionMessage {
     ConnectionFailed(Uid, Uid),
     PeerConnected(Vec<u8>, Uid),
     PeerDisconnected(Vec<u8>, [u8; 32], Uid),
-    NewPeer(Vec<Uid>),
+    InviteAccepted(Uid, Node, bool),
+    NewPeer(Vec<Node>),
     SendAnnounce(),
     MulticastMessage(MulticastMessage, SocketAddr),
+    CreateInvite(i64, Option<DefaultRoom>, oneshot::Sender<Result<Vec<u8>>>),
+    AcceptInvite(Vec<u8>),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
@@ -63,6 +66,7 @@ pub struct PeerConnectionService {
 }
 impl PeerConnectionService {
     pub async fn start(
+        app_name: String,
         verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
         private_room_id: Uid,
@@ -79,10 +83,12 @@ impl PeerConnectionService {
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
+        let self_peer = db.get_peer_node(verifying_key.clone()).await?.unwrap();
+
         let endpoint = DiscretEndpoint::start(
             peer_service.clone(),
             logs.clone(),
-            verifying_key.clone(),
+            self_peer,
             configuration.parallelism + 1,
             configuration.max_object_size_in_kb * 1024 * 2,
         )
@@ -99,6 +105,7 @@ impl PeerConnectionService {
         .await?;
 
         let mut peer_manager = PeerManager::new(
+            app_name,
             endpoint,
             multicast_discovery,
             db.clone(),
@@ -127,7 +134,7 @@ impl PeerConnectionService {
                                     &lock_service,
                                     &verify_service,
                                     local_event_broadcast.subscribe(),
-                                    &configuration
+                                    &configuration,
                                 ).await;
                                 if let Err(e) = err{
                                     logs.error("process_peer_message".to_string(), e);
@@ -179,12 +186,23 @@ impl PeerConnectionService {
             .await;
     }
 
+    pub async fn invite_accepted(&self, id: Uid, peer: Node, owned_invite: bool) {
+        let _ = self
+            .sender
+            .send(PeerConnectionMessage::InviteAccepted(
+                id,
+                peer,
+                owned_invite,
+            ))
+            .await;
+    }
+
     async fn process_peer_message(
         msg: PeerConnectionMessage,
         peer_manager: &mut PeerManager,
-        local_db: &GraphDatabaseService,
+        db: &GraphDatabaseService,
         event_service: &EventService,
-        log_service: &LogService,
+        logs: &LogService,
         peer_service: &PeerConnectionService,
         lock_service: &RoomLockService,
         verify_service: &SignatureVerificationService,
@@ -206,7 +224,7 @@ impl PeerConnectionService {
                     PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
 
                 let expected_peer;
-                match connection_info.conn_type.clone() {
+                match &connection_info.conn_type {
                     ConnectionType::SelfPeer(_) => {
                         expected_peer = peer_manager
                             .get_self_peer_expected_key(connection_info.meeting_token)?;
@@ -217,19 +235,19 @@ impl PeerConnectionService {
                             &verif_key,
                         )?;
                     }
-                    ConnectionType::Invite(invite, verif_key) => {
+                    ConnectionType::Invite(invite, peer) => {
                         peer_manager.validate_associated_owned_invite(
                             invite,
                             connection_info.meeting_token,
                         )?;
-                        expected_peer = verif_key
+                        expected_peer = peer.verifying_key.clone()
                     }
-                    ConnectionType::OwnedInvite(owned_invite, verif_key) => {
+                    ConnectionType::OwnedInvite(owned_invite, peer) => {
                         peer_manager.validate_associated_invite(
                             owned_invite,
                             connection_info.meeting_token,
                         )?;
-                        expected_peer = verif_key
+                        expected_peer = peer.verifying_key.clone()
                     }
                 }
 
@@ -248,18 +266,18 @@ impl PeerConnectionService {
                     circuit_id,
                     connection_info.conn_id,
                     RemotePeerHandle {
-                        db: local_db.clone(),
+                        db: db.clone(),
                         allowed_room: HashSet::new(),
                         reply: answer_sender,
                     },
                     query_receiver,
-                    log_service.clone(),
+                    logs.clone(),
                     peer_service.clone(),
                     verifying_key.clone(),
                 );
 
                 let query_service =
-                    QueryService::start(query_sender, answer_receiver, log_service.clone());
+                    QueryService::start(query_sender, answer_receiver, logs.clone());
 
                 LocalPeerService::start(
                     event_receiver,
@@ -268,11 +286,11 @@ impl PeerConnectionService {
                     connection_info.clone(),
                     expected_peer,
                     verifying_key.clone(),
-                    local_db.clone(),
+                    db.clone(),
                     lock_service.clone(),
                     query_service,
                     event_sender.clone(),
-                    log_service.clone(),
+                    logs.clone(),
                     peer_service.clone(),
                     event_service.clone(),
                     inbound_query_service,
@@ -307,6 +325,16 @@ impl PeerConnectionService {
                     ))
                     .await;
             }
+
+            PeerConnectionMessage::InviteAccepted(id, peer, owned) => {
+                if let Err(e) = peer_manager.invite_accepted(id, peer, owned).await {
+                    logs.error(
+                        "PeerConnectionMessage::InviteAccepted".to_string(),
+                        crate::Error::from(e),
+                    );
+                }
+            }
+
             PeerConnectionMessage::NewPeer(peers) => {
                 if configuration.auto_allow_new_peers {
                 } else {
@@ -315,7 +343,7 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::SendAnnounce() => {
                 if let Err(e) = peer_manager.send_annouces().await {
-                    log_service.error(
+                    logs.error(
                         "PeerConnectionMessage::SendAnnounce".to_string(),
                         crate::Error::from(e),
                     );
@@ -353,6 +381,13 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::ConnectionFailed(endpoint_id, remote_id) => {
                 peer_manager.clean_progress(endpoint_id, remote_id);
+            }
+            PeerConnectionMessage::CreateInvite(num_use, default_room, reply) => {
+                let s = peer_manager.create_invite(num_use, default_room).await;
+                let _ = reply.send(s);
+            }
+            PeerConnectionMessage::AcceptInvite(invite) => {
+                peer_manager.accept_invite(&invite).await?;
             }
         }
         Ok(())

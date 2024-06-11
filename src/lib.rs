@@ -51,13 +51,14 @@ mod synchronisation;
 use database::graph_database::GraphDatabaseService;
 use event_service::EventService;
 use log_service::LogService;
-use peer_connection_service::PeerConnectionService;
+use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
 use security::{derive_key, MeetingSecret};
 
 use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
+use tokio::sync::oneshot;
 use tokio::{runtime::Runtime, sync::broadcast};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -149,6 +150,9 @@ pub enum Error {
 
     #[error("{0}")]
     InvalidConnection(String),
+
+    #[error("{0}")]
+    InvalidInvite(String),
 }
 
 #[derive(Clone)]
@@ -191,6 +195,7 @@ impl Discret {
 
         let logs = LogService::start();
         let peers = PeerConnectionService::start(
+            app_key.to_string(),
             verifying_key.clone(),
             meeting_secret,
             private_room_id,
@@ -248,15 +253,31 @@ impl Discret {
     /// Create an invitation
     /// num_use indicate the number of time it can be used before beiing discarded
     ///   
-    pub async fn invite(&self, num_use: usize, default_room: Option<DefaultRoom>) -> Vec<u8> {
-        todo!()
+    pub async fn invite(&self, num_use: i64, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
+        let (reply, receive) = oneshot::channel::<Result<Vec<u8>>>();
+        let _ = self
+            .peers
+            .sender
+            .send(PeerConnectionMessage::CreateInvite(
+                num_use,
+                default_room,
+                reply,
+            ))
+            .await;
+        receive.await?
     }
 
     ///
     /// Accept an invitation
     ///   
     pub async fn accept_invite(&self, invitation: Vec<u8>) -> std::result::Result<(), Error> {
-        todo!()
+        let _ = self
+            .peers
+            .sender
+            .send(PeerConnectionMessage::AcceptInvite(invitation))
+            .await;
+
+        Ok(())
     }
 
     ///

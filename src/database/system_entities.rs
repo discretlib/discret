@@ -94,7 +94,7 @@ pub const PEER_PUB_KEY_SHORT: &str = "32";
 
 pub const ALLOWED_PEER_PEER_SHORT: &str = "32";
 pub const ALLOWED_PEER_TOKEN_SHORT: &str = "33";
-pub const ALLOWED_PEER_STATUS_SHORT: &str = "34";
+pub const ALLOWED_PEER_STATUS_SHORT: &str = "35";
 
 pub const ALLOWED_HARDWARE_NAME_SHORT: &str = "32";
 pub const ALLOWED_HARDWARE_STATUS_SHORT: &str = "33";
@@ -136,7 +136,7 @@ sys{
         peer: sys.Peer,
         meeting_token: Base64,
         last_connection: Integer default 0,
-        status: String default "enabled", //enabled, disabled, pending
+        status: String,
     }
 
     AllowedHardware{
@@ -183,6 +183,50 @@ impl Peer {
         };
 
         node
+    }
+
+    pub fn validate(verifying_key: &Vec<u8>, peer: &Node) -> Result<(), Error> {
+        if peer.room_id.is_some() {
+            return Err(Error::InvalidPeerNode("room not empty".to_string()));
+        }
+
+        if !peer.verifying_key.eq(verifying_key) {
+            return Err(Error::InvalidPeerNode(
+                "verifying key missmatched".to_string(),
+            ));
+        }
+
+        if !peer._entity.eq(PEER_ENT_SHORT) {
+            return Err(Error::InvalidPeerNode("Invalid Entity".to_string()));
+        }
+        if peer.verify().is_err() {
+            return Err(Error::InvalidPeerNode("Invalid Signature".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn pub_key(peer: &Node) -> Result<Vec<u8>, Error> {
+        if peer._json.is_none() {
+            return Err(Error::InvalidPeerNode("empty json".to_string()));
+        }
+        let json = peer._json.as_ref().unwrap();
+        let json: serde_json::Value = serde_json::from_str(json)?;
+        let map = json
+            .as_object()
+            .ok_or(Error::InvalidJsonObject("Peer json".to_string()))?;
+
+        let pub_key = map
+            .get(PEER_PUB_KEY_SHORT)
+            .ok_or(Error::InvalidJsonObject("Peer pub_key".to_string()))?;
+
+        let pub_key = pub_key.as_str().ok_or(Error::InvalidJsonObject(
+            "Peer pub_key is not a string".to_string(),
+        ))?;
+
+        let key = base64_decode(pub_key.as_bytes())?;
+
+        Ok(key)
     }
 
     pub fn get_missing(
@@ -345,6 +389,36 @@ impl Peer {
         }
         Ok(())
     }
+
+    pub fn get_node(
+        verifying_key: Vec<u8>,
+        conn: &Connection,
+    ) -> Result<Option<Node>, rusqlite::Error> {
+        let mut exists_stmt = conn.prepare_cached(
+            "SELECT id, room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature  
+            FROM _node 
+            WHERE _entity=? 
+            AND verifying_key =?
+            AND room_id IS NULL",
+        )?;
+        let peer: Option<Node> = exists_stmt
+            .query_row((PEER_ENT_SHORT, &verifying_key), |row| {
+                Ok(Node {
+                    id: row.get(0)?,
+                    room_id: row.get(1)?,
+                    cdate: row.get(2)?,
+                    mdate: row.get(3)?,
+                    _entity: row.get(4)?,
+                    _json: row.get(5)?,
+                    _binary: row.get(6)?,
+                    verifying_key: row.get(7)?,
+                    _signature: row.get(8)?,
+                    _local_id: None,
+                })
+            })
+            .optional()?;
+        Ok(peer)
+    }
 }
 
 pub struct PeerNodes {
@@ -392,6 +466,24 @@ impl Writeable for PeerNodes {
     }
 }
 
+pub enum Status {
+    Enabled,
+    Pending,
+    Disabled,
+}
+impl Status {
+    pub fn value(&self) -> &str {
+        match self {
+            Status::Enabled => STATUS_ENABLED,
+            Status::Pending => STATUS_PENDING,
+            Status::Disabled => STATUS_DISABLED,
+        }
+    }
+}
+
+pub const STATUS_ENABLED: &str = "enabled";
+pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_DISABLED: &str = "disabled";
 #[derive(Deserialize, Clone)]
 pub struct AllowedPeer {
     pub peer: Peer,
@@ -399,13 +491,22 @@ pub struct AllowedPeer {
     pub meeting_token: String,
 }
 impl AllowedPeer {
-    pub fn create(id: Uid, private_room_id: Uid, token: String, peer_id: Uid) -> (Node, Edge) {
+    pub fn create(
+        id: Uid,
+        private_room_id: Uid,
+        token: String,
+        peer_id: Uid,
+        status: Status,
+    ) -> (Node, Edge) {
         let json = format!(
             r#"{{ 
                 "{}": "{}",
-                "{}": "enabled"
+                "{}": "{}"
             }}"#,
-            ALLOWED_PEER_TOKEN_SHORT, token, ALLOWED_PEER_STATUS_SHORT
+            ALLOWED_PEER_TOKEN_SHORT,
+            token,
+            ALLOWED_PEER_STATUS_SHORT,
+            status.value()
         );
 
         let node = Node {
@@ -434,8 +535,9 @@ impl AllowedPeer {
         room_id: &str,
         verifying_key: &str,
         meeting_token: &str,
+        status: Status,
         db: &GraphDatabaseService,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<Self, crate::Error> {
         let query = "query {
             result: sys.Peer(verifying_key=$key){
                 id
@@ -448,13 +550,14 @@ impl AllowedPeer {
         let peer_str = db.query(query, Some(param)).await?;
 
         let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let result: Vec<Peer> = query_result.get("result")?;
+        let mut result: Vec<Peer> = query_result.get("result")?;
 
         if result.is_empty() {
             return Err(crate::Error::from(Error::UnknownPeer()));
         }
 
-        let peer_id = &result[0].id;
+        let peer_obj = result.pop().unwrap();
+        let peer_id = peer_obj.id.clone();
 
         let query = "query {
             result: sys.AllowedPeer(room_id=$room_id){
@@ -473,37 +576,43 @@ impl AllowedPeer {
         param.add("peer_id", peer_id.to_string())?;
         let peer_str = db.query(query, Some(param)).await?;
         let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let result: Vec<AllowedPeer> = query_result.get("result")?;
+        let mut result: Vec<AllowedPeer> = query_result.get("result")?;
 
         if !result.is_empty() {
-            return Ok(());
+            return Ok(result.pop().unwrap());
         }
 
         let mut param = Parameters::new();
         param.add("room_id", room_id.to_string())?;
         param.add("peer_id", peer_id.to_string())?;
         param.add("meeting_token", meeting_token.to_string())?;
+        param.add("status", status.value().to_string())?;
         db.mutate(
             "mutate {
                 result: sys.AllowedPeer{
                     room_id: $room_id
                     meeting_token: $meeting_token
-                    status: true
+                    status: $status
                     peer: {id:$peer_id}
                 }",
             Some(param),
         )
         .await?;
 
-        Ok(())
+        Ok(Self {
+            peer: peer_obj,
+            status: status.value().to_string(),
+            meeting_token: meeting_token.to_string(),
+        })
     }
 
     pub async fn get(
         room_id: String,
+        status: Status,
         db: &GraphDatabaseService,
     ) -> Result<Vec<AllowedPeer>, crate::Error> {
         let query = "query {
-            result: sys.AllowedPeer(room_id=$room_id){
+            result: sys.AllowedPeer(room_id=$room_id, status=$status){
                 meeting_token
                 status
                 peer {
@@ -515,6 +624,7 @@ impl AllowedPeer {
 
         let mut param = Parameters::new();
         param.add("room_id", room_id)?;
+        param.add("status", status.value().to_string())?;
 
         let peer_str = db.query(query, Some(param)).await?;
         let query_result: QueryResult = QueryResult::new(&peer_str)?;
@@ -574,6 +684,7 @@ pub async fn init_allowed_peers(
             private_room_id,
             base64_encode(&token),
             peer_uid,
+            Status::Enabled,
         );
         all_node.sign(signing_key)?;
         all_edge.sign(signing_key)?;
@@ -672,9 +783,62 @@ pub struct OwnedInvite {
     pub authorisation: Option<Uid>,
 }
 impl OwnedInvite {
-    pub async fn delete(&self, db: &GraphDatabaseService) -> Result<(), Error> {
+    pub async fn decrease_and_delete(
+        room_id: String,
+        id: Uid,
+        db: &GraphDatabaseService,
+    ) -> Result<bool, crate::Error> {
         let mut param = Parameters::new();
-        param.add("id", uid_encode(&self.id))?;
+        param.add("room_id", room_id)?;
+        param.add("id", uid_encode(&id))?;
+        let res = db
+            .query(
+                "query {
+            sys.OwnedInvite(room_id=$room_id, id=$id){
+                remaining_use
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct Remaining {
+            remaining_use: i64,
+        }
+        let q = QueryResult::new(&res)?;
+        let remain: Vec<Remaining> = q.get("sys.OwnedInvite")?;
+        if remain.is_empty() {
+            return Ok(true);
+        }
+        let mut remaining = remain[0].remaining_use;
+        let mut deleted = false;
+        if remaining <= 1 {
+            Self::delete(id, db).await?;
+            deleted = true;
+        } else {
+            remaining -= 1;
+            let mut param = Parameters::new();
+            param.add("id", uid_encode(&id))?;
+            param.add("remaining", remaining)?;
+
+            db.mutate(
+                "mutate {
+                sys.OwnedInvite{
+                    id:$id
+                    remaining_use: $remaining
+                }
+            }",
+                Some(param),
+            )
+            .await?;
+        }
+        Ok(deleted)
+    }
+
+    pub async fn delete(id: Uid, db: &GraphDatabaseService) -> Result<(), Error> {
+        let mut param = Parameters::new();
+        param.add("id", uid_encode(&id))?;
         db.delete(
             "delete { 
             sys.OwnedInvite{
@@ -755,7 +919,15 @@ impl Invite {
         default_room: Option<DefaultRoom>,
         application: String,
         db: &GraphDatabaseService,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, OwnedInvite), Error> {
+        let (default_room_id, default_auth_id) = match default_room.as_ref() {
+            Some(r) => (
+                Some(uid_decode(&r.room)?),
+                Some(uid_decode(&r.authorisation)?),
+            ),
+            None => (None, None),
+        };
+
         let (room, auth) = match default_room {
             Some(r) => (Some(r.room), Some(r.authorisation)),
             None => (None, None),
@@ -786,11 +958,66 @@ impl Invite {
         let hash_val = Self::hash_val(invite_id, &application);
         let (_key, invite_sign) = db.sign(hash_val).await;
 
-        Ok(Self {
+        let invite = Self {
             invite_id,
             application,
             invite_sign,
-        })
+        };
+
+        let owned = OwnedInvite {
+            id: invite_id,
+            remaining_use: num_use,
+            room: default_room_id,
+            authorisation: default_auth_id,
+        };
+
+        Ok((invite, owned))
+    }
+
+    pub async fn delete(
+        room_id: String,
+        invite_id: Uid,
+        db: &GraphDatabaseService,
+    ) -> Result<(), crate::Error> {
+        let mut param = Parameters::new();
+        param.add("room_id", room_id.clone())?;
+        param.add("invite_id", uid_encode(&invite_id))?;
+
+        let result = db
+            .query(
+                "query{
+        sys.Invite(room_id=$room_id, invite_id = $invite_id){
+                id
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct InvId {
+            id: String,
+        }
+
+        let q = QueryResult::new(&result)?;
+        let ids: Vec<InvId> = q.get("sys.Invite")?;
+
+        for id in ids {
+            let mut param = Parameters::new();
+            param.add("id", id.id)?;
+
+            db.delete(
+                "delete {
+            sys.Invite{
+                $id
+            }
+        }",
+                Some(param),
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 
     pub async fn insert(
@@ -842,48 +1069,6 @@ impl Invite {
             Some(param),
         )
         .await?;
-        Ok(())
-    }
-
-    async fn delete(&self, room_id: String, db: &GraphDatabaseService) -> Result<(), crate::Error> {
-        let mut param = Parameters::new();
-        param.add("room_id", room_id)?;
-        param.add("invite_id", uid_encode(&self.invite_id))?;
-
-        let result = db
-            .query(
-                "query{
-            sys.Invite(room_id=$room_id, invite_id = $invite_id){
-                    id
-                }
-            }",
-                Some(param),
-            )
-            .await?;
-
-        #[derive(Deserialize)]
-        struct InvId {
-            id: String,
-        }
-
-        let q = QueryResult::new(&result)?;
-        let ids: Vec<InvId> = q.get("sys.Invite")?;
-
-        for id in ids {
-            let mut param = Parameters::new();
-            param.add("id", id.id)?;
-
-            db.delete(
-                "delete {
-                sys.Invite{
-                    $id
-                }
-            }",
-                Some(param),
-            )
-            .await?;
-        }
-
         Ok(())
     }
 
@@ -1152,6 +1337,7 @@ mod tests {
         .unwrap();
 
         let list = app.get_allowed_peers(private_room).await.unwrap();
+
         assert_eq!(1, list.len());
     }
 
@@ -1230,7 +1416,7 @@ mod tests {
         .await
         .unwrap();
 
-        let invite = Invite::create(
+        let (invite, _) = Invite::create(
             uid_encode(&private_room),
             1,
             None,
@@ -1247,7 +1433,7 @@ mod tests {
         assert_eq!(prod_list.len(), 1);
 
         for prod in prod_list {
-            prod.delete(&db).await.unwrap();
+            OwnedInvite::delete(prod.id, &db).await.unwrap();
         }
 
         invite.insert(uid_encode(&private_room), &db).await.unwrap();
@@ -1262,13 +1448,60 @@ mod tests {
 
         let ins_list = Invite::list(uid_encode(&private_room), &db).await.unwrap();
         assert_eq!(ins_list.len(), 1);
-        invite.delete(uid_encode(&private_room), &db).await.unwrap();
+        Invite::delete(uid_encode(&private_room), invite.invite_id, &db)
+            .await
+            .unwrap();
 
         let ins_list = Invite::list(uid_encode(&private_room), &db).await.unwrap();
         assert_eq!(ins_list.len(), 0);
 
         let bin_invite = bincode::serialize(&invite).unwrap();
         println!("Invite: {}", base64_encode(&bin_invite));
+
+        drop(db);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invite_remaining() {
+        init_database_path();
+
+        let path: PathBuf = DATA_PATH.into();
+        let secret = random32();
+        let pub_key = &random32();
+
+        let (db, _verifying_key, private_room) = GraphDatabaseService::start(
+            "authorisation app",
+            "",
+            &secret,
+            &pub_key,
+            path.clone(),
+            &Configuration::default(),
+            EventService::new(),
+        )
+        .await
+        .unwrap();
+
+        let (invite, _) = Invite::create(
+            uid_encode(&private_room),
+            2,
+            None,
+            "authorisation app".to_string(),
+            &db,
+        )
+        .await
+        .unwrap();
+
+        let deleted =
+            OwnedInvite::decrease_and_delete(uid_encode(&private_room), invite.invite_id, &db)
+                .await
+                .unwrap();
+        assert!(!deleted);
+
+        let deleted =
+            OwnedInvite::decrease_and_delete(uid_encode(&private_room), invite.invite_id, &db)
+                .await
+                .unwrap();
+        assert!(deleted);
 
         drop(db);
     }

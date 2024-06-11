@@ -8,6 +8,7 @@ use std::{io, net::SocketAddr};
 use thiserror::Error;
 
 use crate::{
+    database::node::Node,
     security::{HardwareFingerprint, MeetingToken},
     Uid,
 };
@@ -25,8 +26,8 @@ pub struct ConnectionInfo {
 pub enum ConnectionType {
     SelfPeer(HardwareFingerprint),
     OtherPeer(Vec<u8>),
-    Invite(Uid, Vec<u8>),
-    OwnedInvite(Uid, Vec<u8>),
+    Invite(Uid, Node),
+    OwnedInvite(Uid, Node),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
