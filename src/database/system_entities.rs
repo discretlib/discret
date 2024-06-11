@@ -156,10 +156,9 @@ sys{
         invite_sign: Base64,
     }
 
-
 }"#;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Peer {
     pub id: String,
     pub verifying_key: String,
@@ -393,7 +392,7 @@ impl Writeable for PeerNodes {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct AllowedPeer {
     pub peer: Peer,
     pub status: String,
@@ -665,11 +664,12 @@ impl AllowedHardware {
     }
 }
 
+#[derive(Clone)]
 pub struct OwnedInvite {
-    id: Uid,
-    remaining_use: i64,
-    room: Option<Uid>,
-    authorisation: Option<Uid>,
+    pub id: Uid,
+    pub remaining_use: i64,
+    pub room: Option<Uid>,
+    pub authorisation: Option<Uid>,
 }
 impl OwnedInvite {
     pub async fn delete(&self, db: &GraphDatabaseService) -> Result<(), Error> {
@@ -687,7 +687,7 @@ impl OwnedInvite {
         Ok(())
     }
 
-    pub async fn list(
+    pub async fn list_valid(
         room_id: String,
         db: &GraphDatabaseService,
     ) -> Result<Vec<Self>, crate::Error> {
@@ -697,7 +697,7 @@ impl OwnedInvite {
         let result = db
             .query(
                 "query{
-            sys.OwnedInvite(room_id=$room_id, order_by(mdate desc)){
+            sys.OwnedInvite(room_id=$room_id, remaining_use > 0, order_by(mdate desc)){
                 id
                 remaining_use
                 room
@@ -742,11 +742,11 @@ impl OwnedInvite {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Invite {
-    invite_id: Uid,
-    application: String,
-    invite_sign: Vec<u8>,
+    pub invite_id: Uid,
+    pub application: String,
+    pub invite_sign: Vec<u8>,
 }
 impl Invite {
     pub async fn create(
@@ -1240,7 +1240,7 @@ mod tests {
         .await
         .unwrap();
 
-        let prod_list = OwnedInvite::list(uid_encode(&private_room), &db)
+        let prod_list = OwnedInvite::list_valid(uid_encode(&private_room), &db)
             .await
             .unwrap();
 
@@ -1255,7 +1255,7 @@ mod tests {
         invite.insert(uid_encode(&private_room), &db).await.unwrap();
         invite.insert(uid_encode(&private_room), &db).await.unwrap();
 
-        let prod_list = OwnedInvite::list(uid_encode(&private_room), &db)
+        let prod_list = OwnedInvite::list_valid(uid_encode(&private_room), &db)
             .await
             .unwrap();
         assert_eq!(prod_list.len(), 0);

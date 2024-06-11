@@ -1,4 +1,7 @@
-use crate::Error;
+use crate::{
+    database::system_entities::{Invite, OwnedInvite},
+    uid_encode, Error,
+};
 use quinn::{Connection, VarInt};
 use std::{
     collections::{HashMap, HashSet},
@@ -21,12 +24,20 @@ use crate::{
 
 use super::{endpoint::DiscretEndpoint, multicast::MulticastMessage, Announce, AnnounceHeader};
 
+#[derive(Clone)]
+pub enum TokenType {
+    AllowedPeer(AllowedPeer),
+    OwnedInvite(OwnedInvite),
+    Invite(Invite),
+}
 //indicate that an other connection has be kept
 const REASON_CONN_ELECTION: u16 = 1;
 
 //the remote peer does not hav to knwow why the connection is closed
 pub const REASON_UNKNOWN: u16 = 2;
 
+//with a 7 byte token, fits into a 4096 message
+pub const MAX_ANNOUNCE_TOKENS: usize = 512;
 pub struct PeerManager {
     endpoint: DiscretEndpoint,
     multicast_discovery: mpsc::Sender<MulticastMessage>,
@@ -36,10 +47,15 @@ pub struct PeerManager {
     pub meeting_secret: MeetingSecret,
 
     pub allowed_peers: Vec<AllowedPeer>,
-    pub allowed_token: HashMap<MeetingToken, Vec<Vec<u8>>>,
+
+    owned_invites: Vec<OwnedInvite>,
+    invites: Vec<Invite>,
+
+    pub allowed_token: HashMap<MeetingToken, Vec<TokenType>>,
 
     connection_progress: HashMap<[u8; 32], bool>,
-    connected: HashMap<[u8; 32], (Connection, Uid)>,
+    connected: HashMap<[u8; 32], (Connection, Uid, MeetingToken)>,
+    connected_tokens: HashMap<MeetingToken, HashSet<[u8; 32]>>,
     local_connection: HashSet<[u8; 32]>,
 
     db: GraphDatabaseService,
@@ -62,14 +78,26 @@ impl PeerManager {
         meeting_secret: MeetingSecret,
     ) -> Result<Self, crate::Error> {
         let allowed_peers = db.get_allowed_peers(private_room_id).await?;
-        let mut allowed_token: HashMap<MeetingToken, Vec<Vec<u8>>> = HashMap::new();
+        let mut allowed_token: HashMap<MeetingToken, Vec<TokenType>> = HashMap::new();
 
-        for peers in &allowed_peers {
-            let token = MeetingSecret::decode_token(&peers.meeting_token)?;
+        for peer in &allowed_peers {
+            let token = MeetingSecret::decode_token(&peer.meeting_token)?;
             let entry = allowed_token.entry(token).or_default();
-            let verifying_key = base64_decode(peers.peer.verifying_key.as_bytes())?;
+            entry.push(TokenType::AllowedPeer(peer.clone()));
+        }
 
-            entry.push(verifying_key);
+        let owned_invites = OwnedInvite::list_valid(uid_encode(&private_room_id), &db).await?;
+        for owned in &owned_invites {
+            let token = MeetingSecret::derive_token("PeerManager", &owned.id);
+            let entry = allowed_token.entry(token).or_default();
+            entry.push(TokenType::OwnedInvite(owned.clone()));
+        }
+        let invites = Invite::list(uid_encode(&private_room_id), &db).await?;
+        for invite in &invites {
+            let uid = &invite.invite_id;
+            let token = MeetingSecret::derive_token("PeerManager", uid);
+            let entry = allowed_token.entry(token).or_default();
+            entry.push(TokenType::Invite(invite.clone()));
         }
 
         let probe_value = random32();
@@ -84,8 +112,11 @@ impl PeerManager {
             verifying_key,
             meeting_secret,
             allowed_peers,
+            owned_invites,
+            invites,
             allowed_token,
             connected: HashMap::new(),
+            connected_tokens: HashMap::new(),
             connection_progress: HashMap::new(),
             local_connection: HashSet::new(),
             db,
@@ -103,6 +134,7 @@ impl PeerManager {
             for tok in &self.allowed_peers {
                 tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
             }
+
             let ipv4_announce = Announce {
                 header: ipv4_header.clone(),
                 tokens,
@@ -148,24 +180,28 @@ impl PeerManager {
         Ok(false)
     }
 
-    pub async fn process_announce(&mut self, a: Announce, address: SocketAddr) {
+    pub async fn process_announce(
+        &mut self,
+        a: Announce,
+        address: SocketAddr,
+    ) -> Result<(), crate::Error> {
         if self.ipv4_header.is_none() {
-            return;
+            return Ok(());
         }
         if !a.header.socket_adress.ip().eq(&address.ip()) {
-            return;
+            return Ok(());
         }
         if a.header.endpoint_id.eq(&self.endpoint.id) {
-            return;
+            return Ok(());
         }
 
         let circuit_id = Self::circuit_id(a.header.endpoint_id, self.endpoint.id);
         if self.connected.contains_key(&circuit_id) {
-            return;
+            return Ok(());
         }
         let connection_progress = self.connection_progress.entry(circuit_id).or_default();
         if *connection_progress {
-            return;
+            return Ok(());
         }
 
         let header = self.ipv4_header.as_ref().unwrap();
@@ -173,19 +209,31 @@ impl PeerManager {
         for candidate in &a.tokens {
             if let Some(verifying_keys) = self.allowed_token.get(candidate) {
                 if !*connection_progress {
-                    for verifying_key in verifying_keys {
-                        let mut include_hardware = false;
+                    for token_type in verifying_keys {
                         let hash_to_verify = a.header.hash_for_signature();
                         let signature = a.header.signature.clone();
-                        let validated = self
-                            .verify_service
-                            .verify_hash(signature, hash_to_verify, verifying_key.clone())
-                            .await;
+                        let (validated, include_hardware) = match token_type {
+                            TokenType::AllowedPeer(peer) => {
+                                let verifying_key =
+                                    base64_decode(peer.peer.verifying_key.as_bytes())?;
+
+                                let validatd = self
+                                    .verify_service
+                                    .verify_hash(signature, hash_to_verify, verifying_key.clone())
+                                    .await;
+                                let mut include_hardware = false;
+                                if verifying_key.eq(&self.verifying_key) {
+                                    include_hardware = true;
+                                }
+                                (validatd, include_hardware)
+                            }
+                            TokenType::OwnedInvite(_) => (true, false),
+                            TokenType::Invite(_) => (true, false),
+                        };
+
                         if validated {
                             *connection_progress = true;
-                            if verifying_key.eq(&self.verifying_key) {
-                                include_hardware = true;
-                            }
+
                             self.local_connection.insert(circuit_id);
                             let target: SocketAddr = a.header.socket_adress;
 
@@ -205,6 +253,8 @@ impl PeerManager {
                                     a.header.certificate_hash,
                                     a.header.endpoint_id,
                                     include_hardware,
+                                    *candidate,
+                                    token_type.clone(),
                                 ))
                                 .await;
                         }
@@ -212,6 +262,7 @@ impl PeerManager {
                 }
             }
         }
+        Ok(())
     }
 
     pub async fn process_initiate_connection(
@@ -219,40 +270,50 @@ impl PeerManager {
         header: AnnounceHeader,
         token: MeetingToken,
         address: SocketAddr,
-    ) {
+    ) -> Result<(), crate::Error> {
         if self.ipv4_header.is_none() {
-            return;
+            return Ok(());
         }
         if !header.socket_adress.ip().eq(&address.ip()) {
-            return;
+            return Ok(());
         }
         if header.endpoint_id == self.endpoint.id {
-            return;
+            return Ok(());
         }
         let circuit_id = Self::circuit_id(header.endpoint_id, self.endpoint.id);
         let connection_progress = self.connection_progress.entry(circuit_id).or_default();
         if *connection_progress {
-            return;
+            return Ok(());
         }
         if self.connected.contains_key(&circuit_id) {
-            return;
+            return Ok(());
         }
 
         if let Some(verifying_keys) = self.allowed_token.get(&token) {
             if !*connection_progress {
-                for verifying_key in verifying_keys {
-                    let mut include_hardware = false;
+                for token_type in verifying_keys {
                     let hash_to_verify = header.hash_for_signature();
                     let signature = header.signature.clone();
-                    let validated = self
-                        .verify_service
-                        .verify_hash(signature, hash_to_verify, verifying_key.clone())
-                        .await;
+                    let (validated, include_hardware) = match token_type {
+                        TokenType::AllowedPeer(peer) => {
+                            let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
+
+                            let validatd = self
+                                .verify_service
+                                .verify_hash(signature, hash_to_verify, verifying_key.clone())
+                                .await;
+                            let mut include_hardware = false;
+                            if verifying_key.eq(&self.verifying_key) {
+                                include_hardware = true;
+                            }
+                            (validatd, include_hardware)
+                        }
+                        TokenType::OwnedInvite(_) => (true, false),
+                        TokenType::Invite(_) => (true, false),
+                    };
+
                     if validated {
                         *connection_progress = true;
-                        if verifying_key.eq(&self.verifying_key) {
-                            include_hardware = true;
-                        }
                         let target: SocketAddr = header.socket_adress;
 
                         let _ = self
@@ -263,29 +324,45 @@ impl PeerManager {
                                 header.certificate_hash,
                                 header.endpoint_id,
                                 include_hardware,
+                                token,
+                                token_type.clone(),
                             ))
                             .await;
                     }
                 }
             }
         }
+        Ok(())
     }
 
     //peer to peer connectoin tends to create two connections
     //we arbitrarily remove the on the highest conn_id (the newest conn, Uids starts with a timestamps)
-    pub fn add_connection(&mut self, circuit_id: [u8; 32], conn: Connection, conn_id: Uid) {
+    pub fn add_connection(
+        &mut self,
+        circuit_id: [u8; 32],
+        conn: Connection,
+        conn_id: Uid,
+        token: MeetingToken,
+    ) {
         self.connection_progress.remove(&circuit_id);
 
-        if let Some((old_conn, old_conn_id)) = self.connected.remove(&circuit_id) {
+        if let Some((old_conn, old_conn_id, token)) = self.connected.remove(&circuit_id) {
             if old_conn_id > conn_id {
                 old_conn.close(VarInt::from(REASON_CONN_ELECTION), "".as_bytes());
-                self.connected.insert(circuit_id, (conn, conn_id));
+                self.connected.insert(circuit_id, (conn, conn_id, token));
+                let token_entry = self.connected_tokens.entry(token).or_default();
+                token_entry.insert(circuit_id);
             } else {
                 conn.close(VarInt::from(REASON_CONN_ELECTION), "".as_bytes());
-                self.connected.insert(circuit_id, (old_conn, old_conn_id));
+                self.connected
+                    .insert(circuit_id, (old_conn, old_conn_id, token));
+                let token_entry = self.connected_tokens.entry(token).or_default();
+                token_entry.insert(circuit_id);
             }
         } else {
-            self.connected.insert(circuit_id, (conn, conn_id));
+            self.connected.insert(circuit_id, (conn, conn_id, token));
+            let token_entry = self.connected_tokens.entry(token).or_default();
+            token_entry.insert(circuit_id);
         }
     }
 
@@ -298,12 +375,26 @@ impl PeerManager {
     ) -> bool {
         let mut disconnected = false;
         let conn = self.connected.get(&circuit_id);
-        if let Some((conn, uid)) = conn {
+        if let Some((conn, uid, token)) = conn {
             if conn_id.eq(uid) {
                 conn.close(VarInt::from(error_code), message.as_bytes());
-                self.connected.remove(&circuit_id);
-                self.local_connection.remove(&circuit_id);
-                disconnected = true
+                let token = token.clone();
+                let circuit = circuit_id.clone();
+                self.connected.remove(&circuit);
+                self.local_connection.remove(&circuit);
+                disconnected = true;
+                let mut remove_entry = false;
+
+                if let Some(tokens) = self.connected_tokens.get_mut(&token) {
+                    tokens.remove(&circuit);
+                    if tokens.is_empty() {
+                        remove_entry = true;
+                    }
+                }
+
+                if remove_entry {
+                    self.connected_tokens.remove(&token);
+                }
             }
         }
         disconnected
@@ -388,5 +479,141 @@ impl PeerManager {
             }
         };
         Ok(valid)
+    }
+
+    pub fn get_self_peer_expected_key(&self, token: MeetingToken) -> Result<Vec<u8>, crate::Error> {
+        let o = self.allowed_token.get(&token);
+        match o {
+            Some(token_types) => {
+                let mut valid = Vec::new();
+                for token_type in token_types {
+                    match token_type {
+                        TokenType::AllowedPeer(allowed) => {
+                            let verifying_key =
+                                base64_decode(allowed.peer.verifying_key.as_bytes())?;
+                            if verifying_key.eq(&self.verifying_key) {
+                                valid = verifying_key
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if valid.is_empty() {
+                    return Err(crate::Error::InvalidConnection(
+                        "Invalid Self Connection".to_string(),
+                    ));
+                }
+                Ok(valid)
+            }
+
+            None => {
+                return Err(crate::Error::InvalidConnection(
+                    "Self Connection: Invalid Meeting Token".to_string(),
+                ))
+            }
+        }
+    }
+
+    pub fn get_other_peer_expected_key(
+        &self,
+        token: MeetingToken,
+        key: &Vec<u8>,
+    ) -> Result<Vec<u8>, crate::Error> {
+        let o = self.allowed_token.get(&token);
+        match o {
+            Some(token_types) => {
+                let mut valid = Vec::new();
+                for token_type in token_types {
+                    match token_type {
+                        TokenType::AllowedPeer(allowed) => {
+                            let verifying_key =
+                                base64_decode(allowed.peer.verifying_key.as_bytes())?;
+                            if verifying_key.eq(key) {
+                                valid = verifying_key
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if valid.is_empty() {
+                    return Err(crate::Error::InvalidConnection(
+                        "Invalid Peer Connection".to_string(),
+                    ));
+                }
+                Ok(valid)
+            }
+
+            None => {
+                return Err(crate::Error::InvalidConnection(
+                    "Peer Connection: Invalid Meeting Token".to_string(),
+                ))
+            }
+        }
+    }
+
+    pub fn validate_associated_owned_invite(
+        &self,
+        invite: Uid,
+        token: MeetingToken,
+    ) -> Result<(), crate::Error> {
+        let o = self.allowed_token.get(&token);
+        match o {
+            Some(token_types) => {
+                let mut valid = false;
+                for token_type in token_types {
+                    match token_type {
+                        TokenType::OwnedInvite(owned) => {
+                            if owned.id.eq(&invite) {
+                                valid = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(crate::Error::InvalidConnection(
+                        "Invite Connection: Associated OwnedInvite not found".to_string(),
+                    ))
+                }
+            }
+            None => Err(crate::Error::InvalidConnection(
+                "Invite Connection: Invalid Meeting Token".to_string(),
+            )),
+        }
+    }
+
+    pub fn validate_associated_invite(
+        &self,
+        owned_invite: Uid,
+        token: MeetingToken,
+    ) -> Result<(), crate::Error> {
+        let o = self.allowed_token.get(&token);
+        match o {
+            Some(token_types) => {
+                let mut valid = false;
+                for token_type in token_types {
+                    match token_type {
+                        TokenType::Invite(invite) => {
+                            if invite.invite_id.eq(&owned_invite) {
+                                valid = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(crate::Error::InvalidConnection(
+                        "Owned Invite Connection: Associated Invite not found".to_string(),
+                    ))
+                }
+            }
+            None => Err(crate::Error::InvalidConnection(
+                "Owned Invite Connection: Invalid Meeting Token".to_string(),
+            )),
+        }
     }
 }

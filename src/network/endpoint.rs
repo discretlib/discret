@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use x509_parser::{certificate::X509Certificate, der_parser::asn1_rs::FromDer};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -21,11 +20,13 @@ use tokio::{
 use crate::{
     log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, hash, new_uid, random_domain_name, HardwareFingerprint, Uid},
+    security::{self, hash, new_uid, random_domain_name, HardwareFingerprint, MeetingToken, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error};
+use super::{
+    peer_manager::TokenType, shared_buffers::SharedBuffers, ConnectionInfo, ConnectionType, Error,
+};
 
 //Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
@@ -42,7 +43,7 @@ static QUERY_STREAM: u8 = 2;
 static EVENT_STREAM: u8 = 3;
 
 pub enum EndpointMessage {
-    InitiateConnection(SocketAddr, [u8; 32], Uid, bool),
+    InitiateConnection(SocketAddr, [u8; 32], Uid, bool, MeetingToken, TokenType),
 }
 
 pub struct DiscretEndpoint {
@@ -101,6 +102,8 @@ impl DiscretEndpoint {
                         cert_hash,
                         remote_id,
                         send_hardware,
+                        meeting_token,
+                        token_type,
                     ) => {
                         Self::initiate_connection(
                             cert_verifier.clone(),
@@ -108,6 +111,8 @@ impl DiscretEndpoint {
                             remote_id,
                             address,
                             cert_hash,
+                            meeting_token,
+                            token_type,
                             &peer_s,
                             &logs,
                             &ipv4,
@@ -253,6 +258,8 @@ impl DiscretEndpoint {
         remote_id: Uid,
         address: SocketAddr,
         cert_hash: [u8; 32],
+        meeting_token: MeetingToken,
+        token_type: TokenType,
         peer_service: &PeerConnectionService,
         log: &LogService,
         ipv4_endpoint: &Endpoint,
@@ -299,17 +306,46 @@ impl DiscretEndpoint {
                             Ok(conn) => {
                                 let connnection_id = new_uid();
 
-                                let hardware = if send_hardware {
-                                    Some(hardware.clone())
-                                } else {
-                                    None
-                                };
+                                let info = match &token_type {
+                                    TokenType::AllowedPeer(_) => {
+                                        let conn_type: ConnectionType = if send_hardware {
+                                            ConnectionType::SelfPeer(hardware.clone())
+                                        } else {
+                                            ConnectionType::OtherPeer(verifying_key)
+                                        };
 
-                                let info = ConnectionInfo {
-                                    endpoint_id,
-                                    remote_id,
-                                    connection_id: connnection_id,
-                                    hardware,
+                                        ConnectionInfo {
+                                            endpoint_id,
+                                            remote_id,
+                                            conn_id: connnection_id,
+                                            meeting_token,
+                                            conn_type,
+                                        }
+                                    }
+                                    TokenType::OwnedInvite(owned_inv) => {
+                                        let conn_type = ConnectionType::OwnedInvite(
+                                            owned_inv.id,
+                                            verifying_key,
+                                        );
+                                        ConnectionInfo {
+                                            endpoint_id,
+                                            remote_id,
+                                            conn_id: connnection_id,
+                                            meeting_token,
+                                            conn_type,
+                                        }
+                                    }
+                                    TokenType::Invite(invite) => {
+                                        let conn_type =
+                                            ConnectionType::Invite(invite.invite_id, verifying_key);
+                                        ConnectionInfo {
+                                            endpoint_id,
+                                            remote_id,
+                                            conn_id: connnection_id,
+                                            meeting_token,
+                                            conn_type,
+                                        }
+                                    }
                                 };
 
                                 if let Err(e) = Self::start_connection(
@@ -786,7 +822,6 @@ impl rustls::client::danger::ServerCertVerifier for ServerCertVerifier {
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         let server_name = server_name.to_str().to_string();
-        println!("name: {}", server_name);
         let cert = self.get(&server_name);
         match cert {
             Some(cert) => {

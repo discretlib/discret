@@ -26,6 +26,7 @@ use crate::{
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
+    network::ConnectionInfo,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{base64_encode, random32, Uid},
     signature_verification_service::SignatureVerificationService,
@@ -139,7 +140,8 @@ impl LocalPeerService {
         mut remote_event: Receiver<RemoteEvent>,
         mut local_event: broadcast::Receiver<LocalEvent>,
         circuit_id: [u8; 32],
-        connection_id: Uid,
+        connection_info: ConnectionInfo,
+        expected_peer: Vec<u8>,
         remote_verifying_key: Arc<Mutex<Vec<u8>>>,
         db: GraphDatabaseService,
         lock_service: RoomLockService,
@@ -162,9 +164,11 @@ impl LocalPeerService {
                 let proof: ProveAnswer =
                     Self::query(&query_service, Query::ProveIdentity(challenge.clone())).await?;
                 proof.verify(&challenge)?;
-                {
+
+                if expected_peer.eq(&proof.verifying_key) {
                     let mut key = remote_verifying_key.lock().await;
                     *key = proof.verifying_key.clone();
+                } else {
                 }
 
                 Self::send_event(&event_sender, RemoteEvent::Ready)
@@ -172,7 +176,7 @@ impl LocalPeerService {
                     .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
 
                 peer_service
-                    .connected(proof.verifying_key, connection_id)
+                    .connected(proof.verifying_key, connection_info.conn_id)
                     .await;
                 Ok(())
             }
@@ -182,7 +186,7 @@ impl LocalPeerService {
                 //log_service.error("LocalPeerServiceInit".to_string(), e);
                 let key = remote_verifying_key.lock().await;
                 peer_service
-                    .disconnect(key.clone(), circuit_id, connection_id)
+                    .disconnect(key.clone(), circuit_id, connection_info.conn_id)
                     .await;
                 return;
             }
@@ -251,7 +255,7 @@ impl LocalPeerService {
             Self::cleanup(&lock_service, rooms).await;
             let key = remote_verifying_key.lock().await;
             peer_service
-                .disconnect(key.clone(), circuit_id, connection_id)
+                .disconnect(key.clone(), circuit_id, connection_info.conn_id)
                 .await;
         });
     }

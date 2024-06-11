@@ -73,7 +73,9 @@ pub use crate::{
     },
     event_service::Event,
     log_service::{Log, LogMessage},
-    security::{base64_decode, base64_encode, default_uid, derive_pass_phrase, uid_encode, Uid},
+    security::{
+        base64_decode, base64_encode, default_uid, derive_pass_phrase, uid_decode, uid_encode, Uid,
+    },
 };
 
 ///
@@ -144,6 +146,9 @@ pub enum Error {
 
     #[error("An error occured while computing daily logs: {0}")]
     ComputeDailyLog(String),
+
+    #[error("{0}")]
+    InvalidConnection(String),
 }
 
 #[derive(Clone)]

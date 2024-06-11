@@ -91,7 +91,7 @@ async fn main() {
     let private_room = uid_encode(&app.private_room());
     let stdin = io::stdin();
     let mut line = String::new();
-    println!("{}", "Write Something");
+    println!("{}", "Write Something!");
     loop {
         stdin.read_line(&mut line).unwrap();
         if line.starts_with("/q") {

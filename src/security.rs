@@ -245,7 +245,8 @@ pub fn random_domain_name() -> String {
     let vowels = vec!['a', 'e', 'i', 'o', 'u', 'y'];
     let extension = vec![
         ".com", ".org", ".net", ".us", ".co", ".biz", ".info", ".fr", ".uk", ".me", ".cn", ".de",
-        ".ly", ".in",
+        ".ly", ".in", ".eu", ".ca", ".coop", ".asia", ".cat", ".pro", ".ac", ".ad", ".ae", ".af",
+        ".ai", ".am",
     ];
     let size = num + min_value;
     let mut domain = String::new();
@@ -277,7 +278,7 @@ pub fn random32() -> [u8; 32] {
     random
 }
 
-pub const MEETING_TOKEN_SIZE: usize = 6;
+pub const MEETING_TOKEN_SIZE: usize = 7;
 pub type MeetingToken = [u8; MEETING_TOKEN_SIZE];
 ///
 /// Use Diffie Hellman to create an id to be used to announce yourself on the network to the other peers.

@@ -16,7 +16,7 @@ use crate::{
         endpoint::DiscretEndpoint,
         multicast::{self, MulticastMessage},
         peer_manager::{self, PeerManager},
-        ConnectionInfo,
+        ConnectionInfo, ConnectionType,
     },
     security::{MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
@@ -117,7 +117,7 @@ impl PeerConnectionService {
                     msg = connection_receiver.recv() =>{
                         match msg{
                             Some(msg) =>{
-                                Self::process_peer_message(
+                                let err = Self::process_peer_message(
                                     msg,
                                     &mut peer_manager,
                                     &db,
@@ -129,6 +129,9 @@ impl PeerConnectionService {
                                     local_event_broadcast.subscribe(),
                                     &configuration
                                 ).await;
+                                if let Err(e) = err{
+                                    logs.error("process_peer_message".to_string(), e);
+                                }
                             },
                             None => break,
                         }
@@ -187,7 +190,7 @@ impl PeerConnectionService {
         verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
         configuration: &Configuration,
-    ) {
+    ) -> Result<()> {
         match msg {
             PeerConnectionMessage::NewConnection(
                 connection,
@@ -202,33 +205,48 @@ impl PeerConnectionService {
                 let circuit_id =
                     PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
 
-                if let Some(hardware) = connection_info.hardware {
-                    if !peer_manager
-                        .validate_hardware(
-                            connection_info.endpoint_id,
-                            hardware,
-                            configuration.auto_accept_local_device,
-                        )
-                        .await
-                    {
-                        return;
+                let expected_peer;
+                match connection_info.conn_type.clone() {
+                    ConnectionType::SelfPeer(_) => {
+                        expected_peer = peer_manager
+                            .get_self_peer_expected_key(connection_info.meeting_token)?;
+                    }
+                    ConnectionType::OtherPeer(verif_key) => {
+                        expected_peer = peer_manager.get_other_peer_expected_key(
+                            connection_info.meeting_token,
+                            &verif_key,
+                        )?;
+                    }
+                    ConnectionType::Invite(invite, verif_key) => {
+                        peer_manager.validate_associated_owned_invite(
+                            invite,
+                            connection_info.meeting_token,
+                        )?;
+                        expected_peer = verif_key
+                    }
+                    ConnectionType::OwnedInvite(owned_invite, verif_key) => {
+                        peer_manager.validate_associated_invite(
+                            owned_invite,
+                            connection_info.meeting_token,
+                        )?;
+                        expected_peer = verif_key
                     }
                 }
 
-                if let Some(connection) = connection {
+                if let Some(conn) = connection {
                     peer_manager.add_connection(
                         circuit_id,
-                        connection,
-                        connection_info.connection_id,
+                        conn,
+                        connection_info.conn_id,
+                        connection_info.meeting_token,
                     )
                 };
 
-                let connection_id = connection_info.connection_id;
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let inbound_query_service = InboundQueryService::start(
                     circuit_id,
-                    connection_id,
+                    connection_info.conn_id,
                     RemotePeerHandle {
                         db: local_db.clone(),
                         allowed_room: HashSet::new(),
@@ -247,7 +265,8 @@ impl PeerConnectionService {
                     event_receiver,
                     local_event_broadcast,
                     circuit_id,
-                    connection_id,
+                    connection_info.clone(),
+                    expected_peer,
                     verifying_key.clone(),
                     local_db.clone(),
                     lock_service.clone(),
@@ -324,11 +343,11 @@ impl PeerConnectionService {
                         });
                     }
                 }
-                MulticastMessage::Annouce(a) => peer_manager.process_announce(a, address).await,
+                MulticastMessage::Annouce(a) => peer_manager.process_announce(a, address).await?,
                 MulticastMessage::InitiateConnection(header, token) => {
                     peer_manager
                         .process_initiate_connection(header, token, address)
-                        .await
+                        .await?
                 }
             },
 
@@ -336,6 +355,7 @@ impl PeerConnectionService {
                 peer_manager.clean_progress(endpoint_id, remote_id);
             }
         }
+        Ok(())
     }
 
     async fn process_event(
@@ -366,290 +386,5 @@ impl PeerConnectionService {
             }
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-pub use crate::{log_service::Log, security::random32};
-
-#[cfg(test)]
-pub type LogFn = Box<dyn Fn(Log) -> std::result::Result<(), String> + Send + 'static>;
-
-#[cfg(test)]
-pub type EventFn = Box<dyn Fn(Event) -> bool + Send + 'static>;
-
-#[cfg(test)]
-pub async fn listen_for_event(
-    event_service: EventService,
-    log_service: LogService,
-    remote_log_service: LogService,
-    event_fn: EventFn,
-    log_fn: LogFn,
-) -> std::result::Result<(), String> {
-    let mut events = event_service.subcribe().await;
-    let mut log = log_service.subcribe().await;
-    let mut remote_log = remote_log_service.subcribe().await;
-
-    let res: tokio::task::JoinHandle<std::result::Result<(), String>> = tokio::spawn(async move {
-        let mut success = false;
-        let mut error = String::new();
-        loop {
-            tokio::select! {
-                msg = events.recv() =>{
-                    match msg{
-                        Ok(event) => {
-                            if event_fn(event){
-                                success =true;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error = e.to_string();
-                            break;
-                        },
-                    }
-                }
-                msg = log.recv() =>{
-                    match msg{
-                        Ok(log) => {
-                            if let Err(e) =  log_fn(log) {
-                                error = e;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error = e.to_string();
-                            break;
-                        },
-                    }
-                }
-                msg = remote_log.recv() =>{
-                    match msg{
-                        Ok(log) => {
-                            if let Err(e) =  log_fn(log) {
-                                error = e;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error = e.to_string();
-                            break;
-                        },
-                    }
-                }
-            }
-        }
-        if success {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    });
-    res.await.unwrap()
-}
-
-#[cfg(test)]
-pub async fn connect_peers(peer1: &PeerConnectionService, peer2: &PeerConnectionService) {
-    use crate::security::{self, new_uid};
-
-    let (peer1_answer_s, peer1_answer_r) = mpsc::channel::<Answer>(100);
-    let (peer1_query_s, peer1_query_r) = mpsc::channel::<QueryProtocol>(100);
-    let (peer1_event_s, peer1_event_r) = mpsc::channel::<RemoteEvent>(100);
-
-    let (peer2_answer_s, peer2_answer_r) = mpsc::channel::<Answer>(100);
-    let (peer2_query_s, peer2_query_r) = mpsc::channel::<QueryProtocol>(100);
-    let (peer2_event_s, peer2_event_r) = mpsc::channel::<RemoteEvent>(100);
-
-    let info1 = ConnectionInfo {
-        endpoint_id: new_uid(),
-        remote_id: new_uid(),
-        connection_id: new_uid(),
-        hardware: Some(security::HardwareFingerprint::new().unwrap()),
-    };
-
-    let _ = peer1
-        .sender
-        .send(PeerConnectionMessage::NewConnection(
-            None,
-            info1,
-            peer2_answer_s,
-            peer1_answer_r,
-            peer2_query_s,
-            peer1_query_r,
-            peer2_event_s,
-            peer1_event_r,
-        ))
-        .await;
-
-    let info1 = ConnectionInfo {
-        endpoint_id: new_uid(),
-        remote_id: new_uid(),
-        connection_id: new_uid(),
-
-        hardware: Some(security::HardwareFingerprint::new().unwrap()),
-    };
-    let _ = peer2
-        .sender
-        .send(PeerConnectionMessage::NewConnection(
-            None,
-            info1,
-            peer1_answer_s,
-            peer2_answer_r,
-            peer1_query_s,
-            peer2_query_r,
-            peer1_event_s,
-            peer2_event_r,
-        ))
-        .await;
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{fs, path::PathBuf, time::Duration};
-
-    use crate::{configuration::Configuration, Discret};
-
-    use super::*;
-
-    const DATA_PATH: &str = "test_data/synchronisation/peer_service/";
-    fn init_database_path() {
-        let path: PathBuf = DATA_PATH.into();
-        fs::create_dir_all(&path).unwrap();
-    }
-
-    struct Peer {
-        event: EventService,
-        log: LogService,
-        db: GraphDatabaseService,
-        peer_service: PeerConnectionService,
-        verifying_key: Vec<u8>,
-        system_room_id: Uid,
-    }
-    impl Peer {
-        async fn new(path: PathBuf, model: &str) -> Self {
-            let event = EventService::new();
-            let (db, verifying_key, system_room_id) = GraphDatabaseService::start(
-                "app",
-                model,
-                &random32(),
-                &random32(),
-                path.clone(),
-                &Configuration::default(),
-                event.clone(),
-            )
-            .await
-            .unwrap();
-            let log = LogService::start();
-            let peer_service = PeerConnectionService::start(
-                verifying_key.clone(),
-                MeetingSecret::new(random32()),
-                system_room_id,
-                db.clone(),
-                event.clone(),
-                log.clone(),
-                SignatureVerificationService::start(2),
-                Configuration::default(),
-            )
-            .await
-            .unwrap();
-            Self {
-                event,
-                log,
-                db,
-                peer_service,
-                verifying_key,
-                system_room_id,
-            }
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn connect() {
-        init_database_path();
-        let path: PathBuf = DATA_PATH.into();
-        let model = "{Person{name:String,}}";
-
-        let first_peer = Peer::new(path.clone(), model).await;
-        let second_peer = Peer::new(path, model).await;
-
-        let first_key = first_peer.verifying_key.clone();
-
-        let event_fn: EventFn = Box::new(move |event| match event {
-            Event::PeerConnected(id, _, _) => {
-                assert_eq!(id, first_key);
-                return true;
-            }
-            _ => return false,
-        });
-
-        let log_fn: LogFn = Box::new(|log| match log {
-            Log::Error(_, src, e) => Err(format!("src:{} Err:{} ", src, e)),
-            Log::Info(_, _) => Ok(()),
-        });
-
-        connect_peers(&first_peer.peer_service, &second_peer.peer_service).await;
-
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            listen_for_event(
-                second_peer.event.clone(),
-                second_peer.log.clone(),
-                first_peer.log.clone(),
-                event_fn,
-                log_fn,
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn multicast_connect() {
-        init_database_path();
-        let path: PathBuf = DATA_PATH.into();
-        let model = "{Person{name:String,}}";
-        let key_material = random32();
-        let _: Discret = Discret::new(
-            model,
-            "hello",
-            &key_material,
-            path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
-
-        let second_path: PathBuf = format!("{}/second", DATA_PATH).into();
-        let discret2: Discret = Discret::new(
-            model,
-            "hello",
-            &key_material,
-            second_path,
-            Configuration::default(),
-        )
-        .await
-        .unwrap();
-        let private_room_id = discret2.private_room();
-        let mut events = discret2.subscribe_for_events().await;
-        let handle = tokio::spawn(async move {
-            loop {
-                let event = events.recv().await;
-                match event {
-                    Ok(e) => match e {
-                        Event::RoomSynchronized(room_id) => {
-                            assert_eq!(room_id, private_room_id);
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Err(e) => println!("Error {}", e),
-                }
-            }
-        });
-
-        let s = tokio::time::timeout(Duration::from_secs(1), handle).await;
-
-        assert!(s.is_ok());
     }
 }

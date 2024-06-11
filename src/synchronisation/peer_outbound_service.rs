@@ -23,7 +23,7 @@ pub struct InboundQueryService {
 impl InboundQueryService {
     pub fn start(
         circuit_id: [u8; 32],
-        connection_id: Uid,
+        conn_id: Uid,
         mut peer: RemotePeerHandle,
         mut receiver: mpsc::Receiver<QueryProtocol>,
         log_service: LogService,
@@ -57,7 +57,7 @@ impl InboundQueryService {
 
             let key = verifying_key.lock().await;
             peer_service
-                .disconnect(key.clone(), circuit_id, connection_id)
+                .disconnect(key.clone(), circuit_id, conn_id)
                 .await;
         });
         Self { room_sender }
