@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::room::Room,
+    database::{node::Node, room::Room},
     security::{self, Uid},
 };
 use thiserror::Error;
@@ -76,14 +76,13 @@ pub enum RemoteEvent {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ProveAnswer {
-    pub verifying_key: Vec<u8>,
-    pub invitation: Option<Vec<u8>>,
+pub struct IdentityAnswer {
+    pub peer: Node,
     pub chall_signature: Vec<u8>,
 }
-impl ProveAnswer {
+impl IdentityAnswer {
     pub fn verify(&self, challenge: &Vec<u8>) -> Result<(), security::Error> {
-        let pub_key = security::import_verifying_key(&self.verifying_key)?;
+        let pub_key = security::import_verifying_key(&self.peer.verifying_key)?;
         pub_key.verify(challenge, &self.chall_signature)?;
         Ok(())
     }

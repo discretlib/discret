@@ -7,11 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{io, net::SocketAddr};
 use thiserror::Error;
 
-use crate::{
-    database::node::Node,
-    security::{HardwareFingerprint, MeetingToken},
-    Uid,
-};
+use crate::{security::MeetingToken, Uid};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConnectionInfo {
@@ -19,15 +15,7 @@ pub struct ConnectionInfo {
     pub remote_id: Uid,
     pub conn_id: Uid,
     pub meeting_token: MeetingToken,
-    pub conn_type: ConnectionType,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub enum ConnectionType {
-    SelfPeer(HardwareFingerprint),
-    OtherPeer(Vec<u8>),
-    Invite(Uid, Node),
-    OwnedInvite(Uid, Node),
+    pub identifier: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -38,7 +26,7 @@ pub struct AnnounceHeader {
     signature: Vec<u8>,
 }
 impl AnnounceHeader {
-    pub fn hash_for_signature(&self) -> [u8; 32] {
+    pub fn hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.socket_adress.to_string().as_bytes());
         hasher.update(&self.endpoint_id);

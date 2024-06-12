@@ -8,7 +8,7 @@ use std::{
 use quinn::Connection;
 
 use crate::{
-    database::{graph_database::GraphDatabaseService, node::Node, system_entities::Peer},
+    database::{graph_database::GraphDatabaseService, node::Node},
     date_utils::now,
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
@@ -16,7 +16,7 @@ use crate::{
         endpoint::DiscretEndpoint,
         multicast::{self, MulticastMessage},
         peer_manager::{self, PeerManager},
-        ConnectionInfo, ConnectionType,
+        ConnectionInfo,
     },
     security::{MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
@@ -47,7 +47,7 @@ pub enum PeerConnectionMessage {
     ConnectionFailed(Uid, Uid),
     PeerConnected(Vec<u8>, Uid),
     PeerDisconnected(Vec<u8>, [u8; 32], Uid),
-    InviteAccepted(Uid, Node, bool),
+    InviteAccepted(Uid, Node),
     NewPeer(Vec<Node>),
     SendAnnounce(),
     MulticastMessage(MulticastMessage, SocketAddr),
@@ -88,7 +88,6 @@ impl PeerConnectionService {
         let endpoint = DiscretEndpoint::start(
             peer_service.clone(),
             logs.clone(),
-            self_peer,
             configuration.parallelism + 1,
             configuration.max_object_size_in_kb * 1024 * 2,
         )
@@ -126,6 +125,7 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 let err = Self::process_peer_message(
                                     msg,
+                                    &self_peer,
                                     &mut peer_manager,
                                     &db,
                                     &events,
@@ -186,19 +186,16 @@ impl PeerConnectionService {
             .await;
     }
 
-    pub async fn invite_accepted(&self, id: Uid, peer: Node, owned_invite: bool) {
+    pub async fn invite_accepted(&self, id: Uid, peer: Node) {
         let _ = self
             .sender
-            .send(PeerConnectionMessage::InviteAccepted(
-                id,
-                peer,
-                owned_invite,
-            ))
+            .send(PeerConnectionMessage::InviteAccepted(id, peer))
             .await;
     }
 
     async fn process_peer_message(
         msg: PeerConnectionMessage,
+        self_peer: &Node,
         peer_manager: &mut PeerManager,
         db: &GraphDatabaseService,
         event_service: &EventService,
@@ -212,7 +209,7 @@ impl PeerConnectionService {
         match msg {
             PeerConnectionMessage::NewConnection(
                 connection,
-                connection_info,
+                conn_info,
                 answer_sender,
                 answer_receiver,
                 query_sender,
@@ -221,42 +218,17 @@ impl PeerConnectionService {
                 event_receiver,
             ) => {
                 let circuit_id =
-                    PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
+                    PeerManager::circuit_id(conn_info.endpoint_id, conn_info.remote_id);
 
-                let expected_peer;
-                match &connection_info.conn_type {
-                    ConnectionType::SelfPeer(_) => {
-                        expected_peer = peer_manager
-                            .get_self_peer_expected_key(connection_info.meeting_token)?;
-                    }
-                    ConnectionType::OtherPeer(verif_key) => {
-                        expected_peer = peer_manager.get_other_peer_expected_key(
-                            connection_info.meeting_token,
-                            &verif_key,
-                        )?;
-                    }
-                    ConnectionType::Invite(invite, peer) => {
-                        peer_manager.validate_associated_owned_invite(
-                            invite,
-                            connection_info.meeting_token,
-                        )?;
-                        expected_peer = peer.verifying_key.clone()
-                    }
-                    ConnectionType::OwnedInvite(owned_invite, peer) => {
-                        peer_manager.validate_associated_invite(
-                            owned_invite,
-                            connection_info.meeting_token,
-                        )?;
-                        expected_peer = peer.verifying_key.clone()
-                    }
-                }
+                let token =
+                    peer_manager.get_token_type(&conn_info.meeting_token, &conn_info.identifier)?;
 
                 if let Some(conn) = connection {
                     peer_manager.add_connection(
                         circuit_id,
                         conn,
-                        connection_info.conn_id,
-                        connection_info.meeting_token,
+                        conn_info.conn_id,
+                        conn_info.meeting_token,
                     )
                 };
 
@@ -264,10 +236,11 @@ impl PeerConnectionService {
 
                 let inbound_query_service = InboundQueryService::start(
                     circuit_id,
-                    connection_info.conn_id,
+                    conn_info.conn_id,
                     RemotePeerHandle {
                         db: db.clone(),
                         allowed_room: HashSet::new(),
+                        peer: self_peer.clone(),
                         reply: answer_sender,
                     },
                     query_receiver,
@@ -283,8 +256,10 @@ impl PeerConnectionService {
                     event_receiver,
                     local_event_broadcast,
                     circuit_id,
-                    connection_info.clone(),
-                    expected_peer,
+                    conn_info.clone(),
+                    self_peer.verifying_key.clone(),
+                    token,
+                    true,
                     verifying_key.clone(),
                     db.clone(),
                     lock_service.clone(),
@@ -326,8 +301,9 @@ impl PeerConnectionService {
                     .await;
             }
 
-            PeerConnectionMessage::InviteAccepted(id, peer, owned) => {
-                if let Err(e) = peer_manager.invite_accepted(id, peer, owned).await {
+            PeerConnectionMessage::InviteAccepted(id, peer) => {
+                println!("invite accpeted");
+                if let Err(e) = peer_manager.invite_accepted(id, peer).await {
                     logs.error(
                         "PeerConnectionMessage::InviteAccepted".to_string(),
                         crate::Error::from(e),

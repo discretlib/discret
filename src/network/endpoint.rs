@@ -18,16 +18,13 @@ use tokio::{
 };
 
 use crate::{
-    database::node::Node,
     log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, hash, new_uid, random_domain_name, HardwareFingerprint, MeetingToken, Uid},
+    security::{self, hash, new_uid, random_domain_name, MeetingToken, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::{
-    peer_manager::TokenType, shared_buffers::SharedBuffers, ConnectionInfo, ConnectionType, Error,
-};
+use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error};
 
 //Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
@@ -44,7 +41,7 @@ static QUERY_STREAM: u8 = 2;
 static EVENT_STREAM: u8 = 3;
 
 pub enum EndpointMessage {
-    InitiateConnection(SocketAddr, [u8; 32], Uid, bool, MeetingToken, TokenType),
+    InitiateConnection(SocketAddr, [u8; 32], Uid, MeetingToken, Vec<u8>),
 }
 
 pub struct DiscretEndpoint {
@@ -59,13 +56,12 @@ impl DiscretEndpoint {
     pub async fn start(
         peer_service: PeerConnectionService,
         log: LogService,
-        peer: Node,
         num_buffers: usize,
         max_buffer_size: usize,
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
-        let hardware = HardwareFingerprint::new()?;
+
         let (sender, mut connection_receiver) = mpsc::channel::<EndpointMessage>(20);
 
         let cert: rcgen::CertifiedKey = security::generate_x509_certificate(&random_domain_name());
@@ -102,9 +98,8 @@ impl DiscretEndpoint {
                         address,
                         cert_hash,
                         remote_id,
-                        send_hardware,
                         meeting_token,
-                        token_type,
+                        identifier,
                     ) => {
                         Self::initiate_connection(
                             cert_verifier.clone(),
@@ -113,14 +108,11 @@ impl DiscretEndpoint {
                             address,
                             cert_hash,
                             meeting_token,
-                            token_type,
+                            identifier,
                             &peer_s,
                             &logs,
                             &ipv4,
                             &ipv6,
-                            peer.clone(),
-                            send_hardware,
-                            &hardware,
                             &i_buff,
                             &o_buff,
                             max_buffer_size,
@@ -150,8 +142,6 @@ impl DiscretEndpoint {
                 }
             }
         });
-
-        //ipv6 server
 
         if let Some(endpoint) = ipv6_endpoint {
             tokio::spawn(async move {
@@ -184,75 +174,6 @@ impl DiscretEndpoint {
         })
     }
 
-    async fn start_accepted(
-        peer_service: &PeerConnectionService,
-        incoming: Incoming,
-        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        max_buffer_size: usize,
-    ) -> Result<(), Error> {
-        let new_conn = incoming.await?;
-        let mut answer_send: Option<SendStream> = None;
-        let mut answer_receiv: Option<RecvStream> = None;
-        let mut query_send: Option<SendStream> = None;
-        let mut query_receiv: Option<RecvStream> = None;
-        let mut event_send: Option<SendStream> = None;
-        let mut event_receiv: Option<RecvStream> = None;
-
-        for _ in 0..3 {
-            let (send, mut recv) = new_conn.accept_bi().await?;
-            let flag = recv.read_u8().await?;
-
-            if flag.eq(&ANSWER_STREAM) {
-                answer_send = Some(send);
-                answer_receiv = Some(recv);
-            } else if flag.eq(&QUERY_STREAM) {
-                query_send = Some(send);
-                query_receiv = Some(recv);
-            } else if flag.eq(&EVENT_STREAM) {
-                event_send = Some(send);
-                event_receiv = Some(recv);
-            } else {
-                return Err(Error::InvalidStream(flag));
-            }
-        }
-
-        if answer_send.is_none() || query_send.is_none() || event_send.is_none() {
-            return Err(Error::MissingStream());
-        }
-
-        let answer_send = answer_send.unwrap();
-        let answer_receiv = answer_receiv.unwrap();
-        let query_send = query_send.unwrap();
-        let query_receiv = query_receiv.unwrap();
-        let event_send = event_send.unwrap();
-        let mut event_receiv = event_receiv.unwrap();
-
-        let len = event_receiv.read_u32().await?;
-        let len: usize = len.try_into().unwrap();
-        let mut buf = vec![0; len];
-
-        event_receiv.read_exact(&mut buf[0..len]).await?;
-        let info: ConnectionInfo = bincode::deserialize(&buf)?;
-        Self::start_channels(
-            new_conn,
-            peer_service,
-            info,
-            answer_send,
-            answer_receiv,
-            query_send,
-            query_receiv,
-            event_send,
-            event_receiv,
-            input_buffers,
-            output_buffers,
-            max_buffer_size,
-        )
-        .await;
-
-        Ok(())
-    }
-
     fn initiate_connection(
         cert_verifier: Arc<ServerCertVerifier>,
         endpoint_id: Uid,
@@ -260,14 +181,11 @@ impl DiscretEndpoint {
         address: SocketAddr,
         cert_hash: [u8; 32],
         meeting_token: MeetingToken,
-        token_type: TokenType,
+        identifier: Vec<u8>,
         peer_service: &PeerConnectionService,
         log: &LogService,
         ipv4_endpoint: &Endpoint,
         ipv6_endpoint: &Option<Endpoint>,
-        peer: Node,
-        send_hardware: bool,
-        hardware: &HardwareFingerprint,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         max_buffer_size: usize,
@@ -289,11 +207,9 @@ impl DiscretEndpoint {
         };
         let peer_service = peer_service.clone();
 
-        let hardware = hardware.clone();
-
         let input_buffers = input_buffers.clone();
         let output_buffers = output_buffers.clone();
-
+        let identifier = identifier.clone();
         let name = random_domain_name();
         cert_verifier.add_valid_certificate(name.clone(), cert_hash);
         tokio::spawn(async move {
@@ -306,45 +222,12 @@ impl DiscretEndpoint {
                         match connecting.await {
                             Ok(conn) => {
                                 let connnection_id = new_uid();
-
-                                let info = match &token_type {
-                                    TokenType::AllowedPeer(_) => {
-                                        let conn_type: ConnectionType = if send_hardware {
-                                            ConnectionType::SelfPeer(hardware.clone())
-                                        } else {
-                                            ConnectionType::OtherPeer(peer.verifying_key.clone())
-                                        };
-
-                                        ConnectionInfo {
-                                            endpoint_id,
-                                            remote_id,
-                                            conn_id: connnection_id,
-                                            meeting_token,
-                                            conn_type,
-                                        }
-                                    }
-                                    TokenType::OwnedInvite(owned_inv) => {
-                                        let conn_type =
-                                            ConnectionType::OwnedInvite(owned_inv.id, peer.clone());
-                                        ConnectionInfo {
-                                            endpoint_id,
-                                            remote_id,
-                                            conn_id: connnection_id,
-                                            meeting_token,
-                                            conn_type,
-                                        }
-                                    }
-                                    TokenType::Invite(invite) => {
-                                        let conn_type =
-                                            ConnectionType::Invite(invite.invite_id, peer.clone());
-                                        ConnectionInfo {
-                                            endpoint_id,
-                                            remote_id,
-                                            conn_id: connnection_id,
-                                            meeting_token,
-                                            conn_type,
-                                        }
-                                    }
+                                let info = ConnectionInfo {
+                                    endpoint_id,
+                                    remote_id,
+                                    conn_id: connnection_id,
+                                    meeting_token,
+                                    identifier,
                                 };
 
                                 if let Err(e) = Self::start_connection(
@@ -441,6 +324,76 @@ impl DiscretEndpoint {
             conn,
             peer_service,
             info,
+            answer_send,
+            answer_receiv,
+            query_send,
+            query_receiv,
+            event_send,
+            event_receiv,
+            input_buffers,
+            output_buffers,
+            max_buffer_size,
+        )
+        .await;
+
+        Ok(())
+    }
+
+    async fn start_accepted(
+        peer_service: &PeerConnectionService,
+        incoming: Incoming,
+        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        max_buffer_size: usize,
+    ) -> Result<(), Error> {
+        let new_conn = incoming.await?;
+        let mut answer_send: Option<SendStream> = None;
+        let mut answer_receiv: Option<RecvStream> = None;
+        let mut query_send: Option<SendStream> = None;
+        let mut query_receiv: Option<RecvStream> = None;
+        let mut event_send: Option<SendStream> = None;
+        let mut event_receiv: Option<RecvStream> = None;
+
+        for _ in 0..3 {
+            let (send, mut recv) = new_conn.accept_bi().await?;
+            let flag = recv.read_u8().await?;
+
+            if flag.eq(&ANSWER_STREAM) {
+                answer_send = Some(send);
+                answer_receiv = Some(recv);
+            } else if flag.eq(&QUERY_STREAM) {
+                query_send = Some(send);
+                query_receiv = Some(recv);
+            } else if flag.eq(&EVENT_STREAM) {
+                event_send = Some(send);
+                event_receiv = Some(recv);
+            } else {
+                return Err(Error::InvalidStream(flag));
+            }
+        }
+
+        if answer_send.is_none() || query_send.is_none() || event_send.is_none() {
+            return Err(Error::MissingStream());
+        }
+
+        let answer_send = answer_send.unwrap();
+        let answer_receiv = answer_receiv.unwrap();
+        let query_send = query_send.unwrap();
+        let query_receiv = query_receiv.unwrap();
+        let event_send = event_send.unwrap();
+        let mut event_receiv = event_receiv.unwrap();
+
+        let len = event_receiv.read_u32().await?;
+        let len: usize = len.try_into().unwrap();
+        let mut buf = vec![0; len];
+
+        event_receiv.read_exact(&mut buf[0..len]).await?;
+        let remote_info: ConnectionInfo = bincode::deserialize(&buf)?;
+
+        Self::start_channels(
+            new_conn,
+            peer_service,
+            remote_info,
             answer_send,
             answer_receiv,
             query_send,

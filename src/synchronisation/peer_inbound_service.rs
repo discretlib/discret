@@ -17,6 +17,7 @@ use tokio::{
 };
 
 use crate::{
+    base64_decode,
     database::{
         daily_log::{DailyLog, RoomDefinitionLog},
         edge::EdgeDeletionEntry,
@@ -27,15 +28,15 @@ use crate::{
     },
     event_service::{EventService, EventServiceMessage},
     log_service::LogService,
-    network::ConnectionInfo,
+    network::{peer_manager::TokenType, ConnectionInfo},
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{base64_encode, random32, Uid},
+    security::{self, base64_encode, random32, Uid},
     signature_verification_service::SignatureVerificationService,
 };
 
 use super::{
     node_full::FullNode, peer_outbound_service::InboundQueryService,
-    room_locking_service::RoomLockService, Answer, Error, LocalEvent, ProveAnswer, Query,
+    room_locking_service::RoomLockService, Answer, Error, IdentityAnswer, LocalEvent, Query,
     QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
@@ -139,7 +140,9 @@ pub struct LocalPeerService {}
 impl LocalPeerService {
     pub async fn initialise_connection(
         connection_info: &ConnectionInfo,
-        expected_peer: &Vec<u8>,
+        local_key: &Vec<u8>,
+        token_type: TokenType,
+        local_network: bool,
         query_service: &QueryService,
         remote_verifying_key: &Arc<Mutex<Vec<u8>>>,
         peer_service: &PeerConnectionService,
@@ -151,26 +154,51 @@ impl LocalPeerService {
         if proof.is_err() {
             return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
         }
-        let proof: ProveAnswer = proof.unwrap();
-        if expected_peer.eq(&proof.verifying_key) {
-            proof.verify(&challenge)?;
-            let mut key = remote_verifying_key.lock().await;
-            *key = proof.verifying_key.clone();
-        } else {
-            return Err(crate::Error::InvalidConnection("invalid Peer".to_string()));
-        }
+        let proof: IdentityAnswer = proof.unwrap();
+        proof.verify(&challenge)?;
+        Peer::validate(&proof.peer)?;
 
-        match &connection_info.conn_type {
-            crate::network::ConnectionType::Invite(id, peer) => {
-                Peer::validate(expected_peer, peer)?;
-                peer_service.invite_accepted(*id, peer.clone(), true).await;
+        match token_type {
+            TokenType::AllowedPeer(peer) => {
+                println!("TokenType::AllowedPeer");
+                let expected_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
+
+                if expected_key.eq(&proof.peer.verifying_key) {
+                    let mut key = remote_verifying_key.lock().await;
+                    *key = proof.peer.verifying_key.clone();
+                } else {
+                    return Err(crate::Error::InvalidConnection("Invalid Peer".to_string()));
+                }
+                if local_key.eq(&proof.peer.verifying_key) {
+                    //send hardware
+
+                    //if new harware && localnet && option
+                }
             }
-            crate::network::ConnectionType::OwnedInvite(id, peer) => {
-                Peer::validate(expected_peer, peer)?;
-                peer_service.invite_accepted(*id, peer.clone(), false).await;
+            TokenType::OwnedInvite(ownded) => {
+                println!("TokenType::OwnedInvite");
+                let mut key = remote_verifying_key.lock().await;
+                *key = proof.peer.verifying_key.clone();
+                //accept peer
+                //update ownded
+                //send reconnect
             }
-            _ => {}
-        }
+
+            TokenType::Invite(invite) => {
+                println!("TokenType::Invite");
+                invite.hash();
+                {
+                    let pub_key = security::import_verifying_key(&proof.peer.verifying_key)?;
+                    pub_key.verify(&invite.hash(), &invite.invite_sign)?;
+                }
+                let mut key = remote_verifying_key.lock().await;
+                *key = proof.peer.verifying_key.clone();
+
+                //accept peer
+                //remove invite
+                //send connection
+            }
+        };
 
         let res = Self::send_event(&event_sender, RemoteEvent::Ready)
             .await
@@ -180,7 +208,7 @@ impl LocalPeerService {
         }
 
         peer_service
-            .connected(proof.verifying_key, connection_info.conn_id)
+            .connected(proof.peer.verifying_key, connection_info.conn_id)
             .await;
         Ok(true)
     }
@@ -190,7 +218,9 @@ impl LocalPeerService {
         mut local_event: broadcast::Receiver<LocalEvent>,
         circuit_id: [u8; 32],
         connection_info: ConnectionInfo,
-        expected_peer: Vec<u8>,
+        local_key: Vec<u8>,
+        token_type: TokenType,
+        local_network: bool,
         remote_verifying_key: Arc<Mutex<Vec<u8>>>,
         db: GraphDatabaseService,
         lock_service: RoomLockService,
@@ -207,7 +237,9 @@ impl LocalPeerService {
         tokio::spawn(async move {
             match Self::initialise_connection(
                 &connection_info,
-                &expected_peer,
+                &local_key,
+                token_type,
+                local_network,
                 &query_service,
                 &remote_verifying_key,
                 &peer_service,

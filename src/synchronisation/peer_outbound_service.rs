@@ -7,11 +7,13 @@ use tokio::sync::{
 };
 
 use crate::{
-    database::graph_database::GraphDatabaseService, log_service::LogService,
-    peer_connection_service::PeerConnectionService, security::Uid,
+    database::{graph_database::GraphDatabaseService, node::Node},
+    log_service::LogService,
+    peer_connection_service::PeerConnectionService,
+    security::Uid,
 };
 
-use super::{Answer, Error, ProveAnswer, Query, QueryProtocol};
+use super::{Answer, Error, IdentityAnswer, Query, QueryProtocol};
 
 ///
 /// handle all inbound queries
@@ -76,9 +78,8 @@ impl InboundQueryService {
                     msg.id,
                     true,
                     true,
-                    ProveAnswer {
-                        verifying_key: res.0,
-                        invitation: None,
+                    IdentityAnswer {
+                        peer: peer.peer.clone(),
                         chall_signature: res.1,
                     },
                 )
@@ -406,6 +407,7 @@ impl InboundQueryService {
 pub struct RemotePeerHandle {
     pub allowed_room: HashSet<Uid>,
     pub db: GraphDatabaseService,
+    pub peer: Node,
     pub reply: mpsc::Sender<Answer>,
 }
 impl RemotePeerHandle {

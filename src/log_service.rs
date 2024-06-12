@@ -50,7 +50,7 @@ impl LogService {
     }
 
     pub fn info(&self, str: String) {
-        println!("{}: {}", now(), str);
+        //    println!("{}: {}", now(), str);
         let _ = self.sender.send(LogMessage::Info(now(), str));
     }
 

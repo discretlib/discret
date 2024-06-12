@@ -222,6 +222,6 @@ async fn invites() {
         }
     });
 
-    let s = tokio::time::timeout(Duration::from_secs(1), handle).await;
+    let s = tokio::time::timeout(Duration::from_millis(500), handle).await;
     assert!(s.is_ok());
 }

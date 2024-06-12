@@ -185,15 +185,9 @@ impl Peer {
         node
     }
 
-    pub fn validate(verifying_key: &Vec<u8>, peer: &Node) -> Result<(), Error> {
+    pub fn validate(peer: &Node) -> Result<(), Error> {
         if peer.room_id.is_some() {
             return Err(Error::InvalidPeerNode("room not empty".to_string()));
-        }
-
-        if !peer.verifying_key.eq(verifying_key) {
-            return Err(Error::InvalidPeerNode(
-                "verifying key missmatched".to_string(),
-            ));
         }
 
         if !peer._entity.eq(PEER_ENT_SHORT) {
@@ -202,7 +196,7 @@ impl Peer {
         if peer.verify().is_err() {
             return Err(Error::InvalidPeerNode("Invalid Signature".to_string()));
         }
-
+        Self::pub_key(peer)?;
         Ok(())
     }
 

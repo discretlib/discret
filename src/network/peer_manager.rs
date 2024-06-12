@@ -4,7 +4,7 @@ use crate::{
         node::Node,
         system_entities::{Invite, OwnedInvite, Peer, Status},
     },
-    uid_encode, DefaultRoom, Error, Parameters, ParametersAdd,
+    uid_encode, DefaultRoom, Error,
 };
 use quinn::{Connection, VarInt};
 use std::{
@@ -51,7 +51,7 @@ pub struct PeerManager {
     endpoint: DiscretEndpoint,
     multicast_discovery: mpsc::Sender<MulticastMessage>,
     private_room_id: Uid,
-    verifying_key: Vec<u8>,
+    pub verifying_key: Vec<u8>,
 
     pub meeting_secret: MeetingSecret,
 
@@ -65,7 +65,6 @@ pub struct PeerManager {
     connection_progress: HashMap<[u8; 32], bool>,
     connected: HashMap<[u8; 32], (Connection, Uid, MeetingToken)>,
     connected_tokens: HashMap<MeetingToken, HashSet<[u8; 32]>>,
-    local_connection: HashSet<[u8; 32]>,
 
     db: GraphDatabaseService,
     logs: LogService,
@@ -74,6 +73,8 @@ pub struct PeerManager {
     probe_value: [u8; 32],
     ipv4_header: Option<AnnounceHeader>,
     ipv6_header: Option<AnnounceHeader>,
+
+    multicast_nonce: [u8; 32],
 }
 impl PeerManager {
     pub async fn new(
@@ -114,7 +115,7 @@ impl PeerManager {
         let _ = multicast_discovery
             .send(MulticastMessage::ProbeLocalIp(probe_value))
             .await;
-
+        let multicast_nonce = random32();
         Ok(Self {
             app_name,
             endpoint,
@@ -129,13 +130,13 @@ impl PeerManager {
             connected: HashMap::new(),
             connected_tokens: HashMap::new(),
             connection_progress: HashMap::new(),
-            local_connection: HashSet::new(),
             db,
             logs,
             verify_service,
             probe_value,
             ipv4_header: None,
             ipv6_header: None,
+            multicast_nonce,
         })
     }
 
@@ -144,6 +145,27 @@ impl PeerManager {
             let mut tokens: Vec<MeetingToken> = Vec::new();
             for tok in &self.allowed_peers {
                 tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
+            }
+
+            for inv in &self.invites {
+                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
+                println!(
+                    "{}: Anouncing invite {}",
+                    ipv4_header.socket_adress,
+                    base64_encode(&meeting_token)
+                );
+                tokens.push(meeting_token);
+            }
+
+            for owned in &self.owned_invites {
+                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
+
+                println!(
+                    "{}: Anouncing owned invite {}",
+                    ipv4_header.socket_adress,
+                    base64_encode(&meeting_token)
+                );
+                tokens.push(meeting_token);
             }
 
             let ipv4_announce = Announce {
@@ -170,8 +192,7 @@ impl PeerManager {
         }
         if probe_value.eq(&self.probe_value) {
             let ipv4_adress = SocketAddr::new(address.ip(), self.endpoint.ipv4_port);
-            self.logs
-                .info(format!("Detected Local Adress {}", &address.ip()));
+            self.logs.info(format!("Local Adress {}", &address.ip()));
             let mut ipv4_header = AnnounceHeader {
                 socket_adress: ipv4_adress,
                 endpoint_id: self.endpoint.id,
@@ -179,10 +200,7 @@ impl PeerManager {
                 signature: Vec::new(),
             };
 
-            let (_verifying, signature) = self
-                .db
-                .sign(ipv4_header.hash_for_signature().to_vec())
-                .await;
+            let (_verifying, signature) = self.db.sign(ipv4_header.hash().to_vec()).await;
             ipv4_header.signature = signature;
             self.ipv4_header = Some(ipv4_header);
 
@@ -219,56 +237,54 @@ impl PeerManager {
 
         for candidate in &a.tokens {
             if let Some(verifying_keys) = self.allowed_token.get(candidate) {
-                if !*connection_progress {
-                    for token_type in verifying_keys {
-                        let hash_to_verify = a.header.hash_for_signature();
-                        let signature = a.header.signature.clone();
-                        let (validated, include_hardware) = match token_type {
-                            TokenType::AllowedPeer(peer) => {
-                                let verifying_key =
-                                    base64_decode(peer.peer.verifying_key.as_bytes())?;
-
-                                let validatd = self
-                                    .verify_service
-                                    .verify_hash(signature, hash_to_verify, verifying_key.clone())
-                                    .await;
-                                let mut include_hardware = false;
-                                if verifying_key.eq(&self.verifying_key) {
-                                    include_hardware = true;
-                                }
-                                (validatd, include_hardware)
-                            }
-                            TokenType::OwnedInvite(_) => (true, false),
-                            TokenType::Invite(_) => (true, false),
-                        };
-
-                        if validated {
-                            *connection_progress = true;
-
-                            self.local_connection.insert(circuit_id);
-                            let target: SocketAddr = a.header.socket_adress;
-
-                            let _ = self
-                                .multicast_discovery
-                                .send(MulticastMessage::InitiateConnection(
-                                    header.clone(),
-                                    *candidate,
-                                ))
+                for token_type in verifying_keys {
+                    let hash_to_verify = a.header.hash();
+                    let signature = a.header.signature.clone();
+                    let (validated, identifier) = match token_type {
+                        TokenType::AllowedPeer(peer) => {
+                            let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
+                            let validated = self
+                                .verify_service
+                                .verify_hash(signature, hash_to_verify, verifying_key.clone())
                                 .await;
 
-                            let _ = self
-                                .endpoint
-                                .sender
-                                .send(EndpointMessage::InitiateConnection(
-                                    target,
-                                    a.header.certificate_hash,
-                                    a.header.endpoint_id,
-                                    include_hardware,
-                                    *candidate,
-                                    token_type.clone(),
-                                ))
-                                .await;
+                            (validated, verifying_key)
                         }
+                        TokenType::OwnedInvite(owned) => (true, owned.id.to_vec()),
+                        TokenType::Invite(inv) => (true, inv.invite_id.to_vec()),
+                    };
+
+                    if validated {
+                        *connection_progress = true;
+
+                        let target: SocketAddr = a.header.socket_adress;
+
+                        let _ = self
+                            .multicast_discovery
+                            .send(MulticastMessage::InitiateConnection(
+                                header.clone(),
+                                *candidate,
+                            ))
+                            .await;
+
+                        println!(
+                            "{} -> {} for token {}",
+                            self.ipv4_header.as_ref().unwrap().socket_adress,
+                            target,
+                            base64_encode(candidate)
+                        );
+
+                        let _ = self
+                            .endpoint
+                            .sender
+                            .send(EndpointMessage::InitiateConnection(
+                                target,
+                                a.header.certificate_hash,
+                                a.header.endpoint_id,
+                                *candidate,
+                                identifier,
+                            ))
+                            .await;
                     }
                 }
             }
@@ -303,30 +319,31 @@ impl PeerManager {
         if let Some(verifying_keys) = self.allowed_token.get(&token) {
             if !*connection_progress {
                 for token_type in verifying_keys {
-                    let hash_to_verify = header.hash_for_signature();
+                    let hash_to_verify = header.hash();
                     let signature = header.signature.clone();
-                    let (validated, include_hardware) = match token_type {
+                    let (validated, identifier) = match token_type {
                         TokenType::AllowedPeer(peer) => {
                             let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
-
-                            let validatd = self
+                            let validated = self
                                 .verify_service
                                 .verify_hash(signature, hash_to_verify, verifying_key.clone())
                                 .await;
-                            let mut include_hardware = false;
-                            if verifying_key.eq(&self.verifying_key) {
-                                include_hardware = true;
-                            }
-                            (validatd, include_hardware)
+
+                            (validated, verifying_key)
                         }
-                        TokenType::OwnedInvite(_) => (true, false),
-                        TokenType::Invite(_) => (true, false),
+                        TokenType::OwnedInvite(owned) => (true, owned.id.to_vec()),
+                        TokenType::Invite(inv) => (true, inv.invite_id.to_vec()),
                     };
 
                     if validated {
                         *connection_progress = true;
                         let target: SocketAddr = header.socket_adress;
-
+                        println!(
+                            "{} -> {} for token {}",
+                            self.ipv4_header.as_ref().unwrap().socket_adress,
+                            target,
+                            base64_encode(&token)
+                        );
                         let _ = self
                             .endpoint
                             .sender
@@ -334,9 +351,8 @@ impl PeerManager {
                                 target,
                                 header.certificate_hash,
                                 header.endpoint_id,
-                                include_hardware,
                                 token,
-                                token_type.clone(),
+                                identifier,
                             ))
                             .await;
                     }
@@ -392,7 +408,6 @@ impl PeerManager {
                 let token = token.clone();
                 let circuit = circuit_id.clone();
                 self.connected.remove(&circuit);
-                self.local_connection.remove(&circuit);
                 disconnected = true;
                 let mut remove_entry = false;
 
@@ -492,140 +507,36 @@ impl PeerManager {
         Ok(valid)
     }
 
-    pub fn get_self_peer_expected_key(&self, token: MeetingToken) -> Result<Vec<u8>, crate::Error> {
-        let o = self.allowed_token.get(&token);
-        match o {
-            Some(token_types) => {
-                let mut valid = Vec::new();
-                for token_type in token_types {
-                    match token_type {
-                        TokenType::AllowedPeer(allowed) => {
-                            let verifying_key =
-                                base64_decode(allowed.peer.verifying_key.as_bytes())?;
-                            if verifying_key.eq(&self.verifying_key) {
-                                valid = verifying_key
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if valid.is_empty() {
-                    return Err(crate::Error::InvalidConnection(
-                        "Invalid Self Connection".to_string(),
-                    ));
-                }
-                Ok(valid)
-            }
-
-            None => {
-                return Err(crate::Error::InvalidConnection(
-                    "Self Connection: Invalid Meeting Token".to_string(),
-                ))
-            }
-        }
-    }
-
-    pub fn get_other_peer_expected_key(
+    pub fn get_token_type(
         &self,
-        token: MeetingToken,
+        token: &MeetingToken,
         key: &Vec<u8>,
-    ) -> Result<Vec<u8>, crate::Error> {
-        let o = self.allowed_token.get(&token);
-        match o {
-            Some(token_types) => {
-                let mut valid = Vec::new();
-                for token_type in token_types {
-                    match token_type {
-                        TokenType::AllowedPeer(allowed) => {
-                            let verifying_key =
-                                base64_decode(allowed.peer.verifying_key.as_bytes())?;
-                            if verifying_key.eq(key) {
-                                valid = verifying_key
-                            }
+    ) -> Result<TokenType, crate::Error> {
+        if let Some(tokens) = self.allowed_token.get(token) {
+            for token_type in tokens {
+                match token_type {
+                    TokenType::AllowedPeer(peer) => {
+                        let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
+                        if key.eq(&verifying_key) {
+                            return Ok(token_type.clone());
                         }
-                        _ => {}
+                    }
+                    TokenType::OwnedInvite(owned) => {
+                        if key.eq(&owned.id.to_vec()) {
+                            return Ok(token_type.clone());
+                        }
+                    }
+                    TokenType::Invite(invite) => {
+                        if key.eq(&invite.invite_id.to_vec()) {
+                            return Ok(token_type.clone());
+                        }
                     }
                 }
-                if valid.is_empty() {
-                    return Err(crate::Error::InvalidConnection(
-                        "Invalid Peer Connection".to_string(),
-                    ));
-                }
-                Ok(valid)
-            }
-
-            None => {
-                return Err(crate::Error::InvalidConnection(
-                    "Peer Connection: Invalid Meeting Token".to_string(),
-                ))
             }
         }
-    }
-
-    pub fn validate_associated_owned_invite(
-        &self,
-        invite: &Uid,
-        token: MeetingToken,
-    ) -> Result<(), crate::Error> {
-        let o = self.allowed_token.get(&token);
-        match o {
-            Some(token_types) => {
-                let mut valid = false;
-                for token_type in token_types {
-                    match token_type {
-                        TokenType::OwnedInvite(owned) => {
-                            if owned.id.eq(invite) {
-                                valid = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if valid {
-                    Ok(())
-                } else {
-                    Err(crate::Error::InvalidConnection(
-                        "Invite Connection: Associated OwnedInvite not found".to_string(),
-                    ))
-                }
-            }
-            None => Err(crate::Error::InvalidConnection(
-                "Invite Connection: Invalid Meeting Token".to_string(),
-            )),
-        }
-    }
-
-    pub fn validate_associated_invite(
-        &self,
-        owned_invite: &Uid,
-        token: MeetingToken,
-    ) -> Result<(), crate::Error> {
-        let o = self.allowed_token.get(&token);
-        match o {
-            Some(token_types) => {
-                let mut valid = false;
-                for token_type in token_types {
-                    match token_type {
-                        TokenType::Invite(invite) => {
-                            if invite.invite_id.eq(owned_invite) {
-                                valid = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if valid {
-                    Ok(())
-                } else {
-                    Err(crate::Error::InvalidConnection(
-                        "Owned Invite Connection: Associated Invite not found".to_string(),
-                    ))
-                }
-            }
-            None => Err(crate::Error::InvalidConnection(
-                "Owned Invite Connection: Invalid Meeting Token".to_string(),
-            )),
-        }
+        Err(crate::Error::InvalidConnection(
+            "connection token not found".to_string(),
+        ))
     }
 
     pub async fn create_invite(
@@ -669,12 +580,44 @@ impl PeerManager {
         Ok(())
     }
 
-    pub async fn invite_accepted(
+    pub async fn inviet_accepted(
         &mut self,
-        id: Uid,
+        token_type: TokenType,
         peer: Node,
-        owned: bool,
     ) -> Result<(), crate::Error> {
+        self.db.add_peer_nodes(vec![peer.clone()]).await?;
+
+        let verifying_key = base64_encode(&peer.verifying_key);
+        let pub_key = Peer::pub_key(&peer)?;
+        let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
+        let token = self.meeting_secret.token(&peer_public);
+
+        let room_id = uid_encode(&self.private_room_id);
+        let allowed = AllowedPeer::add(
+            &room_id,
+            &verifying_key,
+            &base64_encode(&token),
+            Status::Enabled,
+            &self.db,
+        )
+        .await?;
+
+        let entry = self.allowed_token.entry(token).or_default();
+        entry.push(TokenType::AllowedPeer(allowed.clone()));
+        self.allowed_peers.push(allowed);
+
+        match token_type {
+            TokenType::OwnedInvite(owned) => {
+                let deleted =
+                    OwnedInvite::decrease_and_delete(room_id.clone(), owned.id, &self.db).await?;
+            }
+            TokenType::Invite(invite) => {}
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub async fn invite_accepted(&mut self, id: Uid, peer: Node) -> Result<(), crate::Error> {
         let verifying_key = base64_encode(&peer.verifying_key);
 
         let pub_key = Peer::pub_key(&peer)?;
@@ -695,7 +638,7 @@ impl PeerManager {
         let entry = self.allowed_token.entry(token).or_default();
         entry.push(TokenType::AllowedPeer(allowed.clone()));
         self.allowed_peers.push(allowed);
-
+        /*
         if owned {
             if OwnedInvite::decrease_and_delete(room_id.clone(), id, &self.db).await? {
                 let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
@@ -765,7 +708,7 @@ impl PeerManager {
             }
             Invite::delete(room_id.clone(), id, &self.db).await?;
             self.invites = Invite::list(room_id.clone(), &self.db).await?;
-        }
+        }*/
         Ok(())
     }
 }
