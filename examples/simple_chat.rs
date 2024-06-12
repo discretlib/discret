@@ -2,7 +2,7 @@ use std::{io, path::PathBuf};
 
 use discret::{
     default_uid, derive_pass_phrase, uid_encode, Configuration, Discret, Parameters, ParametersAdd,
-    QueryResult,
+    ResultParser,
 };
 use serde::Deserialize;
 
@@ -74,8 +74,8 @@ async fn main() {
                         )
                         .await
                         .unwrap();
-                    let query_result = QueryResult::new(&result).unwrap();
-                    let res: Vec<Chat> = query_result.get("res").unwrap();
+                    let query_result = ResultParser::new(&result).unwrap();
+                    let res: Vec<Chat> = query_result.array("res").unwrap();
                     for msg in res {
                         last_date = msg.mdate;
                         last_id = msg.id;

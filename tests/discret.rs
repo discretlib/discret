@@ -2,9 +2,10 @@ use std::{path::PathBuf, time::Duration};
 
 use discret::{
     base64_encode, uid_decode, Configuration, DefaultRoom, Discret, Event, Parameters,
-    ParametersAdd,
+    ParametersAdd, ResultParser,
 };
 use rand::{rngs::OsRng, RngCore};
+use serde::Deserialize;
 const DATA_PATH: &str = "test_data/tests/";
 pub fn random32() -> [u8; 32] {
     let mut random: [u8; 32] = [0; 32];
@@ -47,7 +48,13 @@ async fn minimal() {
         .await
         .unwrap();
 
-    let id = &mut_result.ids[0].uid;
+    #[derive(Deserialize)]
+    struct Id {
+        id: String,
+    }
+    let parser = ResultParser::new(&mut_result).unwrap();
+    let ids: Id = parser.object("result").unwrap();
+    let id = ids.id;
 
     let mut params = Parameters::new();
     params.add("id", id.clone()).unwrap();
@@ -138,7 +145,7 @@ async fn invites() {
     param
         .add("key", base64_encode(discret1.verifying_key()))
         .unwrap();
-    let res = discret1
+    let result = discret1
         .mutate(
             r#"mutate mut {
                 sys.Room{
@@ -160,9 +167,21 @@ async fn invites() {
         .await
         .unwrap();
 
-    let ids = res.ids.first().unwrap();
-    let room_id = ids.uid.clone();
-    let auth_id = ids.childs.first().unwrap().uid.clone();
+    #[derive(Deserialize)]
+    struct Ids {
+        id: String,
+        authorisations: Vec<Auth>,
+    }
+    #[derive(Deserialize)]
+    struct Auth {
+        id: String,
+    }
+    let parser = ResultParser::new(&result).unwrap();
+    let mut ids: Ids = parser.object("sys.Room").unwrap();
+    let room_id = ids.id;
+    let auth_id = ids.authorisations.pop().unwrap().id;
+
+    // println!("{}", res.json);
 
     let mut param = Parameters::new();
     param.add("room_id", room_id.clone()).unwrap();
@@ -171,6 +190,7 @@ async fn invites() {
         .mutate(
             r#"mutate mut {
             Person{
+                room_id:$room_id
                 name: "John Doe"
             }
         }"#,
@@ -221,7 +241,73 @@ async fn invites() {
             }
         }
     });
-
     let s = tokio::time::timeout(Duration::from_millis(500), handle).await;
     assert!(s.is_ok());
+    let query = "query{
+        Person{
+            name
+        }
+    }";
+    let res1 = discret1.query(query, None).await.unwrap();
+    let res2 = discret2.query(query, None).await.unwrap();
+    assert_eq!(res1, res2);
+
+    let query = "query{
+        sys.AllowedPeer{
+            id
+            peer{
+                pub_key
+            }
+            meeting_token
+            status
+        }
+    }";
+
+    #[derive(Deserialize)]
+    struct Id {
+        pub id: String,
+    }
+
+    let res1 = discret1.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids[0].id.len() > 0);
+
+    let res2 = discret2.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    assert_eq!(ids.len(), 2);
+
+    let query = "query{
+        sys.OwnedInvite{
+            id
+        }
+    }";
+
+    let res1 = discret1.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    assert_eq!(ids.len(), 0);
+
+    let res2 = discret2.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    assert_eq!(ids.len(), 0);
+
+    let query = "query{
+        sys.Invite{
+            id
+        }
+    }";
+
+    let res1 = discret1.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    assert_eq!(ids.len(), 0);
+
+    let res2 = discret2.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    assert_eq!(ids.len(), 0);
 }

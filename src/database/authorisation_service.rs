@@ -471,10 +471,13 @@ impl RoomAuthorisations {
                 ))
             }
             _ => {
+                if to_insert.node.is_none() {
+                    //this is a reference, not mutation occurs
+                    return Ok(rooms);
+                }
                 match &to_insert.old_node {
                     Some(old_node) => {
                         let same_user = old_node.verifying_key.eq(verifying_key);
-
                         if let Some(room_id) = &to_insert.room_id {
                             if let Some(room) = self.rooms.get(room_id) {
                                 if let Some(old_room_id) = &old_node.room_id {

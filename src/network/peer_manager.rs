@@ -4,7 +4,7 @@ use crate::{
         node::Node,
         system_entities::{Invite, OwnedInvite, Peer, Status},
     },
-    uid_encode, DefaultRoom, Error,
+    uid_encode, DefaultRoom, Error, Parameters, ParametersAdd,
 };
 use quinn::{Connection, VarInt};
 use std::{
@@ -580,7 +580,7 @@ impl PeerManager {
         Ok(())
     }
 
-    pub async fn inviet_accepted(
+    pub async fn invite_accepted(
         &mut self,
         token_type: TokenType,
         peer: Node,
@@ -608,107 +608,172 @@ impl PeerManager {
 
         match token_type {
             TokenType::OwnedInvite(owned) => {
+                println!("TokenType::OwnedInvite");
                 let deleted =
                     OwnedInvite::decrease_and_delete(room_id.clone(), owned.id, &self.db).await?;
+
+                if let Some(room) = owned.room {
+                    if let Some(auth) = owned.authorisation {
+                        let room = uid_encode(&room);
+                        let auth = uid_encode(&auth);
+                        let verif_key = base64_encode(&peer.verifying_key);
+
+                        let mut param = Parameters::new();
+                        param.add("id", room)?;
+                        param.add("auth", auth)?;
+                        param.add("verif_key", verif_key)?;
+                        self.db
+                            .mutate(
+                                r#"mutate {
+                                sys.Room{
+                                    id:$id
+                                    authorisations:[{
+                                        id:$auth
+                                        users: [{
+                                            verif_key:$verif_key
+                                            enabled:true
+                                        }]
+                                    }]
+                                }
+                            }"#,
+                                Some(param),
+                            )
+                            .await?;
+                    }
+                }
+                if deleted {
+                    println!("TokenType::Invite");
+                    let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
+                    if let Some(tokens) = o {
+                        let index = tokens.iter().position(|tt| {
+                            if let TokenType::OwnedInvite(owned_tok) = tt {
+                                owned.id.eq(&owned_tok.id)
+                            } else {
+                                false
+                            }
+                        });
+
+                        if let Some(index) = index {
+                            tokens.remove(index);
+                        }
+                    }
+                    self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
+                }
             }
-            TokenType::Invite(invite) => {}
+            TokenType::Invite(invite) => {
+                let o = self.allowed_token.get_mut(&token);
+                if let Some(tokens) = o {
+                    let index = tokens.iter().position(|tt| {
+                        if let TokenType::Invite(i) = tt {
+                            i.invite_id.eq(&invite.invite_id)
+                        } else {
+                            false
+                        }
+                    });
+                    if let Some(index) = index {
+                        tokens.remove(index);
+                    }
+                }
+                Invite::delete(room_id.clone(), invite.invite_id, &self.db).await?;
+                self.invites = Invite::list(room_id.clone(), &self.db).await?;
+            }
             _ => unreachable!(),
         }
         Ok(())
     }
 
-    pub async fn invite_accepted(&mut self, id: Uid, peer: Node) -> Result<(), crate::Error> {
-        let verifying_key = base64_encode(&peer.verifying_key);
+    // pub async fn invite_accepted(&mut self, id: Uid, peer: Node) -> Result<(), crate::Error> {
+    //     let verifying_key = base64_encode(&peer.verifying_key);
 
-        let pub_key = Peer::pub_key(&peer)?;
-        let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
-        let token = self.meeting_secret.token(&peer_public);
+    //     let pub_key = Peer::pub_key(&peer)?;
+    //     let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
+    //     let token = self.meeting_secret.token(&peer_public);
 
-        self.db.add_peer_nodes(vec![peer.clone()]).await?;
-        let room_id = uid_encode(&self.private_room_id);
-        let allowed = AllowedPeer::add(
-            &room_id,
-            &verifying_key,
-            &base64_encode(&token),
-            Status::Enabled,
-            &self.db,
-        )
-        .await?;
+    //     self.db.add_peer_nodes(vec![peer.clone()]).await?;
+    //     let room_id = uid_encode(&self.private_room_id);
+    //     let allowed = AllowedPeer::add(
+    //         &room_id,
+    //         &verifying_key,
+    //         &base64_encode(&token),
+    //         Status::Enabled,
+    //         &self.db,
+    //     )
+    //     .await?;
 
-        let entry = self.allowed_token.entry(token).or_default();
-        entry.push(TokenType::AllowedPeer(allowed.clone()));
-        self.allowed_peers.push(allowed);
-        /*
-        if owned {
-            if OwnedInvite::decrease_and_delete(room_id.clone(), id, &self.db).await? {
-                let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
-                let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
-                if let Some(tokens) = o {
-                    let index = tokens.iter().position(|tt| {
-                        if let TokenType::OwnedInvite(owned) = tt {
-                            owned.id.eq(&id)
-                        } else {
-                            false
-                        }
-                    });
+    //     let entry = self.allowed_token.entry(token).or_default();
+    //     entry.push(TokenType::AllowedPeer(allowed.clone()));
+    //     self.allowed_peers.push(allowed);
+    //     /*
+    //     if owned {
+    //         if OwnedInvite::decrease_and_delete(room_id.clone(), id, &self.db).await? {
+    //             let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
+    //             let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
+    //             if let Some(tokens) = o {
+    //                 let index = tokens.iter().position(|tt| {
+    //                     if let TokenType::OwnedInvite(owned) = tt {
+    //                         owned.id.eq(&id)
+    //                     } else {
+    //                         false
+    //                     }
+    //                 });
 
-                    if let Some(index) = index {
-                        let owned = &tokens[index];
-                        if let TokenType::OwnedInvite(owned) = owned {
-                            if let Some(room) = owned.room {
-                                if let Some(auth) = owned.authorisation {
-                                    println!("inserting new user");
-                                    let room = uid_encode(&room);
-                                    let auth = uid_encode(&auth);
-                                    let verif_key = base64_encode(&peer.verifying_key);
+    //                 if let Some(index) = index {
+    //                     let owned = &tokens[index];
+    //                     if let TokenType::OwnedInvite(owned) = owned {
+    //                         if let Some(room) = owned.room {
+    //                             if let Some(auth) = owned.authorisation {
+    //                                 println!("inserting new user");
+    //                                 let room = uid_encode(&room);
+    //                                 let auth = uid_encode(&auth);
+    //                                 let verif_key = base64_encode(&peer.verifying_key);
 
-                                    let mut param = Parameters::new();
-                                    param.add("id", room)?;
-                                    param.add("auth", auth)?;
-                                    param.add("verif_key", verif_key)?;
-                                    self.db
-                                        .mutate(
-                                            r#"mutate {
-                                        sys.Room{
-                                            id:$id
-                                            authorisations:[{
-                                                id:$auth
-                                                users: [{
-                                                    verif_key:$verif_key
-                                                    enabled:true
-                                                }]
-                                            }]
-                                        }
-                                    }"#,
-                                            Some(param),
-                                        )
-                                        .await?;
-                                }
-                            }
-                        }
-                        tokens.remove(index);
-                    }
-                }
-                self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
-            }
-        } else {
-            let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
-            let o = self.allowed_token.get_mut(&token);
-            if let Some(tokens) = o {
-                let index = tokens.iter().position(|tt| {
-                    if let TokenType::Invite(i) = tt {
-                        i.invite_id.eq(&id)
-                    } else {
-                        false
-                    }
-                });
-                if let Some(index) = index {
-                    tokens.remove(index);
-                }
-            }
-            Invite::delete(room_id.clone(), id, &self.db).await?;
-            self.invites = Invite::list(room_id.clone(), &self.db).await?;
-        }*/
-        Ok(())
-    }
+    //                                 let mut param = Parameters::new();
+    //                                 param.add("id", room)?;
+    //                                 param.add("auth", auth)?;
+    //                                 param.add("verif_key", verif_key)?;
+    //                                 self.db
+    //                                     .mutate(
+    //                                         r#"mutate {
+    //                                     sys.Room{
+    //                                         id:$id
+    //                                         authorisations:[{
+    //                                             id:$auth
+    //                                             users: [{
+    //                                                 verif_key:$verif_key
+    //                                                 enabled:true
+    //                                             }]
+    //                                         }]
+    //                                     }
+    //                                 }"#,
+    //                                         Some(param),
+    //                                     )
+    //                                     .await?;
+    //                             }
+    //                         }
+    //                     }
+    //                     tokens.remove(index);
+    //                 }
+    //             }
+    //             self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
+    //         }
+    //     } else {
+    //         let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
+    //         let o = self.allowed_token.get_mut(&token);
+    //         if let Some(tokens) = o {
+    //             let index = tokens.iter().position(|tt| {
+    //                 if let TokenType::Invite(i) = tt {
+    //                     i.invite_id.eq(&id)
+    //                 } else {
+    //                     false
+    //                 }
+    //             });
+    //             if let Some(index) = index {
+    //                 tokens.remove(index);
+    //             }
+    //         }
+    //         Invite::delete(room_id.clone(), id, &self.db).await?;
+    //         self.invites = Invite::list(room_id.clone(), &self.db).await?;
+    //     }*/
+    //     Ok(())
+    // }
 }

@@ -6,7 +6,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::database::query::QueryResult;
+    use crate::database::ResultParser;
     use crate::database::system_entities::SYSTEM_DATA_MODEL;
     use crate::security::{uid_encode, Ed25519SigningKey};
     use crate::database::sqlite_database::Writeable;
@@ -2069,8 +2069,8 @@ mod tests {
             pub comment: String
         }
 
-        let query_result = QueryResult::new(&result).unwrap();
-        let persons: Vec<Person> = query_result.get("ns.Person").unwrap();
+        let query_result = ResultParser::new(&result).unwrap();
+        let persons: Vec<Person> = query_result.array("ns.Person").unwrap();
 
         assert_eq!(3, persons.len());
         assert_eq!("Alice", persons[0].name);

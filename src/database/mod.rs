@@ -14,11 +14,68 @@ pub mod room_node;
 
 pub mod sqlite_database;
 pub mod system_entities;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub const VEC_OVERHEAD: u64 = 4;
 pub const MESSAGE_OVERHEAD: usize = 16;
+
+///
+/// helper structure to parse the query result
+///
+pub struct ResultParser {
+    parsed: Value,
+}
+impl ResultParser {
+    pub fn new(result: &str) -> std::result::Result<Self, crate::Error> {
+        let parsed: Value = serde_json::from_str(result)?;
+        Ok(Self { parsed })
+    }
+
+    pub fn array<T: DeserializeOwned>(&self, f: &str) -> std::result::Result<Vec<T>, crate::Error> {
+        let mut re = Vec::new();
+        let obj = self.parsed.as_object();
+        if obj.is_none() {
+            return Err(crate::Error::from(Error::InvalidJsonObject("".to_string())));
+        }
+        let obj = obj.unwrap();
+        let field = obj.get(f);
+        if field.is_none() {
+            return Err(crate::Error::from(Error::MissingJsonField(f.to_string())));
+        }
+        let field = field.unwrap();
+        let field_array = field.as_array();
+        if field_array.is_none() {
+            return Err(crate::Error::from(Error::InvalidJSonArray(f.to_string())));
+        }
+        let field_array = field_array.unwrap();
+        for value in field_array.clone() {
+            let entry: T = serde_json::from_value(value)?;
+            re.push(entry);
+        }
+
+        Ok(re)
+    }
+
+    pub fn object<T: DeserializeOwned>(&self, f: &str) -> std::result::Result<T, crate::Error> {
+        let obj = self.parsed.as_object();
+        if obj.is_none() {
+            return Err(crate::Error::from(Error::InvalidJsonObject("".to_string())));
+        }
+        let obj = obj.unwrap();
+        let field = obj.get(f);
+        if field.is_none() {
+            return Err(crate::Error::from(Error::MissingJsonField(f.to_string())));
+        }
+        let field = field.unwrap();
+
+        let obj: T = serde_json::from_value(field.clone())?;
+
+        Ok(obj)
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum Error {

@@ -15,7 +15,7 @@ use crate::{
     network::{
         endpoint::DiscretEndpoint,
         multicast::{self, MulticastMessage},
-        peer_manager::{self, PeerManager},
+        peer_manager::{self, PeerManager, TokenType},
         ConnectionInfo,
     },
     security::{MeetingSecret, Uid},
@@ -47,7 +47,7 @@ pub enum PeerConnectionMessage {
     ConnectionFailed(Uid, Uid),
     PeerConnected(Vec<u8>, Uid),
     PeerDisconnected(Vec<u8>, [u8; 32], Uid),
-    InviteAccepted(Uid, Node),
+    InviteAccepted(TokenType, Node),
     NewPeer(Vec<Node>),
     SendAnnounce(),
     MulticastMessage(MulticastMessage, SocketAddr),
@@ -186,10 +186,10 @@ impl PeerConnectionService {
             .await;
     }
 
-    pub async fn invite_accepted(&self, id: Uid, peer: Node) {
+    pub async fn invite_accepted(&self, token: TokenType, peer: Node) {
         let _ = self
             .sender
-            .send(PeerConnectionMessage::InviteAccepted(id, peer))
+            .send(PeerConnectionMessage::InviteAccepted(token, peer))
             .await;
     }
 
@@ -301,9 +301,8 @@ impl PeerConnectionService {
                     .await;
             }
 
-            PeerConnectionMessage::InviteAccepted(id, peer) => {
-                println!("invite accpeted");
-                if let Err(e) = peer_manager.invite_accepted(id, peer).await {
+            PeerConnectionMessage::InviteAccepted(token, peer) => {
+                if let Err(e) = peer_manager.invite_accepted(token, peer).await {
                     logs.error(
                         "PeerConnectionMessage::InviteAccepted".to_string(),
                         crate::Error::from(e),

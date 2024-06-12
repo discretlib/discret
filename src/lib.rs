@@ -67,10 +67,10 @@ pub use crate::{
     configuration::Configuration,
     database::{
         mutation_query::{IdTree, MutationResult},
-        query::QueryResult,
         query_language::parameter::{Parameters, ParametersAdd},
         room::Room,
         system_entities::DefaultRoom,
+        ResultParser,
     },
     event_service::Event,
     log_service::{Log, LogMessage},
@@ -234,7 +234,7 @@ impl Discret {
         &self,
         m: &str,
         p: Option<Parameters>,
-    ) -> std::result::Result<MutationResult, Error> {
+    ) -> std::result::Result<String, Error> {
         Ok(self.db.mutate(m, p).await?)
     }
 
@@ -399,7 +399,7 @@ impl DiscretBlocking {
         &self,
         m: &str,
         p: Option<Parameters>,
-    ) -> std::result::Result<MutationResult, Error> {
+    ) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()

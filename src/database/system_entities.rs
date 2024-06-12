@@ -15,9 +15,8 @@ use super::{
     edge::Edge,
     graph_database::GraphDatabaseService,
     node::Node,
-    query::QueryResult,
     sqlite_database::{Database, Writeable},
-    Error,
+    Error, ResultParser,
 };
 
 pub fn create_table(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -533,18 +532,19 @@ impl AllowedPeer {
         db: &GraphDatabaseService,
     ) -> Result<Self, crate::Error> {
         let query = "query {
-            result: sys.Peer(verifying_key=$key){
+            result: sys.Peer(verifying_key=$verifying_key){
                 id
                 verifying_key
-            }";
+            }
+        }";
 
         let mut param = Parameters::new();
         param.add("verifying_key", verifying_key.to_string())?;
 
         let peer_str = db.query(query, Some(param)).await?;
 
-        let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let mut result: Vec<Peer> = query_result.get("result")?;
+        let query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let mut result: Vec<Peer> = query_result.array("result")?;
 
         if result.is_empty() {
             return Err(crate::Error::from(Error::UnknownPeer()));
@@ -557,20 +557,19 @@ impl AllowedPeer {
             result: sys.AllowedPeer(room_id=$room_id){
                 meeting_token
                 status
-                peer(
-                    id=$peer_id
-                ){
+                peer(id=$peer_id){
                     id
                     verifying_key
                 }
-            }";
+            }
+        }";
 
         let mut param = Parameters::new();
         param.add("room_id", room_id.to_string())?;
         param.add("peer_id", peer_id.to_string())?;
         let peer_str = db.query(query, Some(param)).await?;
-        let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let mut result: Vec<AllowedPeer> = query_result.get("result")?;
+        let query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let mut result: Vec<AllowedPeer> = query_result.array("result")?;
 
         if !result.is_empty() {
             return Ok(result.pop().unwrap());
@@ -588,7 +587,8 @@ impl AllowedPeer {
                     meeting_token: $meeting_token
                     status: $status
                     peer: {id:$peer_id}
-                }",
+                }
+            }",
             Some(param),
         )
         .await?;
@@ -621,8 +621,8 @@ impl AllowedPeer {
         param.add("status", status.value().to_string())?;
 
         let peer_str = db.query(query, Some(param)).await?;
-        let query_result: QueryResult = QueryResult::new(&peer_str)?;
-        let result: Vec<AllowedPeer> = query_result.get("result")?;
+        let query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let result: Vec<AllowedPeer> = query_result.array("result")?;
 
         Ok(result)
     }
@@ -720,8 +720,8 @@ impl AllowedHardware {
                 Some(param),
             )
             .await?;
-        let query_result: QueryResult = QueryResult::new(&res)?;
-        let mut result: Vec<Self> = query_result.get("result")?;
+        let query_result: ResultParser = ResultParser::new(&res)?;
+        let mut result: Vec<Self> = query_result.array("result")?;
         Ok(result.pop())
     }
 
@@ -800,8 +800,8 @@ impl OwnedInvite {
         struct Remaining {
             remaining_use: i64,
         }
-        let q = QueryResult::new(&res)?;
-        let remain: Vec<Remaining> = q.get("sys.OwnedInvite")?;
+        let q = ResultParser::new(&res)?;
+        let remain: Vec<Remaining> = q.array("sys.OwnedInvite")?;
         if remain.is_empty() {
             return Ok(true);
         }
@@ -875,8 +875,8 @@ impl OwnedInvite {
         }
 
         let mut list = Vec::new();
-        let q = QueryResult::new(&result)?;
-        let invites: Vec<SerProdInvite> = q.get("sys.OwnedInvite")?;
+        let q = ResultParser::new(&result)?;
+        let invites: Vec<SerProdInvite> = q.array("sys.OwnedInvite")?;
         for invite in invites {
             let id = uid_decode(&invite.id)?;
             let remaining_use = invite.remaining_use;
@@ -946,8 +946,14 @@ impl Invite {
                 Some(param),
             )
             .await?;
+        #[derive(Deserialize)]
+        struct Id {
+            id: String,
+        }
+        let parser = ResultParser::new(&res).unwrap();
+        let id: Id = parser.object("sys.OwnedInvite").unwrap();
 
-        let invite_id = res.first_id();
+        let invite_id = id.id;
         let invite_id = uid_decode(&invite_id)?;
         let hash_val = Self::hash_val(invite_id, &application);
         let (_key, invite_sign) = db.sign(hash_val).await;
@@ -993,8 +999,8 @@ impl Invite {
             id: String,
         }
 
-        let q = QueryResult::new(&result)?;
-        let ids: Vec<InvId> = q.get("sys.Invite")?;
+        let q = ResultParser::new(&result)?;
+        let ids: Vec<InvId> = q.array("sys.Invite")?;
 
         for id in ids {
             let mut param = Parameters::new();
@@ -1038,8 +1044,8 @@ impl Invite {
         struct InvId {
             id: String,
         }
-        let q = QueryResult::new(&result)?;
-        let ids: Vec<InvId> = q.get("sys.Invite")?;
+        let q = ResultParser::new(&result)?;
+        let ids: Vec<InvId> = q.array("sys.Invite")?;
 
         if !ids.is_empty() {
             return Ok(());
@@ -1094,8 +1100,8 @@ impl Invite {
         }
 
         let mut list = Vec::new();
-        let q = QueryResult::new(&result)?;
-        let invites: Vec<SerInvite> = q.get("sys.Invite")?;
+        let q = ResultParser::new(&result)?;
+        let invites: Vec<SerInvite> = q.array("sys.Invite")?;
         for invite in invites {
             let invite_id = uid_decode(&invite.invite_id)?;
             let application = invite.application;

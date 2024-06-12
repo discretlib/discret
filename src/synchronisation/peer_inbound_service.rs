@@ -158,7 +158,7 @@ impl LocalPeerService {
         proof.verify(&challenge)?;
         Peer::validate(&proof.peer)?;
 
-        match token_type {
+        match &token_type {
             TokenType::AllowedPeer(peer) => {
                 println!("TokenType::AllowedPeer");
                 let expected_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
@@ -166,6 +166,7 @@ impl LocalPeerService {
                 if expected_key.eq(&proof.peer.verifying_key) {
                     let mut key = remote_verifying_key.lock().await;
                     *key = proof.peer.verifying_key.clone();
+                    drop(key);
                 } else {
                     return Err(crate::Error::InvalidConnection("Invalid Peer".to_string()));
                 }
@@ -175,17 +176,16 @@ impl LocalPeerService {
                     //if new harware && localnet && option
                 }
             }
-            TokenType::OwnedInvite(ownded) => {
-                println!("TokenType::OwnedInvite");
+            TokenType::OwnedInvite(_) => {
                 let mut key = remote_verifying_key.lock().await;
                 *key = proof.peer.verifying_key.clone();
-                //accept peer
-                //update ownded
-                //send reconnect
+                drop(key);
+                peer_service
+                    .invite_accepted(token_type.clone(), proof.peer.clone())
+                    .await;
             }
 
             TokenType::Invite(invite) => {
-                println!("TokenType::Invite");
                 invite.hash();
                 {
                     let pub_key = security::import_verifying_key(&proof.peer.verifying_key)?;
@@ -193,7 +193,10 @@ impl LocalPeerService {
                 }
                 let mut key = remote_verifying_key.lock().await;
                 *key = proof.peer.verifying_key.clone();
-
+                drop(key);
+                peer_service
+                    .invite_accepted(token_type.clone(), proof.peer.clone())
+                    .await;
                 //accept peer
                 //remove invite
                 //send connection
