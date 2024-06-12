@@ -152,6 +152,9 @@ pub enum Error {
     InvalidConnection(String),
 
     #[error("{0}")]
+    SecurityViolation(String),
+
+    #[error("{0}")]
     InvalidInvite(String),
 }
 

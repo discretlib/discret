@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, SocketAddr},
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
@@ -18,7 +18,7 @@ use crate::{
         peer_manager::{self, PeerManager, TokenType},
         ConnectionInfo,
     },
-    security::{MeetingSecret, Uid},
+    security::{HardwareFingerprint, MeetingSecret, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -47,6 +47,7 @@ pub enum PeerConnectionMessage {
     ConnectionFailed(Uid, Uid),
     PeerConnected(Vec<u8>, Uid),
     PeerDisconnected(Vec<u8>, [u8; 32], Uid),
+    ValidateHardware([u8; 32], HardwareFingerprint, oneshot::Sender<Result<bool>>),
     InviteAccepted(TokenType, Node),
     NewPeer(Vec<Node>),
     SendAnnounce(),
@@ -233,6 +234,7 @@ impl PeerConnectionService {
                 };
 
                 let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                let conn_ready = Arc::new(AtomicBool::new(true));
 
                 let inbound_query_service = InboundQueryService::start(
                     circuit_id,
@@ -247,6 +249,7 @@ impl PeerConnectionService {
                     logs.clone(),
                     peer_service.clone(),
                     verifying_key.clone(),
+                    conn_ready.clone(),
                 );
 
                 let query_service =
@@ -259,8 +262,8 @@ impl PeerConnectionService {
                     conn_info.clone(),
                     self_peer.verifying_key.clone(),
                     token,
-                    true,
                     verifying_key.clone(),
+                    conn_ready,
                     db.clone(),
                     lock_service.clone(),
                     query_service,
@@ -346,10 +349,12 @@ impl PeerConnectionService {
                         });
                     }
                 }
-                MulticastMessage::Annouce(a) => peer_manager.process_announce(a, address).await?,
+                MulticastMessage::Annouce(a) => {
+                    peer_manager.process_announce(a, address, true).await?
+                }
                 MulticastMessage::InitiateConnection(header, token) => {
                     peer_manager
-                        .process_initiate_connection(header, token, address)
+                        .process_initiate_connection(header, token, address, true)
                         .await?
                 }
             },
@@ -363,6 +368,16 @@ impl PeerConnectionService {
             }
             PeerConnectionMessage::AcceptInvite(invite) => {
                 peer_manager.accept_invite(&invite).await?;
+            }
+            PeerConnectionMessage::ValidateHardware(circuit, fingerprint, reply) => {
+                let valid = peer_manager
+                    .validate_hardware_int(
+                        &circuit,
+                        fingerprint,
+                        configuration.auto_accept_local_device,
+                    )
+                    .await;
+                let _ = reply.send(valid);
             }
         }
         Ok(())

@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -30,7 +33,7 @@ use crate::{
     log_service::LogService,
     network::{peer_manager::TokenType, ConnectionInfo},
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, base64_encode, random32, Uid},
+    security::{self, base64_encode, random32, HardwareFingerprint, Uid},
     signature_verification_service::SignatureVerificationService,
 };
 
@@ -142,7 +145,7 @@ impl LocalPeerService {
         connection_info: &ConnectionInfo,
         local_key: &Vec<u8>,
         token_type: TokenType,
-        local_network: bool,
+        conn_ready: &Arc<AtomicBool>,
         query_service: &QueryService,
         remote_verifying_key: &Arc<Mutex<Vec<u8>>>,
         peer_service: &PeerConnectionService,
@@ -157,7 +160,7 @@ impl LocalPeerService {
         let proof: IdentityAnswer = proof.unwrap();
         proof.verify(&challenge)?;
         Peer::validate(&proof.peer)?;
-
+        let mut ready = true;
         match &token_type {
             TokenType::AllowedPeer(peer) => {
                 println!("TokenType::AllowedPeer");
@@ -171,9 +174,14 @@ impl LocalPeerService {
                     return Err(crate::Error::InvalidConnection("Invalid Peer".to_string()));
                 }
                 if local_key.eq(&proof.peer.verifying_key) {
-                    //send hardware
-
-                    //if new harware && localnet && option
+                    ready = false;
+                    conn_ready.store(false, Ordering::Relaxed);
+                    let res = Self::send_event(&event_sender, RemoteEvent::ReadyFingerprint)
+                        .await
+                        .map_err(|_| crate::Error::TimeOut("ReadyFingerprint".to_string()));
+                    if res.is_err() {
+                        return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
+                    }
                 }
             }
             TokenType::OwnedInvite(_) => {
@@ -203,16 +211,18 @@ impl LocalPeerService {
             }
         };
 
-        let res = Self::send_event(&event_sender, RemoteEvent::Ready)
-            .await
-            .map_err(|_| crate::Error::TimeOut("Ready".to_string()));
-        if res.is_err() {
-            return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
-        }
+        if ready {
+            let res = Self::send_event(&event_sender, RemoteEvent::Ready)
+                .await
+                .map_err(|_| crate::Error::TimeOut("Ready".to_string()));
+            if res.is_err() {
+                return Ok(false); //silently return to try to avoid poluting the logs with the error caused by the deletion of one of the two connection established during P2P initiaiton
+            }
 
-        peer_service
-            .connected(proof.peer.verifying_key, connection_info.conn_id)
-            .await;
+            peer_service
+                .connected(proof.peer.verifying_key, connection_info.conn_id)
+                .await;
+        }
         Ok(true)
     }
 
@@ -223,8 +233,8 @@ impl LocalPeerService {
         connection_info: ConnectionInfo,
         local_key: Vec<u8>,
         token_type: TokenType,
-        local_network: bool,
         remote_verifying_key: Arc<Mutex<Vec<u8>>>,
+        conn_ready: Arc<AtomicBool>,
         db: GraphDatabaseService,
         lock_service: RoomLockService,
         query_service: QueryService,
@@ -242,7 +252,7 @@ impl LocalPeerService {
                 &connection_info,
                 &local_key,
                 token_type,
-                local_network,
+                &conn_ready,
                 &query_service,
                 &remote_verifying_key,
                 &peer_service,
@@ -253,8 +263,10 @@ impl LocalPeerService {
                 Ok(success) => {
                     if !success {
                         let key = remote_verifying_key.lock().await;
+                        let verif_key = key.clone();
+                        drop(key);
                         peer_service
-                            .disconnect(key.clone(), circuit_id, connection_info.conn_id)
+                            .disconnect(verif_key, circuit_id, connection_info.conn_id)
                             .await;
                         return;
                     }
@@ -262,8 +274,10 @@ impl LocalPeerService {
                 Err(e) => {
                     log_service.error("LocalPeerServiceInit".to_string(), e);
                     let key = remote_verifying_key.lock().await;
+                    let verif_key = key.clone();
+                    drop(key);
                     peer_service
-                        .disconnect(key.clone(), circuit_id, connection_info.conn_id)
+                        .disconnect(verif_key, circuit_id, connection_info.conn_id)
                         .await;
                     return;
                 }
@@ -276,13 +290,22 @@ impl LocalPeerService {
                     msg = remote_event.recv() =>{
                         match msg{
                             Some(msg) => {
+                                let key = remote_verifying_key.lock().await;
+                                let verif_key = key.clone();
+                                drop(key);
+
                                 if let Err(e) = Self::process_remote_event(
                                     msg,
                                     lock_reply.clone(),
                                     &lock_service,
                                     &query_service,
                                     &mut remote_rooms,
-                                    circuit_id
+                                    circuit_id,
+                                    &conn_ready,
+                                    &event_sender,
+                                    &peer_service,
+                                    verif_key,
+                                    connection_info.conn_id
                                  )
                                     .await{
                                         log_service.error("LocalPeerService remote event".to_string(),e);
@@ -346,6 +369,11 @@ impl LocalPeerService {
         query_service: &QueryService,
         remote_rooms: &mut HashSet<Uid>,
         circuit_id: [u8; 32],
+        conn_ready: &Arc<AtomicBool>,
+        event_sender: &Sender<RemoteEvent>,
+        peer_service: &PeerConnectionService,
+        verifying_key: Vec<u8>,
+        connection_id: Uid,
     ) -> Result<(), crate::Error> {
         match event {
             RemoteEvent::Ready => {
@@ -358,6 +386,36 @@ impl LocalPeerService {
                     }
                     lock_service
                         .request_locks(circuit_id, rooms, lock_reply.clone())
+                        .await;
+                }
+            }
+
+            RemoteEvent::ReadyFingerprint => {
+                let fingerprint: HardwareFingerprint =
+                    Self::query(query_service, Query::HardwareFingerprint()).await?;
+
+                let (reply, receive) = oneshot::channel::<Result<bool, crate::Error>>();
+                let _ = peer_service
+                    .sender
+                    .send(PeerConnectionMessage::ValidateHardware(
+                        circuit_id,
+                        fingerprint,
+                        reply,
+                    ))
+                    .await;
+
+                let validated = receive.await??;
+                if validated {
+                    conn_ready.store(true, Ordering::Relaxed);
+
+                    Self::send_event(&event_sender, RemoteEvent::Ready)
+                        .await
+                        .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
+
+                    peer_service.connected(verifying_key, connection_id).await;
+                } else {
+                    peer_service
+                        .disconnect(verifying_key, circuit_id, connection_id)
                         .await;
                 }
             }

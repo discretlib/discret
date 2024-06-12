@@ -36,6 +36,7 @@ pub static NETWORK_TIMEOUT_SEC: u64 = 10;
 #[derive(Serialize, Deserialize)]
 pub enum Query {
     ProveIdentity(Vec<u8>),
+    HardwareFingerprint(),
     RoomList,
     RoomDefinition(Uid),
     RoomNode(Uid),
@@ -70,7 +71,8 @@ pub enum LocalEvent {
 
 #[derive(Serialize, Deserialize)]
 pub enum RemoteEvent {
-    Ready, //indicate that this end of the connection is ready to synchronize
+    Ready,            //indicate that this end of the connection is ready to synchronize
+    ReadyFingerprint, //indicate that this end of the connection is ready to perform a hardware fingerprint check
     RoomDefinitionChanged(Uid),
     RoomDataChanged(Uid),
 }

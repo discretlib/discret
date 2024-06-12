@@ -1,4 +1,10 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use serde::Serialize;
 use tokio::sync::{
@@ -7,10 +13,11 @@ use tokio::sync::{
 };
 
 use crate::{
+    base64_encode,
     database::{graph_database::GraphDatabaseService, node::Node},
     log_service::LogService,
     peer_connection_service::PeerConnectionService,
-    security::Uid,
+    security::{HardwareFingerprint, Uid},
 };
 
 use super::{Answer, Error, IdentityAnswer, Query, QueryProtocol};
@@ -31,8 +38,10 @@ impl InboundQueryService {
         log_service: LogService,
         peer_service: PeerConnectionService,
         verifying_key: Arc<Mutex<Vec<u8>>>,
+        conn_ready: Arc<AtomicBool>,
     ) -> Self {
         let (room_sender, mut room_receiver) = mpsc::unbounded_channel::<Uid>();
+        let fingerprint = HardwareFingerprint::new().unwrap();
 
         tokio::spawn(async move {
             loop {
@@ -40,7 +49,7 @@ impl InboundQueryService {
                     msg = receiver.recv() =>{
                         match msg{
                             Some(msg) => {
-                                if let Err(e)  = Self::process_inbound(msg, &mut peer, &log_service, &verifying_key).await{
+                                if let Err(e)  = Self::process_inbound(msg, &mut peer, &log_service, &verifying_key, &conn_ready,  &fingerprint).await{
                                     log_service.error("RemoteQueryService Channel Send".to_string(), e.into());
                                 }
                             },
@@ -68,8 +77,10 @@ impl InboundQueryService {
     pub async fn process_inbound(
         msg: QueryProtocol,
         peer: &mut RemotePeerHandle,
-        log_service: &LogService,
+        logs: &LogService,
         verifying_key: &Arc<Mutex<Vec<u8>>>,
+        conn_ready: &Arc<AtomicBool>,
+        fingerprint: &HardwareFingerprint,
     ) -> Result<(), crate::Error> {
         match msg.query {
             Query::ProveIdentity(challenge) => {
@@ -86,10 +97,25 @@ impl InboundQueryService {
                 .await
             }
 
+            Query::HardwareFingerprint() => {
+                let key = verifying_key.lock().await;
+                if !key.is_empty() {
+                    if key.eq(&peer.peer.verifying_key) {
+                        peer.send(msg.id, true, true, fingerprint.clone()).await?;
+                    } else {
+                        return Err(crate::Error::SecurityViolation(format!(
+                            "peer with key {} is trying to get your hardware fingerprint",
+                            base64_encode(&key)
+                        )));
+                    }
+                }
+                Ok(())
+            }
+
             Query::RoomList => {
                 let key = verifying_key.lock().await;
 
-                if !key.is_empty() {
+                if !key.is_empty() && conn_ready.load(Ordering::Relaxed) {
                     let init_rooms = peer.allowed_room.is_empty();
 
                     let mut res_reply = peer.db.get_rooms_for_peer(key.clone()).await;
@@ -104,7 +130,7 @@ impl InboundQueryService {
                                 peer.send(msg.id, true, false, room_list).await?;
                             }
                             Err(e) => {
-                                log_service.error("RoomList".to_string(), e.into());
+                                logs.error("RoomList".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,
@@ -126,7 +152,7 @@ impl InboundQueryService {
                     match res {
                         Ok(definition) => peer.send(msg.id, true, true, definition).await?,
                         Err(e) => {
-                            log_service.error("RoomDefinition".to_string(), e.into());
+                            logs.error("RoomDefinition".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
@@ -154,7 +180,7 @@ impl InboundQueryService {
                     match res {
                         Ok(definition) => peer.send(msg.id, true, true, definition).await?,
                         Err(e) => {
-                            log_service.error("RoomNode".to_string(), e.into());
+                            logs.error("RoomNode".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
@@ -184,7 +210,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("RoomLog".to_string(), e.into());
+                                logs.error("RoomLog".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,
@@ -215,7 +241,7 @@ impl InboundQueryService {
                     match res {
                         Ok(log) => peer.send(msg.id, true, true, log).await?,
                         Err(e) => {
-                            log_service.error("RoomLog".to_string(), e.into());
+                            logs.error("RoomLog".to_string(), e.into());
                             peer.send(
                                 msg.id,
                                 false,
@@ -245,7 +271,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("RoomDailyNodes".to_string(), e.into());
+                                logs.error("RoomDailyNodes".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,
@@ -275,7 +301,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("FullNodes".to_string(), e.into());
+                                logs.error("FullNodes".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,
@@ -309,7 +335,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("EdgeDeletionLog".to_string(), e.into());
+                                logs.error("EdgeDeletionLog".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     true,
@@ -342,7 +368,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("NodeDeletionLog".to_string(), e.into());
+                                logs.error("NodeDeletionLog".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,
@@ -374,7 +400,7 @@ impl InboundQueryService {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
                             Err(e) => {
-                                log_service.error("PeerNodes".to_string(), e.into());
+                                logs.error("PeerNodes".to_string(), e.into());
                                 peer.send(
                                     msg.id,
                                     false,

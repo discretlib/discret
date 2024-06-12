@@ -65,6 +65,7 @@ pub struct PeerManager {
     connection_progress: HashMap<[u8; 32], bool>,
     connected: HashMap<[u8; 32], (Connection, Uid, MeetingToken)>,
     connected_tokens: HashMap<MeetingToken, HashSet<[u8; 32]>>,
+    local_circuit: HashSet<[u8; 32]>,
 
     db: GraphDatabaseService,
     logs: LogService,
@@ -130,6 +131,7 @@ impl PeerManager {
             connected: HashMap::new(),
             connected_tokens: HashMap::new(),
             connection_progress: HashMap::new(),
+            local_circuit: HashSet::new(),
             db,
             logs,
             verify_service,
@@ -213,6 +215,7 @@ impl PeerManager {
         &mut self,
         a: Announce,
         address: SocketAddr,
+        local: bool,
     ) -> Result<(), crate::Error> {
         if self.ipv4_header.is_none() {
             return Ok(());
@@ -274,6 +277,9 @@ impl PeerManager {
                             base64_encode(candidate)
                         );
 
+                        if local {
+                            self.local_circuit.insert(circuit_id);
+                        }
                         let _ = self
                             .endpoint
                             .sender
@@ -297,6 +303,7 @@ impl PeerManager {
         header: AnnounceHeader,
         token: MeetingToken,
         address: SocketAddr,
+        local: bool,
     ) -> Result<(), crate::Error> {
         if self.ipv4_header.is_none() {
             return Ok(());
@@ -344,6 +351,9 @@ impl PeerManager {
                             target,
                             base64_encode(&token)
                         );
+                        if local {
+                            self.local_circuit.insert(circuit_id);
+                        }
                         let _ = self
                             .endpoint
                             .sender
@@ -362,6 +372,9 @@ impl PeerManager {
         Ok(())
     }
 
+    pub fn is_local_circuit(&self, circuit_id: &[u8; 32]) -> bool {
+        self.local_circuit.contains(circuit_id)
+    }
     //peer to peer connectoin tends to create two connections
     //we arbitrarily remove the on the highest conn_id (the newest conn, Uids starts with a timestamps)
     pub fn add_connection(
@@ -423,6 +436,9 @@ impl PeerManager {
                 }
             }
         }
+        if !self.connected.contains_key(&circuit_id) {
+            self.local_circuit.remove(&circuit_id);
+        }
         disconnected
     }
 
@@ -443,12 +459,12 @@ impl PeerManager {
 
     pub async fn validate_hardware(
         &self,
-        endpoint_id: Uid,
+        circuit_id: &[u8; 32],
         hardware: HardwareFingerprint,
         auto_allow_local: bool,
     ) -> bool {
         let s = self
-            .validate_hardware_int(endpoint_id, hardware, auto_allow_local)
+            .validate_hardware_int(circuit_id, hardware, auto_allow_local)
             .await;
 
         match s {
@@ -465,22 +481,20 @@ impl PeerManager {
 
     pub async fn validate_hardware_int(
         &self,
-        endpoint_id: Uid,
+        circuit_id: &[u8; 32],
         hardware: HardwareFingerprint,
         auto_allow_local: bool,
     ) -> Result<bool, crate::Error> {
         let allowed_status = "allowed";
         let pending_status = "pending";
-
-        let valid = if endpoint_id == self.endpoint.id {
-            true
-        } else {
+        let is_local = self.is_local_circuit(circuit_id);
+        let valid =
             match AllowedHardware::get(hardware.id, self.private_room_id, allowed_status, &self.db)
                 .await?
             {
                 Some(_) => true,
                 None => {
-                    if auto_allow_local {
+                    if auto_allow_local && is_local {
                         AllowedHardware::put(
                             hardware.id,
                             self.private_room_id,
@@ -502,8 +516,8 @@ impl PeerManager {
                         false
                     }
                 }
-            }
-        };
+            };
+
         Ok(valid)
     }
 
@@ -608,7 +622,6 @@ impl PeerManager {
 
         match token_type {
             TokenType::OwnedInvite(owned) => {
-                println!("TokenType::OwnedInvite");
                 let deleted =
                     OwnedInvite::decrease_and_delete(room_id.clone(), owned.id, &self.db).await?;
 
@@ -642,7 +655,6 @@ impl PeerManager {
                     }
                 }
                 if deleted {
-                    println!("TokenType::Invite");
                     let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
                     if let Some(tokens) = o {
                         let index = tokens.iter().position(|tt| {
@@ -681,99 +693,4 @@ impl PeerManager {
         }
         Ok(())
     }
-
-    // pub async fn invite_accepted(&mut self, id: Uid, peer: Node) -> Result<(), crate::Error> {
-    //     let verifying_key = base64_encode(&peer.verifying_key);
-
-    //     let pub_key = Peer::pub_key(&peer)?;
-    //     let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
-    //     let token = self.meeting_secret.token(&peer_public);
-
-    //     self.db.add_peer_nodes(vec![peer.clone()]).await?;
-    //     let room_id = uid_encode(&self.private_room_id);
-    //     let allowed = AllowedPeer::add(
-    //         &room_id,
-    //         &verifying_key,
-    //         &base64_encode(&token),
-    //         Status::Enabled,
-    //         &self.db,
-    //     )
-    //     .await?;
-
-    //     let entry = self.allowed_token.entry(token).or_default();
-    //     entry.push(TokenType::AllowedPeer(allowed.clone()));
-    //     self.allowed_peers.push(allowed);
-    //     /*
-    //     if owned {
-    //         if OwnedInvite::decrease_and_delete(room_id.clone(), id, &self.db).await? {
-    //             let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
-    //             let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
-    //             if let Some(tokens) = o {
-    //                 let index = tokens.iter().position(|tt| {
-    //                     if let TokenType::OwnedInvite(owned) = tt {
-    //                         owned.id.eq(&id)
-    //                     } else {
-    //                         false
-    //                     }
-    //                 });
-
-    //                 if let Some(index) = index {
-    //                     let owned = &tokens[index];
-    //                     if let TokenType::OwnedInvite(owned) = owned {
-    //                         if let Some(room) = owned.room {
-    //                             if let Some(auth) = owned.authorisation {
-    //                                 println!("inserting new user");
-    //                                 let room = uid_encode(&room);
-    //                                 let auth = uid_encode(&auth);
-    //                                 let verif_key = base64_encode(&peer.verifying_key);
-
-    //                                 let mut param = Parameters::new();
-    //                                 param.add("id", room)?;
-    //                                 param.add("auth", auth)?;
-    //                                 param.add("verif_key", verif_key)?;
-    //                                 self.db
-    //                                     .mutate(
-    //                                         r#"mutate {
-    //                                     sys.Room{
-    //                                         id:$id
-    //                                         authorisations:[{
-    //                                             id:$auth
-    //                                             users: [{
-    //                                                 verif_key:$verif_key
-    //                                                 enabled:true
-    //                                             }]
-    //                                         }]
-    //                                     }
-    //                                 }"#,
-    //                                         Some(param),
-    //                                     )
-    //                                     .await?;
-    //                             }
-    //                         }
-    //                     }
-    //                     tokens.remove(index);
-    //                 }
-    //             }
-    //             self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
-    //         }
-    //     } else {
-    //         let token = MeetingSecret::derive_token(DERIVE_STRING, &id);
-    //         let o = self.allowed_token.get_mut(&token);
-    //         if let Some(tokens) = o {
-    //             let index = tokens.iter().position(|tt| {
-    //                 if let TokenType::Invite(i) = tt {
-    //                     i.invite_id.eq(&id)
-    //                 } else {
-    //                     false
-    //                 }
-    //             });
-    //             if let Some(index) = index {
-    //                 tokens.remove(index);
-    //             }
-    //         }
-    //         Invite::delete(room_id.clone(), id, &self.db).await?;
-    //         self.invites = Invite::list(room_id.clone(), &self.db).await?;
-    //     }*/
-    //     Ok(())
-    // }
 }
