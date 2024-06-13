@@ -314,7 +314,7 @@ async fn new_peers_from_room() {
     let key_material = random32();
     let config = Configuration {
         multicast_ipv4_group: "224.0.0.224:22404".to_string(),
-        announce_frequency_in_ms: 100,
+        // announce_frequency_in_ms: 100,
         ..Default::default()
     };
     let discret1: Discret =
@@ -460,6 +460,9 @@ async fn new_peers_from_room() {
     let res3 = discret3.query(query, None).await.unwrap();
     assert_eq!(res1, res2);
     assert_eq!(res1, res3);
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    //allowedpeers can be synchronized after room synchronisation so we wati for them a little
 
     let query = r#"query{
         sys.AllowedPeer(status="pending"){

@@ -833,11 +833,16 @@ fn prepare_auth_with_history(
                 true => {
                     need_update = true;
                 }
-                false => {
-                    return Err(Error::InvalidNode(
-                        "RoomNode Authorisation new User cis not authorised".to_string(),
-                    ))
-                }
+                false => match room.is_admin(&new_user.node.verifying_key, new_user.node.mdate) {
+                    true => {
+                        need_update = true;
+                    }
+                    false => {
+                        return Err(Error::InvalidNode(
+                            "RoomNode Authorisation new User not authorised".to_string(),
+                        ))
+                    }
+                },
             }
         }
     }
