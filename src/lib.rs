@@ -156,6 +156,9 @@ pub enum Error {
 
     #[error("{0}")]
     InvalidInvite(String),
+
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 #[derive(Clone)]
@@ -256,16 +259,12 @@ impl Discret {
     /// Create an invitation
     /// num_use indicate the number of time it can be used before beiing discarded
     ///   
-    pub async fn invite(&self, num_use: i64, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
+    pub async fn invite(&self, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<u8>>>();
         let _ = self
             .peers
             .sender
-            .send(PeerConnectionMessage::CreateInvite(
-                num_use,
-                default_room,
-                reply,
-            ))
+            .send(PeerConnectionMessage::CreateInvite(default_room, reply))
             .await;
         receive.await?
     }

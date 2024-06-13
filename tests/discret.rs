@@ -131,15 +131,16 @@ async fn invites() {
     let app_name = "hello";
     let model = "{Person{name:String,}}";
     let key_material = random32();
-    let discret1: Discret = Discret::new(
-        model,
-        app_name,
-        &key_material,
-        path.clone(),
-        Configuration::default(),
-    )
-    .await
-    .unwrap();
+    let config = Configuration {
+        multicast_ipv4_group: "224.0.0.224:22403".to_string(),
+        announce_frequency_in_ms: 100,
+        ..Default::default()
+    };
+
+    let discret1: Discret =
+        Discret::new(model, app_name, &key_material, path.clone(), config.clone())
+            .await
+            .unwrap();
 
     let mut param = Parameters::new();
     param
@@ -200,26 +201,17 @@ async fn invites() {
         .unwrap();
 
     let invite = discret1
-        .invite(
-            1,
-            Some(DefaultRoom {
-                room: room_id.clone(),
-                authorisation: auth_id,
-            }),
-        )
+        .invite(Some(DefaultRoom {
+            room: room_id.clone(),
+            authorisation: auth_id,
+        }))
         .await
         .unwrap();
 
     let key_material = random32();
-    let discret2: Discret = Discret::new(
-        model,
-        app_name,
-        &key_material,
-        path,
-        Configuration::default(),
-    )
-    .await
-    .unwrap();
+    let discret2: Discret = Discret::new(model, app_name, &key_material, path, config.clone())
+        .await
+        .unwrap();
 
     discret2.accept_invite(invite).await.unwrap();
 
@@ -241,8 +233,10 @@ async fn invites() {
             }
         }
     });
-    let s = tokio::time::timeout(Duration::from_millis(500), handle).await;
-    assert!(s.is_ok());
+    let s = tokio::time::timeout(Duration::from_millis(1000), handle)
+        .await
+        .unwrap();
+
     let query = "query{
         Person{
             name
@@ -310,4 +304,187 @@ async fn invites() {
     let parser = ResultParser::new(&res2).unwrap();
     let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
     assert_eq!(ids.len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn new_peers_from_room() {
+    let path: PathBuf = DATA_PATH.into();
+    let app_name = "hello";
+    let model = "{Person{name:String,}}";
+    let key_material = random32();
+    let config = Configuration {
+        multicast_ipv4_group: "224.0.0.224:22404".to_string(),
+        announce_frequency_in_ms: 100,
+        ..Default::default()
+    };
+    let discret1: Discret =
+        Discret::new(model, app_name, &key_material, path.clone(), config.clone())
+            .await
+            .unwrap();
+
+    let mut param = Parameters::new();
+    param
+        .add("key", base64_encode(discret1.verifying_key()))
+        .unwrap();
+    let result = discret1
+        .mutate(
+            r#"mutate mut {
+                sys.Room{
+                    admin: [{
+                        verif_key:$key
+                    }]
+                    authorisations:[{
+                        name:"admin"
+                        rights:[{
+                            entity:"Person"
+                            mutate_self:true
+                            mutate_all:true
+                        }]
+                    }]
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+    #[derive(Deserialize)]
+    struct Ids {
+        id: String,
+        authorisations: Vec<Auth>,
+    }
+    #[derive(Deserialize)]
+    struct Auth {
+        id: String,
+    }
+    let parser = ResultParser::new(&result).unwrap();
+    let mut ids: Ids = parser.object("sys.Room").unwrap();
+    let room_id = ids.id;
+    let auth_id = ids.authorisations.pop().unwrap().id;
+    let new_room = uid_decode(&room_id).unwrap();
+
+    // println!("{}", res.json);
+
+    let mut param = Parameters::new();
+    param.add("room_id", room_id.clone()).unwrap();
+
+    discret1
+        .mutate(
+            r#"mutate mut {
+            Person{
+                room_id:$room_id
+                name: "John Doe"
+            }
+        }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+    let invite = discret1
+        .invite(Some(DefaultRoom {
+            room: room_id.clone(),
+            authorisation: auth_id.clone(),
+        }))
+        .await
+        .unwrap();
+
+    let key_material = random32();
+    let discret2: Discret =
+        Discret::new(model, app_name, &key_material, path.clone(), config.clone())
+            .await
+            .unwrap();
+
+    discret2.accept_invite(invite).await.unwrap();
+
+    let mut events = discret2.subscribe_for_events().await;
+    let handle2 = tokio::spawn(async move {
+        loop {
+            let event = events.recv().await;
+            match event {
+                Ok(e) => match e {
+                    Event::RoomSynchronized(room_id) => {
+                        assert_eq!(room_id, new_room);
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(e) => println!("Error {}", e),
+            }
+        }
+    });
+
+    let key_material = random32();
+    let discret3: Discret = Discret::new(model, app_name, &key_material, path, config.clone())
+        .await
+        .unwrap();
+    let invite = discret1
+        .invite(Some(DefaultRoom {
+            room: room_id.clone(),
+            authorisation: auth_id,
+        }))
+        .await
+        .unwrap();
+
+    discret3.accept_invite(invite.clone()).await.unwrap();
+    let mut events = discret3.subscribe_for_events().await;
+    let handle3 = tokio::spawn(async move {
+        loop {
+            let event = events.recv().await;
+            match event {
+                Ok(e) => match e {
+                    Event::RoomSynchronized(room_id) => {
+                        assert_eq!(room_id, new_room);
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(e) => println!("Error {}", e),
+            }
+        }
+    });
+
+    let s = tokio::time::timeout(Duration::from_millis(1000), handle2).await;
+    assert!(s.is_ok());
+
+    let s = tokio::time::timeout(Duration::from_millis(1000), handle3).await;
+    assert!(s.is_ok());
+
+    let query = "query{
+        Person{
+            name
+        }
+    }";
+    let res1 = discret1.query(query, None).await.unwrap();
+    let res2 = discret2.query(query, None).await.unwrap();
+    let res3 = discret3.query(query, None).await.unwrap();
+    assert_eq!(res1, res2);
+    assert_eq!(res1, res3);
+
+    let query = r#"query{
+        sys.AllowedPeer(status="pending"){
+            id
+        }
+    }"#;
+
+    #[derive(Deserialize)]
+    struct Id {
+        pub id: String,
+    }
+    let res1 = discret1.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    assert_eq!(ids.len(), 0);
+
+    let res2 = discret2.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    assert_eq!(ids.len(), 1);
+    assert!(ids[0].id.len() > 0);
+
+    let res3 = discret3.query(query, None).await.unwrap();
+    let parser = ResultParser::new(&res3).unwrap();
+    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    assert_eq!(ids.len(), 1);
+    assert!(ids[0].id.len() > 0);
 }

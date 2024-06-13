@@ -469,7 +469,8 @@ impl GraphDatabaseService {
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_log = DailyLog::get_room_log_at(&room_id, date, conn).map_err(Error::from);
+                let room_log =
+                    DailyLog::get_room_log_at(&room_id, date, conn).map_err(Error::from);
                 let _ = reply.send(room_log);
             }))
             .await?;

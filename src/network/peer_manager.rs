@@ -143,6 +143,15 @@ impl PeerManager {
     }
 
     pub async fn send_annouces(&self) -> Result<(), crate::Error> {
+        let total_peer =
+            &self.allowed_peers.len() + &self.invites.len() + &self.owned_invites.len();
+        if total_peer >= MAX_ANNOUNCE_TOKENS {
+            return Err(crate::Error::Unsupported(format!(
+                "Soon to be fixed, but for now, the total of allowed peers, invites and owned invites is limited to {}",
+                MAX_ANNOUNCE_TOKENS
+            )));
+        }
+
         if let Some(ipv4_header) = &self.ipv4_header {
             let mut tokens: Vec<MeetingToken> = Vec::new();
             for tok in &self.allowed_peers {
@@ -555,12 +564,10 @@ impl PeerManager {
 
     pub async fn create_invite(
         &mut self,
-        num_use: i64,
         default_room: Option<DefaultRoom>,
     ) -> Result<Vec<u8>, crate::Error> {
         let (invite, owned) = Invite::create(
             uid_encode(&self.private_room_id),
-            num_use,
             default_room,
             self.app_name.to_string(),
             &self.db,
@@ -622,8 +629,7 @@ impl PeerManager {
 
         match token_type {
             TokenType::OwnedInvite(owned) => {
-                let deleted =
-                    OwnedInvite::decrease_and_delete(room_id.clone(), owned.id, &self.db).await?;
+                OwnedInvite::delete(owned.id, &self.db).await?;
 
                 if let Some(room) = owned.room {
                     if let Some(auth) = owned.authorisation {
@@ -654,23 +660,22 @@ impl PeerManager {
                             .await?;
                     }
                 }
-                if deleted {
-                    let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
-                    if let Some(tokens) = o {
-                        let index = tokens.iter().position(|tt| {
-                            if let TokenType::OwnedInvite(owned_tok) = tt {
-                                owned.id.eq(&owned_tok.id)
-                            } else {
-                                false
-                            }
-                        });
 
-                        if let Some(index) = index {
-                            tokens.remove(index);
+                let o: Option<&mut Vec<TokenType>> = self.allowed_token.get_mut(&token);
+                if let Some(tokens) = o {
+                    let index = tokens.iter().position(|tt| {
+                        if let TokenType::OwnedInvite(owned_tok) = tt {
+                            owned.id.eq(&owned_tok.id)
+                        } else {
+                            false
                         }
+                    });
+
+                    if let Some(index) = index {
+                        tokens.remove(index);
                     }
-                    self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
                 }
+                self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
             }
             TokenType::Invite(invite) => {
                 let o = self.allowed_token.get_mut(&token);
@@ -690,6 +695,53 @@ impl PeerManager {
                 self.invites = Invite::list(room_id.clone(), &self.db).await?;
             }
             _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub async fn add_new_peers(
+        &mut self,
+        peers: Vec<Node>,
+        auto_allow_new_peers: bool,
+    ) -> Result<(), crate::Error> {
+        let room_id = uid_encode(&self.private_room_id);
+        let mut send_announce = false;
+        for peer in peers {
+            let verifying_key = base64_encode(&peer.verifying_key);
+
+            let pub_key = Peer::pub_key(&peer)?;
+
+            let peer_public: PublicKey = bincode::deserialize(&pub_key)?;
+
+            let token = self.meeting_secret.token(&peer_public);
+
+            if auto_allow_new_peers {
+                let allowed = AllowedPeer::add(
+                    &room_id,
+                    &verifying_key,
+                    &base64_encode(&token),
+                    Status::Enabled,
+                    &self.db,
+                )
+                .await?;
+
+                let entry = self.allowed_token.entry(token).or_default();
+                entry.push(TokenType::AllowedPeer(allowed.clone()));
+                self.allowed_peers.push(allowed);
+                send_announce = true;
+            } else {
+                AllowedPeer::add(
+                    &room_id,
+                    &verifying_key,
+                    &base64_encode(&token),
+                    Status::Pending,
+                    &self.db,
+                )
+                .await?;
+            }
+        }
+        if send_announce {
+            self.send_annouces().await?;
         }
         Ok(())
     }

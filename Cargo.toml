@@ -1,8 +1,8 @@
 [package]
 name = "discret"
-version = "0.2.0"
+version = "0.6.0"
 license = "AGPL"
-authors = ["Adrien Salais <adrien.salais@gmail.com>"]
+authors = ["Adrien Salais <adrien.salais@proton.me>"]
 keywords = ["p2p, peer to peer, GraphQl"]
 edition = "2021"
 

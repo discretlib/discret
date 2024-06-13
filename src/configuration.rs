@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
-
 ///
 /// Global configuration for the discret lib
 ///
 /// Default configuration is defined to try to limit the RAM memory usage to about 1 Gb at worst
 ///
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Configuration {
     ///
     /// default: 512
@@ -147,6 +146,12 @@ pub struct Configuration {
     pub multicast_ipv4_group: String,
 
     ///
+    /// default 60000ms (60 seconds)
+    /// how often an annouce is sent over network
+    ///
+    pub announce_frequency_in_ms: u64,
+
+    ///
     /// Default: false (disabled)
     ///
     /// Enable_memory_security: Prevents memory to be written into swap and zeroise memory after free
@@ -169,9 +174,10 @@ impl Default for Configuration {
             read_cache_size_in_kb: 4096,
             write_cache_size_in_kb: 2048,
             write_buffer_length: 1024,
-            enable_database_memory_security: false,
             multicast_ipv4_interface: "0.0.0.0".to_string(),
             multicast_ipv4_group: "224.0.0.224:22402".to_string(),
+            announce_frequency_in_ms: 60000,
+            enable_database_memory_security: false,
         }
     }
 }

@@ -52,7 +52,7 @@ pub enum PeerConnectionMessage {
     NewPeer(Vec<Node>),
     SendAnnounce(),
     MulticastMessage(MulticastMessage, SocketAddr),
-    CreateInvite(i64, Option<DefaultRoom>, oneshot::Sender<Result<Vec<u8>>>),
+    CreateInvite(Option<DefaultRoom>, oneshot::Sender<Result<Vec<u8>>>),
     AcceptInvite(Vec<u8>),
 }
 
@@ -314,9 +314,9 @@ impl PeerConnectionService {
             }
 
             PeerConnectionMessage::NewPeer(peers) => {
-                if configuration.auto_allow_new_peers {
-                } else {
-                }
+                peer_manager
+                    .add_new_peers(peers, configuration.auto_allow_new_peers)
+                    .await?;
             }
 
             PeerConnectionMessage::SendAnnounce() => {
@@ -336,8 +336,9 @@ impl PeerConnectionService {
                     //ip have been retrieved and headers have been initialised, we can start sending anounce
                     if probed {
                         let service = peer_service.clone();
+                        let frequency = configuration.announce_frequency_in_ms;
                         tokio::spawn(async move {
-                            let mut interval = time::interval(Duration::from_secs(60));
+                            let mut interval = time::interval(Duration::from_millis(frequency));
 
                             loop {
                                 interval.tick().await;
@@ -362,8 +363,8 @@ impl PeerConnectionService {
             PeerConnectionMessage::ConnectionFailed(endpoint_id, remote_id) => {
                 peer_manager.clean_progress(endpoint_id, remote_id);
             }
-            PeerConnectionMessage::CreateInvite(num_use, default_room, reply) => {
-                let s = peer_manager.create_invite(num_use, default_room).await;
+            PeerConnectionMessage::CreateInvite(default_room, reply) => {
+                let s = peer_manager.create_invite(default_room).await;
                 let _ = reply.send(s);
             }
             PeerConnectionMessage::AcceptInvite(invite) => {

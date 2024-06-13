@@ -835,7 +835,7 @@ fn prepare_auth_with_history(
                 }
                 false => {
                     return Err(Error::InvalidNode(
-                        "RoomNode Authorisation new User is not authorised".to_string(),
+                        "RoomNode Authorisation new User cis not authorised".to_string(),
                     ))
                 }
             }

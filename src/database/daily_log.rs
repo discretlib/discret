@@ -47,7 +47,7 @@ impl DailyMutations {
                     history_hash,
                     need_recompute
                 ) values (?,?,?, 0, NULL, NULL, 1)
-                ON CONFLICT(room_id, date) 
+                ON CONFLICT(room_id, entity, date) 
                 DO UPDATE SET daily_hash = NULL , need_recompute = 1;
             ",
         )?;
@@ -289,15 +289,15 @@ impl DailyLog {
     pub fn create_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE _daily_log (
-            room_id BLOB NOT NULL,
-            entity TEXT NOT NULL,
-            date INTEGER NOT NULL,
-            entry_number INTEGER NOT NULL DEFAULT 0,
-            daily_hash BLOB,
-            history_hash BLOB,
-            need_recompute INTEGER, 
-            PRIMARY KEY (room_id, date)
-        ) WITHOUT ROWID, STRICT",
+                room_id BLOB NOT NULL,
+                entity TEXT NOT NULL,
+                date INTEGER NOT NULL,
+                entry_number INTEGER NOT NULL DEFAULT 0,
+                daily_hash BLOB,
+                history_hash BLOB,
+                need_recompute INTEGER, 
+                PRIMARY KEY (room_id, entity, date)
+            ) WITHOUT ROWID, STRICT",
             [],
         )?;
         conn.execute(
@@ -307,11 +307,11 @@ impl DailyLog {
 
         conn.execute(
             "
-                CREATE TABLE _room_changelog (
-                    room_id BLOB NOT NULL,
-                    mdate INTEGER NOT NULL,
-                    PRIMARY KEY(room_id)
-                ) WITHOUT ROWID, STRICT",
+            CREATE TABLE _room_changelog (
+                room_id BLOB NOT NULL,
+                mdate INTEGER NOT NULL,
+                PRIMARY KEY(room_id)
+            ) WITHOUT ROWID, STRICT",
             [],
         )?;
         Ok(())

@@ -144,7 +144,6 @@ sys{
     }
 
     OwnedInvite{
-        remaining_use: Integer,
         room: Base64 nullable,
         authorisation: Base64 nullable,
     }
@@ -772,64 +771,10 @@ impl AllowedHardware {
 #[derive(Clone)]
 pub struct OwnedInvite {
     pub id: Uid,
-    pub remaining_use: i64,
     pub room: Option<Uid>,
     pub authorisation: Option<Uid>,
 }
 impl OwnedInvite {
-    pub async fn decrease_and_delete(
-        room_id: String,
-        id: Uid,
-        db: &GraphDatabaseService,
-    ) -> Result<bool, crate::Error> {
-        let mut param = Parameters::new();
-        param.add("room_id", room_id)?;
-        param.add("id", uid_encode(&id))?;
-        let res = db
-            .query(
-                "query {
-            sys.OwnedInvite(room_id=$room_id, id=$id){
-                remaining_use
-            }
-        }",
-                Some(param),
-            )
-            .await?;
-
-        #[derive(Deserialize)]
-        struct Remaining {
-            remaining_use: i64,
-        }
-        let q = ResultParser::new(&res)?;
-        let remain: Vec<Remaining> = q.array("sys.OwnedInvite")?;
-        if remain.is_empty() {
-            return Ok(true);
-        }
-        let mut remaining = remain[0].remaining_use;
-        let mut deleted = false;
-        if remaining <= 1 {
-            Self::delete(id, db).await?;
-            deleted = true;
-        } else {
-            remaining -= 1;
-            let mut param = Parameters::new();
-            param.add("id", uid_encode(&id))?;
-            param.add("remaining", remaining)?;
-
-            db.mutate(
-                "mutate {
-                sys.OwnedInvite{
-                    id:$id
-                    remaining_use: $remaining
-                }
-            }",
-                Some(param),
-            )
-            .await?;
-        }
-        Ok(deleted)
-    }
-
     pub async fn delete(id: Uid, db: &GraphDatabaseService) -> Result<(), Error> {
         let mut param = Parameters::new();
         param.add("id", uid_encode(&id))?;
@@ -855,9 +800,8 @@ impl OwnedInvite {
         let result = db
             .query(
                 "query{
-            sys.OwnedInvite(room_id=$room_id, remaining_use > 0, order_by(mdate desc)){
+            sys.OwnedInvite(room_id=$room_id, order_by(mdate desc)){
                 id
-                remaining_use
                 room
                 authorisation
             }
@@ -869,7 +813,6 @@ impl OwnedInvite {
         #[derive(Deserialize)]
         struct SerProdInvite {
             id: String,
-            remaining_use: i64,
             room: Option<String>,
             authorisation: Option<String>,
         }
@@ -879,7 +822,6 @@ impl OwnedInvite {
         let invites: Vec<SerProdInvite> = q.array("sys.OwnedInvite")?;
         for invite in invites {
             let id = uid_decode(&invite.id)?;
-            let remaining_use = invite.remaining_use;
             let room = match invite.room {
                 Some(v) => Some(uid_decode(&v)?),
                 None => None,
@@ -891,7 +833,6 @@ impl OwnedInvite {
 
             list.push(Self {
                 id,
-                remaining_use,
                 room,
                 authorisation,
             })
@@ -909,7 +850,6 @@ pub struct Invite {
 impl Invite {
     pub async fn create(
         room_id: String,
-        num_use: i64,
         default_room: Option<DefaultRoom>,
         application: String,
         db: &GraphDatabaseService,
@@ -929,7 +869,6 @@ impl Invite {
 
         let mut param = Parameters::new();
         param.add("room_id", room_id)?;
-        param.add("num_use", num_use)?;
         param.add("room", room)?;
         param.add("auth", auth)?;
 
@@ -938,7 +877,6 @@ impl Invite {
                 "mutate {
             sys.OwnedInvite {
                 room_id:$room_id
-                remaining_use: $num_use 
                 room: $room
                 authorisation: $auth 
             }
@@ -966,7 +904,6 @@ impl Invite {
 
         let owned = OwnedInvite {
             id: invite_id,
-            remaining_use: num_use,
             room: default_room_id,
             authorisation: default_auth_id,
         };
@@ -1418,7 +1355,6 @@ mod tests {
 
         let (invite, _) = Invite::create(
             uid_encode(&private_room),
-            1,
             None,
             "authorisation app".to_string(),
             &db,
@@ -1457,51 +1393,6 @@ mod tests {
 
         let bin_invite = bincode::serialize(&invite).unwrap();
         println!("Invite: {}", base64_encode(&bin_invite));
-
-        drop(db);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn invite_remaining() {
-        init_database_path();
-
-        let path: PathBuf = DATA_PATH.into();
-        let secret = random32();
-        let pub_key = &random32();
-
-        let (db, _verifying_key, private_room) = GraphDatabaseService::start(
-            "authorisation app",
-            "",
-            &secret,
-            &pub_key,
-            path.clone(),
-            &Configuration::default(),
-            EventService::new(),
-        )
-        .await
-        .unwrap();
-
-        let (invite, _) = Invite::create(
-            uid_encode(&private_room),
-            2,
-            None,
-            "authorisation app".to_string(),
-            &db,
-        )
-        .await
-        .unwrap();
-
-        let deleted =
-            OwnedInvite::decrease_and_delete(uid_encode(&private_room), invite.invite_id, &db)
-                .await
-                .unwrap();
-        assert!(!deleted);
-
-        let deleted =
-            OwnedInvite::decrease_and_delete(uid_encode(&private_room), invite.invite_id, &db)
-                .await
-                .unwrap();
-        assert!(deleted);
 
         drop(db);
     }

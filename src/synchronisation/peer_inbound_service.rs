@@ -163,7 +163,6 @@ impl LocalPeerService {
         let mut ready = true;
         match &token_type {
             TokenType::AllowedPeer(peer) => {
-                println!("TokenType::AllowedPeer");
                 let expected_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
 
                 if expected_key.eq(&proof.peer.verifying_key) {
@@ -568,10 +567,12 @@ impl LocalPeerService {
                         match local {
                             Some(local_node) => {
                                 if local_node.mdate < node.mdate {
+                                    Peer::validate(&node)?;
                                     peer_nodes.push(node);
                                 }
                             }
                             None => {
+                                Peer::validate(&node)?;
                                 peer_nodes.push(node);
                             }
                         }
