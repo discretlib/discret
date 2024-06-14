@@ -5,12 +5,12 @@ use std::{
 
 use super::{
     daily_log::DailyMutations,
-    sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
+    sqlite_database::{RowMappingFn, Writeable},
     Error, Result, VEC_OVERHEAD,
 };
 use crate::{
     date_utils::{date, date_next_day, now},
-    security::{base64_encode, import_verifying_key, new_uid, uid_encode, SigningKey, Uid},
+    security::{import_verifying_key, new_uid, SigningKey, Uid},
 };
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
@@ -119,30 +119,6 @@ impl Node {
         Ok(())
     }
 
-    fn len(&self) -> Result<usize> {
-        let mut len = 0;
-        len += self.id.len();
-        if let Some(rid) = &self.room_id {
-            len += rid.len();
-        }
-
-        len += 8; //date
-        len += 8; //cdate
-        len += self._entity.as_bytes().len();
-
-        if let Some(v) = &self._json {
-            len += v.as_bytes().len();
-        }
-
-        if let Some(v) = &self._binary {
-            len += v.len();
-        }
-
-        len += &self.verifying_key.len();
-        len += &self._signature.len();
-        Ok(len)
-    }
-
     pub fn eq(&self, node: &Node) -> bool {
         let room_id = match (&self.room_id, &node.room_id) {
             (Some(a), Some(b)) => a.eq(b),
@@ -202,15 +178,6 @@ impl Node {
         if self._entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
         }
-        let size = self.len()?;
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Node {} is too large. {} bytes instead of {}",
-                base64_encode(&self.id),
-                size,
-                MAX_ROW_LENTGH
-            )));
-        }
 
         //ensure that the Json field is an Object field
         if let Some(v) = &self._json {
@@ -246,16 +213,6 @@ impl Node {
                     "json field is not an Object",
                 )));
             }
-        }
-
-        let size = self.len()?;
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Node {} is too long {} bytes instead of {}",
-                uid_encode(&self.id),
-                size,
-                MAX_ROW_LENTGH
-            )));
         }
 
         let hash = self.hash()?;
@@ -1122,12 +1079,6 @@ mod tests {
         node.sign(&keypair).unwrap();
         assert_ne!(b"badkey".to_vec(), node.verifying_key);
         node.verify().unwrap();
-
-        let sq = &['a'; MAX_ROW_LENTGH];
-        let big_string = String::from_iter(sq);
-        node._entity = big_string;
-        node.verify().expect_err("node is too big");
-        node.sign(&keypair).expect_err("node is too big");
     }
 
     #[test]

@@ -870,6 +870,7 @@ impl GraphDatabase {
         let mut auth = RoomAuthorisations {
             signing_key,
             rooms: HashMap::new(),
+            max_node_size: config.max_object_size_in_kb * 1024,
         };
 
         // create the system room associated the user

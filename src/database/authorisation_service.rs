@@ -358,6 +358,7 @@ impl AuthorisationService {
 pub struct RoomAuthorisations {
     pub signing_key: Ed25519SigningKey,
     pub rooms: HashMap<Uid, Room>,
+    pub max_node_size: u64,
 }
 impl RoomAuthorisations {
     pub fn add_room(&mut self, room: Room) {
@@ -501,6 +502,12 @@ impl RoomAuthorisations {
                 if to_insert.node.is_none() {
                     //this is a reference, not mutation occurs
                     return Ok(rooms);
+                } else {
+                    let node = to_insert.node.as_ref().unwrap();
+                    let size = bincode::serialized_size(node)?;
+                    if size > self.max_node_size {
+                        return Err(Error::NodeTooBig(size, self.max_node_size));
+                    }
                 }
                 match &to_insert.old_node {
                     Some(old_node) => {
@@ -1046,6 +1053,15 @@ impl RoomAuthorisations {
             Some(n) => n,
             None => return false,
         };
+
+        match bincode::serialized_size(node) {
+            Ok(size) => {
+                if size > self.max_node_size {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
 
         let required_right = match &node_to_insert.old_verifying_key {
             Some(old_key) => match old_key.eq(&node.verifying_key) {

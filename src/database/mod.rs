@@ -103,8 +103,11 @@ pub enum Error {
     #[error(transparent)]
     Bincode(#[from] Box<bincode::ErrorKind>),
 
-    #[error("{0}")]
-    DatabaseRowToLong(String),
+    #[error("Node len:{0} is larger than the maximum authorised: {1}")]
+    NodeTooBig(u64, u64),
+
+    #[error("Edge len:{0} is larger than the maximum authorised: {1}")]
+    EdgeTooBig(usize, usize),
 
     #[error("Invalid JSON Object {0}")]
     InvalidJsonObject(String),

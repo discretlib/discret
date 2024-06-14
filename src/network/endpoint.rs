@@ -57,7 +57,7 @@ impl DiscretEndpoint {
         peer_service: PeerConnectionService,
         log: LogService,
         num_buffers: usize,
-        max_buffer_size: usize,
+        buffer_size: usize,
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
@@ -115,7 +115,7 @@ impl DiscretEndpoint {
                             &ipv6,
                             &i_buff,
                             &o_buff,
-                            max_buffer_size,
+                            buffer_size,
                         );
                     }
                 }
@@ -132,8 +132,7 @@ impl DiscretEndpoint {
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
                 let new_conn =
-                    Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, max_buffer_size)
-                        .await;
+                    Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size).await;
                 if let Err(e) = new_conn {
                     logs.error(
                         "ipv4 - start_accepted".to_string(),
@@ -151,7 +150,7 @@ impl DiscretEndpoint {
                         incoming,
                         &input_buffers,
                         &output_buffers,
-                        max_buffer_size,
+                        buffer_size,
                     )
                     .await;
                     if let Err(e) = new_conn {

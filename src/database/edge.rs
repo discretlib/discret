@@ -1,16 +1,21 @@
 use super::{
     daily_log::DailyMutations,
-    sqlite_database::{RowMappingFn, Writeable, MAX_ROW_LENTGH},
+    sqlite_database::{RowMappingFn, Writeable},
     Error, Result, VEC_OVERHEAD,
 };
 use crate::{
     date_utils::{date, date_next_day},
-    security::{base64_encode, import_verifying_key, SigningKey, Uid},
+    security::{import_verifying_key, SigningKey, Uid},
 };
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+///
+/// Maximum allowed size for a row
+/// set to a relatively low value to avoid large rows that would eats lots of ram and bandwith during synchronisation
+///
+pub const MAX_EDGE_LENTGH: usize = 1024; //1kb
 
 ///
 /// Edge object stores relations between Nodes
@@ -137,15 +142,8 @@ impl Edge {
     ///
     pub fn verify(&self) -> Result<()> {
         let size = self.len();
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Edge {}-{}-{} is too long {} bytes instead of {}",
-                base64_encode(&self.src),
-                &self.label,
-                base64_encode(&self.dest),
-                size,
-                MAX_ROW_LENTGH
-            )));
+        if size > MAX_EDGE_LENTGH {
+            return Err(Error::EdgeTooBig(size, MAX_EDGE_LENTGH));
         }
         if self.src_entity.is_empty() {
             return Err(Error::EmptyNodeEntity());
@@ -177,15 +175,8 @@ impl Edge {
         self.verifying_key = signing_key.export_verifying_key();
 
         let size = self.len();
-        if size > MAX_ROW_LENTGH {
-            return Err(Error::DatabaseRowToLong(format!(
-                "Edge {}-{}-{} is too long {} bytes instead of {}",
-                base64_encode(&self.src),
-                &self.label,
-                base64_encode(&self.dest),
-                size,
-                MAX_ROW_LENTGH
-            )));
+        if size > MAX_EDGE_LENTGH {
+            return Err(Error::EdgeTooBig(size, MAX_EDGE_LENTGH));
         }
         let hash = self.hash();
 

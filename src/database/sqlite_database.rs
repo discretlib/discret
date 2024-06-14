@@ -676,12 +676,6 @@ impl Writeable for Optimize {
 }
 
 ///
-/// Maximum allowed size for a row
-/// set to a relatively low value to avoid large rows that would eats lots of ram and bandwith during synchronisation
-///
-pub const MAX_ROW_LENTGH: usize = 1024 * 1024; //1MB
-
-///
 /// Creates a Sqlite function to encode and decode base64 in sql queries
 /// Used to convert the binary identifiers into a string.
 /// Base64 is more efficient than hexadecimal

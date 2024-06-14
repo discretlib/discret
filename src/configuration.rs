@@ -93,7 +93,7 @@ pub struct Configuration {
     /// Increasing this value will increase the RAM usage of the application
     ///
     ///
-    pub max_object_size_in_kb: usize,
+    pub max_object_size_in_kb: u64,
 
     ///
     /// Default 4096

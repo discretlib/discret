@@ -814,6 +814,7 @@ mod tests {
         let mut room_auth = RoomAuthorisations {
             signing_key: Ed25519SigningKey::new(),
             rooms: HashMap::new(),
+            max_node_size: 256 * 1024,
         };
 
         room_auth.add_room(room);
