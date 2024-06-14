@@ -1077,6 +1077,7 @@ pub struct DefaultRoom {
 
 #[cfg(test)]
 mod tests {
+    use crate::log_service::LogService;
     use crate::security::{Ed25519SigningKey, HardwareFingerprint};
     use crate::Configuration;
     use crate::{event_service::EventService, security::random32};
@@ -1153,6 +1154,7 @@ mod tests {
                 path.clone(),
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1190,6 +1192,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1226,6 +1229,7 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();
@@ -1269,6 +1273,7 @@ mod tests {
             path.clone(),
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();
@@ -1294,6 +1299,7 @@ mod tests {
             path.clone(),
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();
@@ -1349,6 +1355,7 @@ mod tests {
             path.clone(),
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();

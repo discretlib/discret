@@ -9,7 +9,6 @@ use super::node::NodeToInsert;
 use super::query_language::data_model_parser::validate_json_for_entity;
 use super::sqlite_database::WriteStmt;
 use super::system_entities::{self, AllowedPeer, Peer, PeerNodes};
-use super::MESSAGE_OVERHEAD;
 use super::{
     authorisation_service::{AuthorisationMessage, AuthorisationService, RoomAuthorisations},
     daily_log::DailyLogsUpdate,
@@ -28,7 +27,10 @@ use super::{
     system_entities::SYSTEM_DATA_MODEL,
     Error, Result,
 };
+use super::{DataModification, MESSAGE_OVERHEAD};
 
+use crate::event_service::EventServiceMessage;
+use crate::log_service::LogService;
 use crate::security::{uid_encode, MeetingSecret, MeetingToken};
 use crate::{
     configuration::Configuration,
@@ -39,7 +41,7 @@ use crate::{
 
 const LRU_SIZE: usize = 128;
 
-pub enum Message {
+pub enum DbMessage {
     Query(String, Parameters, Sender<Result<String>>),
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
@@ -50,6 +52,7 @@ pub enum Message {
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
+    DailyLogComputed(Result<DailyLogsUpdate>),
 }
 ///
 /// Entry Point for all databases interaction
@@ -57,7 +60,7 @@ pub enum Message {
 ///
 #[derive(Clone)]
 pub struct GraphDatabaseService {
-    pub sender: mpsc::Sender<Message>,
+    pub sender: mpsc::Sender<DbMessage>,
     //queue dedicated to user interaction
     //  interactive_sender: mpsc::Sender<Message>,
     pub auth: AuthorisationService,
@@ -73,8 +76,10 @@ impl GraphDatabaseService {
         data_folder: PathBuf,
         configuration: &Configuration,
         event_service: EventService,
+        log_service: LogService,
     ) -> Result<(Self, Vec<u8>, Uid)> {
-        let (peer_sender, mut peer_receiver) = mpsc::channel::<Message>(configuration.parallelism);
+        let (peer_sender, mut peer_receiver) =
+            mpsc::channel::<DbMessage>(configuration.parallelism);
         //  let (interactive_sender, mut intereactive_receiver) = mpsc::channel::<Message>(128);
         let buffer_size = (configuration.write_buffer_length * 1024) - MESSAGE_OVERHEAD;
         let private_room_id = derive_uid(&format!("{}{}", app_key, "SYSTEM_ROOM"), key_material);
@@ -94,10 +99,11 @@ impl GraphDatabaseService {
         let database = db.graph_database.clone();
         let auth = db.auth_service.clone();
         let verifying_key = db.verifying_key.clone();
+        let sender = peer_sender.clone();
         tokio::spawn(async move {
             while let Some(msg) = peer_receiver.recv().await {
                 match msg {
-                    Message::Query(query, parameters, reply) => {
+                    DbMessage::Query(query, parameters, reply) => {
                         let q = db.get_cached_query(&query);
                         match q {
                             Ok(cache) => {
@@ -108,7 +114,7 @@ impl GraphDatabaseService {
                             }
                         }
                     }
-                    Message::Mutate(mutation, parameters, reply) => {
+                    DbMessage::Mutate(mutation, parameters, reply) => {
                         let mutation = db.get_cached_mutation(&mutation);
                         match mutation {
                             Ok(cache) => {
@@ -119,7 +125,7 @@ impl GraphDatabaseService {
                             }
                         }
                     }
-                    Message::Delete(deletion, parameters, reply) => {
+                    DbMessage::Delete(deletion, parameters, reply) => {
                         let deletion = db.get_cached_deletion(&deletion);
                         match deletion {
                             Ok(cache) => {
@@ -131,15 +137,15 @@ impl GraphDatabaseService {
                         }
                     }
 
-                    Message::AddNodes(room_id, nodes, reply) => {
+                    DbMessage::AddNodes(room_id, nodes, reply) => {
                         db.add_nodes(room_id, nodes, reply).await;
                     }
 
-                    Message::AddEdges(room_id, edges, reply) => {
+                    DbMessage::AddEdges(room_id, edges, reply) => {
                         db.add_edges(room_id, edges, reply).await;
                     }
 
-                    Message::DataModelUpdate(value, reply) => {
+                    DbMessage::DataModelUpdate(value, reply) => {
                         match db.update_data_model(&value).await {
                             Ok(model) => {
                                 let _ = reply.send(Ok(model));
@@ -150,7 +156,7 @@ impl GraphDatabaseService {
                         }
                     }
 
-                    Message::DataModel(reply) => {
+                    DbMessage::DataModel(reply) => {
                         match serde_json::to_string_pretty(&db.data_model) {
                             Ok(model) => {
                                 let _ = reply.send(Ok(model));
@@ -160,27 +166,62 @@ impl GraphDatabaseService {
                             }
                         }
                     }
-
-                    Message::ComputeDailyLog() => {
+                    DbMessage::DeleteEdges(edges, reply) => {
+                        db.delete_edges(edges, reply).await;
+                    }
+                    DbMessage::DeleteNodes(nodes, reply) => {
+                        db.delete_nodes(nodes, reply).await;
+                    }
+                    DbMessage::ComputeDailyLog() => {
                         _ = db
                             .graph_database
                             .writer
                             .send(WriteMessage::ComputeDailyLog(
                                 DailyLogsUpdate::default(),
-                                db.event_service.sender.clone(),
+                                sender.clone(),
                             ))
                             .await;
                     }
 
-                    Message::DeleteEdges(edges, reply) => {
-                        db.delete_edges(edges, reply).await;
-                    }
-                    Message::DeleteNodes(nodes, reply) => {
-                        db.delete_nodes(nodes, reply).await;
-                    }
+                    DbMessage::DailyLogComputed(update) => match update {
+                        Ok(update) => {
+                            let mut data_mod = DataModification {
+                                rooms: HashMap::new(),
+                            };
+                            for room_entry in update.room_dates {
+                                let room = room_entry.0;
+                                for log in room_entry.1 {
+                                    let entity = db.data_model.name_for(&log.entity);
+                                    if let Some(entity) = entity {
+                                        let date = log.date;
+                                        data_mod.add(room, entity, date);
+                                    }
+                                }
+                            }
+
+                            let _ = db
+                                .event_service
+                                .sender
+                                .send(EventServiceMessage::DataChanged(data_mod))
+                                .await;
+                        }
+                        Err(e) => {
+                            log_service
+                                .error("ComputedDailyLog".to_string(), crate::Error::from(e));
+                        }
+                    },
                 }
             }
         });
+
+        //ensure that the logs are properly computed during startup  because the application can be closed during a synchronisation
+        database
+            .writer
+            .send(WriteMessage::ComputeDailyLog(
+                DailyLogsUpdate::default(),
+                peer_sender.clone(),
+            ))
+            .await?;
 
         Ok((
             GraphDatabaseService {
@@ -203,10 +244,10 @@ impl GraphDatabaseService {
         param_opt: Option<Parameters>,
     ) -> Result<DeletionQuery> {
         let (reply, receive) = oneshot::channel::<Result<DeletionQuery>>();
-        let msg = Message::Delete(delete.to_string(), param_opt.unwrap_or_default(), reply);
+        let msg = DbMessage::Delete(delete.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
         let result = receive.await?;
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(DbMessage::ComputeDailyLog()).await;
         result
     }
 
@@ -222,12 +263,12 @@ impl GraphDatabaseService {
     ) -> Result<MutationQuery> {
         let (reply, receive) = oneshot::channel::<Result<MutationQuery>>();
 
-        let msg = Message::Mutate(mutate.to_string(), param_opt.unwrap_or_default(), reply);
+        let msg = DbMessage::Mutate(mutate.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
 
         let result = receive.await?;
 
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(DbMessage::ComputeDailyLog()).await;
 
         result
     }
@@ -249,7 +290,7 @@ impl GraphDatabaseService {
     ///
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
-        let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), reply);
+        let msg = DbMessage::Query(query.to_string(), param_opt.unwrap_or_default(), reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -284,7 +325,7 @@ impl GraphDatabaseService {
     ///
     pub async fn update_data_model(&self, datamodel: &str) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
-        let msg = Message::DataModelUpdate(datamodel.to_string(), reply);
+        let msg = DbMessage::DataModelUpdate(datamodel.to_string(), reply);
         let _ = self.sender.send(msg).await;
         let _ = receive.await?;
 
@@ -296,7 +337,7 @@ impl GraphDatabaseService {
     ///
     pub async fn datamodel(&self) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
-        let msg = Message::DataModel(reply);
+        let msg = DbMessage::DataModel(reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -307,7 +348,7 @@ impl GraphDatabaseService {
     ///
     pub async fn add_nodes(&self, room_id: Uid, nodes: Vec<NodeToInsert>) -> Result<Vec<Uid>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
-        let msg = Message::AddNodes(room_id, nodes, reply);
+        let msg = DbMessage::AddNodes(room_id, nodes, reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -319,7 +360,7 @@ impl GraphDatabaseService {
     pub async fn add_edges(&self, room_id: Uid, edges: Vec<Edge>) -> Result<Vec<Uid>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
         // let msg = Message::AddNodes(room_id, nodes, reply);
-        let msg = Message::AddEdges(room_id, edges, reply);
+        let msg = DbMessage::AddEdges(room_id, edges, reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -330,7 +371,7 @@ impl GraphDatabaseService {
     /// This will send an event that will trigger the peer synchronisation
     ///
     pub async fn compute_daily_log(&self) {
-        let _ = self.sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(DbMessage::ComputeDailyLog()).await;
     }
 
     ///
@@ -528,26 +569,14 @@ impl GraphDatabaseService {
             let _ = reply.send(Err(error)).await;
         }
         receive
-
-        // let (send_response, receive_response) =
-        //     oneshot::channel::<Result<Vec<NodeDeletionEntry>>>();
-        // self.db
-        //     .reader
-        //     .send_async(Box::new(move |conn| {
-        //         let deteletions = NodeDeletionEntry::get_entries(&room_id, entity, del_date, conn)
-        //             .map_err(Error::from);
-        //         let _ = send_response.send(deteletions);
-        //     }))
-        //     .await?;
-        // receive_response.await?
     }
 
     ///
     /// get node deletions for a room at a specific day
-    ///V
+    ///
     pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>) -> Result<()> {
         let (send_response, receive_response) = oneshot::channel::<Result<()>>();
-        let msg = Message::DeleteNodes(nodes, send_response);
+        let msg = DbMessage::DeleteNodes(nodes, send_response);
         let _ = self.sender.send(msg).await;
         receive_response.await?
     }
@@ -592,7 +621,7 @@ impl GraphDatabaseService {
     ///V
     pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>) -> Result<()> {
         let (reply, receive) = oneshot::channel::<Result<()>>();
-        let msg = Message::DeleteEdges(edges, reply);
+        let msg = DbMessage::DeleteEdges(edges, reply);
         let _ = self.sender.send(msg).await;
         receive.await?
     }
@@ -893,15 +922,6 @@ impl GraphDatabase {
 
         database.update_data_model(model).await?;
         database.initialise_authorisations().await?;
-        //ensure that the logs are properly computed during startup  because the application can be closed during a synchronisation
-        database
-            .graph_database
-            .writer
-            .send(WriteMessage::ComputeDailyLog(
-                DailyLogsUpdate::default(),
-                database.event_service.sender.clone(),
-            ))
-            .await?;
 
         Ok(database)
     }
@@ -1298,6 +1318,7 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();
@@ -1345,6 +1366,7 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();
@@ -1406,6 +1428,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1428,6 +1451,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .is_err();
@@ -1451,6 +1475,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1479,6 +1504,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1502,6 +1528,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1526,6 +1553,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1551,6 +1579,7 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
+                LogService::start(),
             )
             .await
             .unwrap();
@@ -1582,6 +1611,7 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
+            LogService::start(),
         )
         .await
         .unwrap();

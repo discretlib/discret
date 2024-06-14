@@ -149,7 +149,7 @@ impl PeerConnectionService {
                     msg = event_receiver.recv() =>{
                         match msg{
                             Ok(event) => {
-                                Self::process_event(event, &local_event_broadcast, &logs).await;
+                                Self::process_event(event, &local_event_broadcast).await;
                             },
                             Err(e) => match e {
                                 broadcast::error::RecvError::Closed => break,
@@ -386,28 +386,14 @@ impl PeerConnectionService {
         Ok(())
     }
 
-    async fn process_event(
-        event: Event,
-        local_event_broadcast: &broadcast::Sender<LocalEvent>,
-        log_service: &LogService,
-    ) {
+    async fn process_event(event: Event, local_event_broadcast: &broadcast::Sender<LocalEvent>) {
         match event {
-            Event::DataChanged(daily_log) => {
-                match daily_log.as_ref() {
-                    Ok(daily_log) => {
-                        let mut rooms = Vec::new();
-                        for room in &daily_log.room_dates {
-                            rooms.push(room.0.clone());
-                        }
-                        let _ = local_event_broadcast.send(LocalEvent::RoomDataChanged(rooms));
-                    }
-                    Err(err) => {
-                        log_service.error(
-                            "ComputedDailyLog".to_string(),
-                            crate::Error::ComputeDailyLog(err.to_string()),
-                        );
-                    }
-                };
+            Event::DataChanged(data_modif) => {
+                let mut rooms = Vec::new();
+                for room in &data_modif.rooms {
+                    rooms.push(room.0.clone());
+                }
+                let _ = local_event_broadcast.send(LocalEvent::RoomDataChanged(rooms));
             }
             Event::RoomModified(room) => {
                 let _ = local_event_broadcast.send(LocalEvent::RoomDefinitionChanged(room));

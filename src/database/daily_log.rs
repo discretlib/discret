@@ -650,6 +650,7 @@ mod tests {
         date_utils::{date, now},
         default_uid,
         event_service::EventService,
+        log_service::LogService,
         security::{base64_encode, new_uid, random32},
     };
 
@@ -689,19 +690,17 @@ mod tests {
             path,
             &Configuration::default(),
             event_service,
+            LogService::start(),
         )
         .await
         .unwrap();
         //receive daily_log event done during startup
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::DataChanged(log) => match log.as_ref() {
-                    Ok(d) => {
-                        assert_eq!(0, d.room_dates.len());
-                        break;
-                    }
-                    Err(e) => println!("{}", e.to_string()),
-                },
+                crate::event_service::Event::DataChanged(log) => {
+                    assert_eq!(0, log.rooms.len());
+                    break;
+                }
                 _ => {}
             }
         }
@@ -738,20 +737,17 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::DataChanged(log) => match log.as_ref() {
-                    Ok(d) => {
-                        assert_eq!(0, d.room_dates.len());
-                        break;
-                    }
-                    Err(e) => println!("{}", e.to_string()),
-                },
+                crate::event_service::Event::DataChanged(log) => {
+                    assert_eq!(0, log.rooms.len());
+                    break;
+                }
                 _ => {}
             }
         }
 
         let room_insert = &room.mutate_entities[0];
         let bin_room_id = &room_insert.node_to_mutate.id;
-        let mutate_date = room_insert.node_to_mutate.date;
+
         let room_id = base64_encode(bin_room_id);
 
         let mut param = Parameters::default();
@@ -772,19 +768,12 @@ mod tests {
         //receive daily_log event
         while let Ok(e) = events.recv().await {
             match e {
-                crate::event_service::Event::DataChanged(log) => match log.as_ref() {
-                    Ok(d) => {
-                        let dates = d.room_dates.get(bin_room_id).unwrap();
-                        assert_eq!(1, dates.len());
-                        let daily_log = dates.into_iter().next().unwrap();
-                        assert_eq!(date(mutate_date), daily_log.date);
-                        assert!(!daily_log.need_recompute);
-                        assert_eq!(4, daily_log.entry_number);
-                        assert!(daily_log.daily_hash.is_some());
-                        break;
-                    }
-                    Err(e) => println!("{}", e.to_string()),
-                },
+                crate::event_service::Event::DataChanged(log) => {
+                    let dates = log.rooms.get(bin_room_id).unwrap();
+                    assert_eq!(1, dates.len());
+
+                    break;
+                }
 
                 _ => {}
             }

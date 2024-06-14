@@ -6,16 +6,14 @@ use tokio::sync::{
     oneshot::{self, Sender},
 };
 
-use crate::{
-    event_service::EventServiceMessage,
-    security::{base64_decode, base64_encode, Uid},
-};
+use crate::security::{base64_decode, base64_encode, Uid};
 
 use super::{
     authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::{Edge, EdgeDeletionEntry},
+    graph_database::DbMessage,
     mutation_query::MutationQuery,
     node::{Node, NodeDeletionEntry, NodeToInsert},
     system_entities, Error, Result,
@@ -332,7 +330,7 @@ pub enum WriteMessage {
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
-    ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<EventServiceMessage>),
+    ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<DbMessage>),
 }
 
 /// Main entry point to insert data in the database
@@ -464,11 +462,11 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::Write(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
+
                                 WriteMessage::ComputeDailyLog(q, r) => {
-                                    let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
-                                        Ok(q),
-                                    ));
+                                    let _ = r.blocking_send(DbMessage::DailyLogComputed(Ok(q)));
                                 }
+
                                 WriteMessage::Nodes(_, invalid_nodes, r) => {
                                     let _ = r.send(Ok(invalid_nodes));
                                 }
@@ -512,9 +510,9 @@ impl BufferedDatabaseWriter {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::ComputeDailyLog(_, r) => {
-                                    let _ = r.blocking_send(EventServiceMessage::ComputedDailyLog(
-                                        Err(crate::Error::ComputeDailyLog(e.to_string())),
-                                    ));
+                                    let _ = r.blocking_send(DbMessage::DailyLogComputed(Err(
+                                        Error::ComputeDailyLog(e.to_string()),
+                                    )));
                                 }
                                 WriteMessage::Nodes(_, _, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));

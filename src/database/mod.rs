@@ -14,9 +14,13 @@ pub mod room_node;
 
 pub mod sqlite_database;
 pub mod system_entities;
+use std::collections::HashMap;
+
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use thiserror::Error;
+
+use crate::Uid;
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub const VEC_OVERHEAD: u64 = 4;
@@ -74,6 +78,17 @@ impl ResultParser {
         let obj: T = serde_json::from_value(field.clone())?;
 
         Ok(obj)
+    }
+}
+
+pub struct DataModification {
+    pub rooms: HashMap<Uid, HashMap<String, Vec<i64>>>,
+}
+impl DataModification {
+    pub fn add(&mut self, room: Uid, entity: String, date: i64) {
+        let room = self.rooms.entry(room).or_default();
+        let entity = room.entry(entity).or_default();
+        entity.push(date);
     }
 }
 
@@ -210,6 +225,9 @@ pub enum Error {
 
     #[error("{0}")]
     QueryParsing(String),
+
+    #[error("An error occured while computing daily logs: {0}")]
+    ComputeDailyLog(String),
 }
 #[cfg(test)]
 mod tests {

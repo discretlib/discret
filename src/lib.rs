@@ -66,11 +66,10 @@ type Result<T> = std::result::Result<T, Error>;
 pub use crate::{
     configuration::Configuration,
     database::{
-        mutation_query::{IdTree, MutationResult},
         query_language::parameter::{Parameters, ParametersAdd},
         room::Room,
         system_entities::DefaultRoom,
-        ResultParser,
+        DataModification, ResultParser,
     },
     event_service::Event,
     log_service::{Log, LogMessage},
@@ -145,9 +144,6 @@ pub enum Error {
     #[error("Remote Room did not sent back a room definition {0}")]
     RoomUnknow(String),
 
-    #[error("An error occured while computing daily logs: {0}")]
-    ComputeDailyLog(String),
-
     #[error("{0} Edges where rejected during synchronisation of room: {1} at date: {2} ")]
     EdgeRejected(usize, String, i64),
 
@@ -192,6 +188,7 @@ impl Discret {
         let public_key = pub_key.as_bytes();
 
         let events = EventService::new();
+        let logs = LogService::start();
         let (db, verifying_key, private_room_id) = GraphDatabaseService::start(
             app_key,
             datamodel,
@@ -200,12 +197,12 @@ impl Discret {
             data_folder.clone(),
             &configuration,
             events.clone(),
+            logs.clone(),
         )
         .await?;
 
         let signature_service = SignatureVerificationService::start(configuration.parallelism);
 
-        let logs = LogService::start();
         let peers = PeerConnectionService::start(
             app_key.to_string(),
             verifying_key.clone(),

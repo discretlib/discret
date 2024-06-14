@@ -445,22 +445,6 @@ impl MutationQuery {
 }
 
 #[derive(Debug)]
-pub struct MutationResult {
-    pub ids: Vec<IdTree>,
-    pub json: String,
-}
-impl MutationResult {
-    pub fn first_id(&self) -> String {
-        self.ids[0].uid.clone()
-    }
-}
-#[derive(Debug)]
-pub struct IdTree {
-    pub uid: String,
-    pub childs: Vec<IdTree>,
-}
-
-#[derive(Debug)]
 pub struct InsertEntity {
     pub name: String,
     pub node_to_mutate: NodeToMutate,

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
-    database::{daily_log::DailyLogsUpdate, room::Room},
+    database::{room::Room, DataModification},
     security::Uid,
 };
 
 pub enum EventServiceMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<Event>>),
-    ComputedDailyLog(Result<DailyLogsUpdate, crate::Error>),
+    DataChanged(DataModification),
     RoomModified(Room),
     PeerConnected(Vec<u8>, i64, Uid),
     PeerDisconnected(Vec<u8>, i64, Uid),
@@ -18,7 +18,7 @@ pub enum EventServiceMessage {
 
 #[derive(Clone)]
 pub enum Event {
-    DataChanged(Arc<Result<DailyLogsUpdate, crate::Error>>),
+    DataChanged(Arc<DataModification>),
     RoomModified(Arc<Room>),
     PeerConnected(Vec<u8>, i64, Uid),
     PeerDisconnected(Vec<u8>, i64, Uid),
@@ -41,11 +41,8 @@ impl EventService {
                     EventServiceMessage::Subscribe(reply) => {
                         let _ = reply.send(broadcast.subscribe());
                     }
-                    EventServiceMessage::ComputedDailyLog(res) => {
-                        let _ = match res {
-                            Ok(e) => broadcast.send(Event::DataChanged(Arc::new(Ok(e)))),
-                            Err(e) => broadcast.send(Event::DataChanged(Arc::new(Err(e)))),
-                        };
+                    EventServiceMessage::DataChanged(res) => {
+                        let _ = broadcast.send(Event::DataChanged(Arc::new(res)));
                     }
                     EventServiceMessage::RoomModified(room) => {
                         let _ = broadcast.send(Event::RoomModified(Arc::new(room)));
