@@ -7,7 +7,6 @@ use crate::{
     security::{self, Uid},
 };
 use thiserror::Error;
-pub mod node_full;
 pub mod peer_inbound_service;
 pub mod peer_outbound_service;
 pub mod room_locking_service;
