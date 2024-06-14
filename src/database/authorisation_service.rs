@@ -13,7 +13,7 @@ use crate::{
 use super::{
     daily_log::{DailyMutations, RoomChangelog},
     deletion::DeletionQuery,
-    edge::EdgeDeletionEntry,
+    edge::{Edge, EdgeDeletionEntry},
     mutation_query::{InsertEntity, MutationQuery},
     node::{NodeDeletionEntry, NodeToInsert},
     room::*,
@@ -36,6 +36,7 @@ pub enum AuthorisationMessage {
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomsForPeer(Vec<u8>, i64, Sender<HashSet<Uid>>),
     AddNodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
+    AddEdges(Uid, Vec<(Edge, String)>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(
         Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
         Sender<Result<()>>,
@@ -272,6 +273,33 @@ impl AuthorisationService {
                     }
                 }
                 let query = WriteMessage::Nodes(write_nodes, invalid_node, reply);
+
+                let _ = database_writer.send(query).await;
+            }
+
+            AuthorisationMessage::AddEdges(room_id, edges, mut invalid, reply) => {
+                let room = auth.rooms.get(&room_id);
+                if room.is_none() {
+                    let _ = reply.send(Err(Error::UnknownRoom(base64_encode(&room_id))));
+                    return;
+                }
+                let room = room.unwrap();
+
+                let mut valid_edges = Vec::new();
+                for (edge, entity_name) in edges {
+                    if room.can(
+                        &edge.verifying_key,
+                        &entity_name,
+                        edge.cdate,
+                        &RightType::MutateSelf,
+                    ) {
+                        valid_edges.push(edge);
+                    } else {
+                        invalid.push(edge.src);
+                    }
+                }
+
+                let query = WriteMessage::Edges(valid_edges, invalid, reply);
 
                 let _ = database_writer.send(query).await;
             }

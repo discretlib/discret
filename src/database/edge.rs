@@ -320,6 +320,52 @@ impl Edge {
 
         Ok(rows)
     }
+
+    pub fn filtered_by_room(
+        room_id: &Uid,
+        node_ids: Vec<(Uid, i64)>,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<Edge>>>,
+        conn: &Connection,
+    ) -> Result<()> {
+        let mut query = conn.prepare_cached(
+            "SELECT _edge.src, _edge.src_entity, _edge.label, _edge.dest, _edge.cdate, _edge.verifying_key, _edge.signature 
+            FROM _edge JOIN _node ON  _edge.src = _node.id
+            WHERE 
+                _edge.src = ? AND
+                _edge.cdate >= ? AND
+                _node.room_id = ?",
+        )?;
+
+        let mut len = 0;
+        let mut res = Vec::new();
+        for (src, cdate) in &node_ids {
+            let edges = query.query_map((src, cdate, room_id), Self::EDGE_MAPPING)?;
+
+            for edge in edges {
+                let edge = *edge?;
+                let size = bincode::serialized_size(&edge)?;
+                let insert_len = len + size + VEC_OVERHEAD;
+                if insert_len > batch_size as u64 {
+                    let ready = res;
+                    res = Vec::new();
+                    len = 0;
+                    let s = sender.blocking_send(Ok(ready));
+                    if s.is_err() {
+                        break;
+                    }
+                } else {
+                    len = insert_len;
+                }
+                res.push(edge);
+            }
+        }
+
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

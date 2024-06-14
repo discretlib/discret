@@ -327,33 +327,33 @@ impl InboundQueryService {
             }
 
             Query::Edges(room_id, nodes) => {
-                // if peer.allowed_room.contains(&room_id) {
-                //     let mut res_reply = peer.db.get_nodes(room_id, node_ids).await;
-                //     while let Some(res) = res_reply.recv().await {
-                //         match res {
-                //             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                //             Err(e) => {
-                //                 logs.error("FullNodes".to_string(), e.into());
-                //                 peer.send(
-                //                     msg.id,
-                //                     false,
-                //                     true,
-                //                     Error::RemoteTechnical("FullNodes".to_string()),
-                //                 )
-                //                 .await?
-                //             }
-                //         }
-                //     }
-                //     peer.send(msg.id, true, true, "").await?;
-                // } else {
-                //     peer.send(
-                //         msg.id,
-                //         false,
-                //         true,
-                //         Error::Authorisation("FullNodes".to_string()),
-                //     )
-                //     .await?
-                // }
+                if peer.allowed_room.contains(&room_id) {
+                    let mut res_reply = peer.db.get_edges(room_id, nodes).await;
+                    while let Some(res) = res_reply.recv().await {
+                        match res {
+                            Ok(log) => peer.send(msg.id, true, false, log).await?,
+                            Err(e) => {
+                                logs.error("Query::Edges".to_string(), e.into());
+                                peer.send(
+                                    msg.id,
+                                    false,
+                                    true,
+                                    Error::RemoteTechnical("Query::Edges".to_string()),
+                                )
+                                .await?
+                            }
+                        }
+                    }
+                    peer.send(msg.id, true, true, "").await?;
+                } else {
+                    peer.send(
+                        msg.id,
+                        false,
+                        true,
+                        Error::Authorisation("Query::Edges".to_string()),
+                    )
+                    .await?
+                }
                 Ok(())
             }
 

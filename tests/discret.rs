@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use discret::{
-    base64_encode, uid_decode, Configuration, DefaultRoom, Discret, Event, Parameters,
+    base64_encode, uid_decode, uid_encode, Configuration, DefaultRoom, Discret, Event, Parameters,
     ParametersAdd, ResultParser,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -491,4 +491,114 @@ async fn new_peers_from_room() {
     let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids[0].id.len() > 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multiple_entities() {
+    let path: PathBuf = DATA_PATH.into();
+    let model = "{
+        Person{
+            name:String,
+            parents:[Person],
+            pet: Pet
+        }
+
+        Pet {
+            name: String
+        }
+    
+    }";
+    let key_material = random32();
+    let discret1: Discret = Discret::new(
+        model,
+        "hello",
+        &key_material,
+        path,
+        Configuration::default(),
+    )
+    .await
+    .unwrap();
+
+    let mut param = Parameters::new();
+    param
+        .add("room_id", uid_encode(&discret1.private_room()))
+        .unwrap();
+
+    let mutation = r#"
+            mutate {
+                P1: Person {
+                    room_id:$room_id
+                    name : "John"
+                    parents:  [ {name : "John Mother"} ,{ name:"John Father" pet:{ name:"Kiki" }}]
+                    pet: { name:"Truffle"}
+                }
+                P2: Person {
+                    room_id:$room_id
+                    name : "Ada"
+                    parents:  [ {name : "Ada Mother" pet:{ name:"Lulu" }} ,{ name:"Ada Father" pet:{ name:"Waf" }}]
+                } 
+
+            } "#;
+    discret1.mutate(mutation, Some(param)).await.unwrap();
+
+    let query = "query {
+        Person (order_by(name desc)) {
+            id
+            room_id
+            name
+            parents (order_by(name desc)){
+                id
+                room_id
+                name
+                pet{
+                    id
+                    room_id
+                    name
+                }
+            }
+            pet{
+                id
+                room_id
+                name
+            }
+        }
+    }";
+
+    let res1 = discret1.query(query, None).await.unwrap();
+    // println!("{}", res)
+    let second_path: PathBuf = format!("{}/second", DATA_PATH).into();
+    let discret2: Discret = Discret::new(
+        model,
+        "hello",
+        &key_material,
+        second_path,
+        Configuration::default(),
+    )
+    .await
+    .unwrap();
+    let private_room_id = discret2.private_room();
+    let mut events = discret2.subscribe_for_events().await;
+    let handle = tokio::spawn(async move {
+        loop {
+            let event = events.recv().await;
+            match event {
+                Ok(e) => match e {
+                    Event::RoomSynchronized(room_id) => {
+                        assert_eq!(room_id, private_room_id);
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(e) => println!("Error {}", e),
+            }
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), handle)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let res2 = discret2.query(query, None).await.unwrap();
+    assert_eq!(res1, res2);
 }

@@ -3,19 +3,18 @@ use std::thread;
 use super::Result;
 use crate::{
     database::{
-        edge::EdgeDeletionEntry,
+        edge::{Edge, EdgeDeletionEntry},
         node::{Node, NodeDeletionEntry},
         room_node::RoomNode,
     },
     security::import_verifying_key,
-    synchronisation::node_full::FullNode,
 };
 use tokio::sync::oneshot::{self};
 
 pub enum VerificationMessage {
-    FullNodes(Vec<FullNode>, oneshot::Sender<Result<Vec<FullNode>>>),
     RoomNode(RoomNode, oneshot::Sender<Result<RoomNode>>),
     Nodes(Vec<Node>, oneshot::Sender<Result<Vec<Node>>>),
+    Edges(Vec<Edge>, oneshot::Sender<Result<Vec<Edge>>>),
     EdgeLog(
         Vec<EdgeDeletionEntry>,
         oneshot::Sender<Result<Vec<EdgeDeletionEntry>>>,
@@ -42,14 +41,14 @@ impl SignatureVerificationService {
             thread::spawn(move || {
                 while let Ok(msg) = local_receiver.recv() {
                     match msg {
-                        VerificationMessage::FullNodes(nodes, reply) => {
-                            let _ = reply.send(Self::nodes_full_check(nodes));
-                        }
                         VerificationMessage::RoomNode(node, reply) => {
                             let _ = reply.send(Self::room_check(node));
                         }
                         VerificationMessage::Nodes(nodes, reply) => {
                             let _ = reply.send(Self::nodes_check(nodes));
+                        }
+                        VerificationMessage::Edges(edges, reply) => {
+                            let _ = reply.send(Self::edges_check(edges));
                         }
                         VerificationMessage::EdgeLog(log, reply) => {
                             let _ = reply.send(Self::edge_log_check(log));
@@ -81,21 +80,18 @@ impl SignatureVerificationService {
         Self { sender }
     }
 
-    pub fn nodes_full_check(nodes: Vec<FullNode>) -> Result<Vec<FullNode>> {
-        for node in &nodes {
-            node.node.verify()?;
-            for edge in &node.edges {
-                edge.verify()?;
-            }
-        }
-        Ok(nodes)
-    }
-
     pub fn nodes_check(nodes: Vec<Node>) -> Result<Vec<Node>> {
         for node in &nodes {
             node.verify()?;
         }
         Ok(nodes)
+    }
+
+    pub fn edges_check(edges: Vec<Edge>) -> Result<Vec<Edge>> {
+        for edge in &edges {
+            edge.verify()?;
+        }
+        Ok(edges)
     }
 
     pub fn edge_log_check(log: Vec<EdgeDeletionEntry>) -> Result<Vec<EdgeDeletionEntry>> {
@@ -154,15 +150,6 @@ impl SignatureVerificationService {
         Ok(node)
     }
 
-    pub async fn verify_full_nodes(&self, nodes: Vec<FullNode>) -> Result<Vec<FullNode>> {
-        let (reply, receiver) = oneshot::channel::<Result<Vec<FullNode>>>();
-        let _ = self
-            .sender
-            .send_async(VerificationMessage::FullNodes(nodes, reply))
-            .await;
-        receiver.await.unwrap() //won't fail unless when stopping app
-    }
-
     pub async fn verify_room_node(&self, node: RoomNode) -> Result<RoomNode> {
         let (reply, receiver) = oneshot::channel::<Result<RoomNode>>();
         let _ = self
@@ -177,6 +164,15 @@ impl SignatureVerificationService {
         let _ = self
             .sender
             .send_async(VerificationMessage::Nodes(nodes, reply))
+            .await;
+        receiver.await.unwrap() //won't fail unless when stopping app
+    }
+
+    pub async fn verify_edges(&self, nodes: Vec<Edge>) -> Result<Vec<Edge>> {
+        let (reply, receiver) = oneshot::channel::<Result<Vec<Edge>>>();
+        let _ = self
+            .sender
+            .send_async(VerificationMessage::Edges(nodes, reply))
             .await;
         receiver.await.unwrap() //won't fail unless when stopping app
     }

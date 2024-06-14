@@ -632,14 +632,16 @@ impl Node {
             }
         }
 
-        let query = format!("
+        let query = format!(
+            "
         SELECT 
-            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node.verifying_key, _node._signature, rowid,
-            
+            id, room_id, cdate, mdate, _entity, _json, _binary, verifying_key, _signature, rowid
         FROM _node
         WHERE 
-            _node.id in ({}) 
-        ", q);
+            id in ({}) 
+        ",
+            q
+        );
 
         let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;

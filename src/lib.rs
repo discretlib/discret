@@ -148,6 +148,12 @@ pub enum Error {
     #[error("An error occured while computing daily logs: {0}")]
     ComputeDailyLog(String),
 
+    #[error("{0} Edges where rejected during synchronisation of room: {1} at date: {2} ")]
+    EdgeRejected(usize, String, i64),
+
+    #[error("{0} Nodes where rejected during synchronisation of room: {1} at date: {2}")]
+    NodeRejected(usize, String, i64),
+
     #[error("{0}")]
     InvalidConnection(String),
 

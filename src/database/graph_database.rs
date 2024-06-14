@@ -4,6 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::edge::Edge;
 use super::node::NodeToInsert;
 use super::query_language::data_model_parser::validate_json_for_entity;
 use super::sqlite_database::WriteStmt;
@@ -45,6 +46,7 @@ pub enum Message {
     DataModelUpdate(String, Sender<Result<String>>),
     DataModel(Sender<Result<String>>),
     AddNodes(Uid, Vec<NodeToInsert>, Sender<Result<Vec<Uid>>>),
+    AddEdges(Uid, Vec<Edge>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
@@ -55,7 +57,7 @@ pub enum Message {
 ///
 #[derive(Clone)]
 pub struct GraphDatabaseService {
-    pub peer_sender: mpsc::Sender<Message>,
+    pub sender: mpsc::Sender<Message>,
     //queue dedicated to user interaction
     //  interactive_sender: mpsc::Sender<Message>,
     pub auth: AuthorisationService,
@@ -133,6 +135,10 @@ impl GraphDatabaseService {
                         db.add_nodes(room_id, nodes, reply).await;
                     }
 
+                    Message::AddEdges(room_id, edges, reply) => {
+                        db.add_edges(room_id, edges, reply).await;
+                    }
+
                     Message::DataModelUpdate(value, reply) => {
                         match db.update_data_model(&value).await {
                             Ok(model) => {
@@ -178,7 +184,7 @@ impl GraphDatabaseService {
 
         Ok((
             GraphDatabaseService {
-                peer_sender,
+                sender: peer_sender,
                 auth,
                 db: database,
                 buffer_size,
@@ -198,9 +204,9 @@ impl GraphDatabaseService {
     ) -> Result<DeletionQuery> {
         let (reply, receive) = oneshot::channel::<Result<DeletionQuery>>();
         let msg = Message::Delete(delete.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         let result = receive.await?;
-        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
         result
     }
 
@@ -217,11 +223,11 @@ impl GraphDatabaseService {
         let (reply, receive) = oneshot::channel::<Result<MutationQuery>>();
 
         let msg = Message::Mutate(mutate.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
 
         let result = receive.await?;
 
-        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
 
         result
     }
@@ -244,7 +250,7 @@ impl GraphDatabaseService {
     pub async fn query(&self, query: &str, param_opt: Option<Parameters>) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::Query(query.to_string(), param_opt.unwrap_or_default(), reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         receive.await?
     }
 
@@ -279,7 +285,7 @@ impl GraphDatabaseService {
     pub async fn update_data_model(&self, datamodel: &str) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::DataModelUpdate(datamodel.to_string(), reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         let _ = receive.await?;
 
         self.datamodel().await
@@ -291,18 +297,30 @@ impl GraphDatabaseService {
     pub async fn datamodel(&self) -> Result<String> {
         let (reply, receive) = oneshot::channel::<Result<String>>();
         let msg = Message::DataModel(reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         receive.await?
     }
 
     ///
-    /// insert the full node list
+    /// insert the node list
     /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
     ///
     pub async fn add_nodes(&self, room_id: Uid, nodes: Vec<NodeToInsert>) -> Result<Vec<Uid>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
         let msg = Message::AddNodes(room_id, nodes, reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
+        receive.await?
+    }
+
+    ///
+    /// insert the edge list
+    /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
+    ///
+    pub async fn add_edges(&self, room_id: Uid, edges: Vec<Edge>) -> Result<Vec<Uid>> {
+        let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
+        // let msg = Message::AddNodes(room_id, nodes, reply);
+        let msg = Message::AddEdges(room_id, edges, reply);
+        let _ = self.sender.send(msg).await;
         receive.await?
     }
 
@@ -312,7 +330,7 @@ impl GraphDatabaseService {
     /// This will send an event that will trigger the peer synchronisation
     ///
     pub async fn compute_daily_log(&self) {
-        let _ = self.peer_sender.send(Message::ComputeDailyLog()).await;
+        let _ = self.sender.send(Message::ComputeDailyLog()).await;
     }
 
     ///
@@ -530,7 +548,7 @@ impl GraphDatabaseService {
     pub async fn delete_nodes(&self, nodes: Vec<NodeDeletionEntry>) -> Result<()> {
         let (send_response, receive_response) = oneshot::channel::<Result<()>>();
         let msg = Message::DeleteNodes(nodes, send_response);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         receive_response.await?
     }
 
@@ -575,7 +593,7 @@ impl GraphDatabaseService {
     pub async fn delete_edges(&self, edges: Vec<EdgeDeletionEntry>) -> Result<()> {
         let (reply, receive) = oneshot::channel::<Result<()>>();
         let msg = Message::DeleteEdges(edges, reply);
-        let _ = self.peer_sender.send(msg).await;
+        let _ = self.sender.send(msg).await;
         receive.await?
     }
 
@@ -655,6 +673,35 @@ impl GraphDatabaseService {
             .reader
             .send_async(Box::new(move |conn| {
                 let error = Node::filtered_by_room(&room_id, node_ids, buffer_size, &creply, conn);
+
+                if let Err(error) = error {
+                    let _ = creply.blocking_send(Err(error));
+                }
+            }))
+            .await;
+        if let Err(error) = errors {
+            let _ = reply.send(Err(error)).await;
+        }
+        receive
+    }
+
+    ///
+    /// get full node definition
+    ///
+    pub async fn get_edges(
+        &self,
+        room_id: Uid,
+        node_ids: Vec<(Uid, i64)>,
+    ) -> mpsc::Receiver<Result<Vec<Edge>>> {
+        let (reply, receive) = mpsc::channel::<Result<Vec<Edge>>>(1);
+        let creply = reply.clone();
+        let buffer_size = self.buffer_size;
+
+        let errors = self
+            .db
+            .reader
+            .send_async(Box::new(move |conn| {
+                let error = Edge::filtered_by_room(&room_id, node_ids, buffer_size, &creply, conn);
 
                 if let Err(error) = error {
                     let _ = creply.blocking_send(Err(error));
@@ -1133,6 +1180,25 @@ impl GraphDatabase {
         }
 
         let msg = AuthorisationMessage::AddNodes(valid_nodes, invalid_nodes, reply);
+        let _ = self.auth_service.send(msg).await;
+    }
+
+    pub async fn add_edges(&self, room_id: Uid, edges: Vec<Edge>, reply: Sender<Result<Vec<Uid>>>) {
+        let mut invalid_edges = Vec::new();
+        let mut valid_edges = Vec::new();
+
+        for edge in edges {
+            let name = match self.data_model.name_for(&edge.src_entity) {
+                Some(e) => e,
+                None => {
+                    invalid_edges.push(edge.src);
+                    continue;
+                }
+            };
+            valid_edges.push((edge, name));
+        }
+
+        let msg = AuthorisationMessage::AddEdges(room_id, valid_edges, invalid_edges, reply);
         let _ = self.auth_service.send(msg).await;
     }
 

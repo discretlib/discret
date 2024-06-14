@@ -328,6 +328,7 @@ pub enum WriteMessage {
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
     Nodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
+    Edges(Vec<Edge>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
@@ -471,6 +472,11 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::Nodes(_, invalid_nodes, r) => {
                                     let _ = r.send(Ok(invalid_nodes));
                                 }
+
+                                WriteMessage::Edges(_, invalid_nodes, r) => {
+                                    let _ = r.send(Ok(invalid_nodes));
+                                }
+
                                 WriteMessage::DeleteEdges(_, r) => {
                                     let _ = r.send(Ok(()));
                                 }
@@ -511,6 +517,9 @@ impl BufferedDatabaseWriter {
                                     ));
                                 }
                                 WriteMessage::Nodes(_, _, r) => {
+                                    let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
+                                }
+                                WriteMessage::Edges(_, _, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::DeleteEdges(_, r) => {
@@ -560,6 +569,15 @@ impl BufferedDatabaseWriter {
                             return Err(e);
                         }
                         nti.update_daily_logs(&mut daily_log);
+                    }
+                }
+
+                WriteMessage::Edges(edges, _, _) => {
+                    for edge in edges {
+                        if let Err(e) = edge.write(conn) {
+                            conn.execute("ROLLBACK", [])?;
+                            return Err(e);
+                        }
                     }
                 }
 
