@@ -9,7 +9,6 @@ use tokio::sync::{
 use crate::{
     event_service::EventServiceMessage,
     security::{base64_decode, base64_encode, Uid},
-    synchronisation::node_full::FullNode,
 };
 
 use super::{
@@ -18,7 +17,7 @@ use super::{
     deletion::DeletionQuery,
     edge::{Edge, EdgeDeletionEntry},
     mutation_query::MutationQuery,
-    node::{Node, NodeDeletionEntry},
+    node::{Node, NodeDeletionEntry, NodeToInsert},
     system_entities, Error, Result,
 };
 
@@ -328,7 +327,7 @@ pub enum WriteMessage {
     Mutation(MutationQuery, Sender<Result<MutationQuery>>),
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
-    FullNode(Vec<FullNode>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
+    Nodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
@@ -469,7 +468,7 @@ impl BufferedDatabaseWriter {
                                         Ok(q),
                                     ));
                                 }
-                                WriteMessage::FullNode(_, invalid_nodes, r) => {
+                                WriteMessage::Nodes(_, invalid_nodes, r) => {
                                     let _ = r.send(Ok(invalid_nodes));
                                 }
                                 WriteMessage::DeleteEdges(_, r) => {
@@ -511,7 +510,7 @@ impl BufferedDatabaseWriter {
                                         Err(crate::Error::ComputeDailyLog(e.to_string())),
                                     ));
                                 }
-                                WriteMessage::FullNode(_, _, r) => {
+                                WriteMessage::Nodes(_, _, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
                                 WriteMessage::DeleteEdges(_, r) => {
@@ -554,13 +553,13 @@ impl BufferedDatabaseWriter {
                     query.update_daily_logs(&mut daily_log);
                 }
 
-                WriteMessage::FullNode(full_nodes, _, _) => {
-                    for node_full in full_nodes {
-                        if let Err(e) = node_full.write(conn) {
+                WriteMessage::Nodes(node, _, _) => {
+                    for nti in node {
+                        if let Err(e) = nti.write(conn) {
                             conn.execute("ROLLBACK", [])?;
                             return Err(e);
                         }
-                        node_full.update_daily_logs(&mut daily_log);
+                        nti.update_daily_logs(&mut daily_log);
                     }
                 }
 

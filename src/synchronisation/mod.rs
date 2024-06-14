@@ -45,7 +45,8 @@ pub enum Query {
     EdgeDeletionLog(Uid, String, i64),
     NodeDeletionLog(Uid, String, i64),
     RoomDailyNodes(Uid, String, i64),
-    FullNodes(Uid, Vec<Uid>),
+    Nodes(Uid, Vec<Uid>),
+    Edges(Uid, Vec<(Uid, i64)>),
     PeersForRoom(Uid),
 }
 

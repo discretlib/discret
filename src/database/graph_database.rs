@@ -4,6 +4,8 @@ use std::collections::{HashSet, VecDeque};
 use std::{collections::HashMap, fs, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, oneshot::Sender};
 
+use super::node::NodeToInsert;
+use super::query_language::data_model_parser::validate_json_for_entity;
 use super::sqlite_database::WriteStmt;
 use super::system_entities::{self, AllowedPeer, Peer, PeerNodes};
 use super::MESSAGE_OVERHEAD;
@@ -32,7 +34,6 @@ use crate::{
     date_utils::now,
     event_service::EventService,
     security::{base64_encode, derive_key, derive_uid, Ed25519SigningKey, SigningKey, Uid},
-    synchronisation::node_full::FullNode,
 };
 
 const LRU_SIZE: usize = 128;
@@ -43,7 +44,7 @@ pub enum Message {
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     DataModelUpdate(String, Sender<Result<String>>),
     DataModel(Sender<Result<String>>),
-    FullNodeAdd(Uid, Vec<FullNode>, Sender<Result<Vec<Uid>>>),
+    AddNodes(Uid, Vec<NodeToInsert>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(Vec<EdgeDeletionEntry>, Sender<Result<()>>),
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     ComputeDailyLog(),
@@ -128,8 +129,8 @@ impl GraphDatabaseService {
                         }
                     }
 
-                    Message::FullNodeAdd(room_id, nodes, reply) => {
-                        db.add_full_nodes(room_id, nodes, reply).await;
+                    Message::AddNodes(room_id, nodes, reply) => {
+                        db.add_nodes(room_id, nodes, reply).await;
                     }
 
                     Message::DataModelUpdate(value, reply) => {
@@ -298,9 +299,9 @@ impl GraphDatabaseService {
     /// insert the full node list
     /// returns the list of ids that where not inserted for any reasons (parsing error, authorisations)
     ///
-    pub async fn add_full_nodes(&self, room_id: Uid, nodes: Vec<FullNode>) -> Result<Vec<Uid>> {
+    pub async fn add_nodes(&self, room_id: Uid, nodes: Vec<NodeToInsert>) -> Result<Vec<Uid>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<Uid>>>();
-        let msg = Message::FullNodeAdd(room_id, nodes, reply);
+        let msg = Message::AddNodes(room_id, nodes, reply);
         let _ = self.peer_sender.send(msg).await;
         receive.await?
     }
@@ -469,8 +470,7 @@ impl GraphDatabaseService {
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                let room_log =
-                    DailyLog::get_room_log_at(&room_id, date, conn).map_err(Error::from);
+                let room_log = DailyLog::get_room_log_at(&room_id, date, conn).map_err(Error::from);
                 let _ = reply.send(room_log);
             }))
             .await?;
@@ -620,15 +620,14 @@ impl GraphDatabaseService {
     pub async fn filter_existing_node(
         &self,
         mut node_ids: HashSet<NodeIdentifier>,
-        date: i64,
-    ) -> Result<HashSet<NodeIdentifier>> {
-        let (reply, receive) = oneshot::channel::<Result<HashSet<NodeIdentifier>>>();
+    ) -> Result<Vec<NodeToInsert>> {
+        let (reply, receive) = oneshot::channel::<Result<Vec<NodeToInsert>>>();
         self.db
             .reader
             .send_async(Box::new(move |conn| {
-                match Node::retain_missing_id(&mut node_ids, date, conn).map_err(Error::from) {
-                    Ok(_) => {
-                        let _ = reply.send(Ok(node_ids));
+                match Node::filter_existing(&mut node_ids, conn).map_err(Error::from) {
+                    Ok(v) => {
+                        let _ = reply.send(Ok(v));
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
@@ -642,12 +641,12 @@ impl GraphDatabaseService {
     ///
     /// get full node definition
     ///
-    pub async fn get_full_nodes(
+    pub async fn get_nodes(
         &self,
         room_id: Uid,
         node_ids: Vec<Uid>,
-    ) -> mpsc::Receiver<Result<Vec<FullNode>>> {
-        let (reply, receive) = mpsc::channel::<Result<Vec<FullNode>>>(1);
+    ) -> mpsc::Receiver<Result<Vec<Node>>> {
+        let (reply, receive) = mpsc::channel::<Result<Vec<Node>>>(1);
         let creply = reply.clone();
         let buffer_size = self.buffer_size;
 
@@ -655,13 +654,7 @@ impl GraphDatabaseService {
             .db
             .reader
             .send_async(Box::new(move |conn| {
-                let error = FullNode::get_nodes_filtered_by_room(
-                    &room_id,
-                    node_ids,
-                    buffer_size,
-                    &creply,
-                    conn,
-                );
+                let error = Node::filtered_by_room(&room_id, node_ids, buffer_size, &creply, conn);
 
                 if let Err(error) = error {
                     let _ = creply.blocking_send(Err(error));
@@ -1079,63 +1072,68 @@ impl GraphDatabase {
             .await;
     }
 
-    pub async fn add_full_nodes(
+    pub async fn add_nodes(
         &self,
         room_id: Uid,
-        nodes: Vec<FullNode>,
+        nodes: Vec<NodeToInsert>,
         reply: Sender<Result<Vec<Uid>>>,
     ) {
         let mut invalid_nodes = Vec::new();
         let mut valid_nodes = Vec::new();
 
-        for mut node in nodes {
-            let entity_name = self.data_model.name_for(&node.node._entity);
-            match entity_name {
-                Some(name) => {
-                    match self.data_model.get_entity(&name) {
-                        Ok(ent) => {
-                            match node.entity_validation(ent) {
-                                Ok(_) => valid_nodes.push(node),
-                                Err(_e) => {
-                                    // println!("{}", e);
-                                    //silent error. will just indicate peer that some node is erroneous
-                                    invalid_nodes.push(node.node.id)
-                                }
-                            }
-                        }
-                        Err(_e) => {
-                            //println!("{}", e);
-                            //silent error. will just indicate peer that some node is erroneous
-                            invalid_nodes.push(node.node.id);
-                        }
+        for mut node_to_insert in nodes {
+            let node = match node_to_insert.node.as_ref() {
+                Some(node) => node,
+                None => {
+                    invalid_nodes.push(node_to_insert.id);
+                    continue;
+                }
+            };
+
+            match &node.room_id {
+                Some(r) => {
+                    if !room_id.eq(r) {
+                        invalid_nodes.push(node_to_insert.id);
+                        continue;
                     }
                 }
                 None => {
-                    // println!("missing entity");
+                    invalid_nodes.push(node_to_insert.id);
+                    continue;
+                }
+            }
+
+            let name = match self.data_model.name_for(&node._entity) {
+                Some(e) => e,
+                None => {
+                    invalid_nodes.push(node_to_insert.id);
+                    continue;
+                }
+            };
+
+            let entity = match self.data_model.get_entity(&name) {
+                Ok(e) => e,
+                Err(_) => {
+                    invalid_nodes.push(node_to_insert.id);
+                    continue;
+                }
+            };
+
+            match validate_json_for_entity(entity, &node._json) {
+                Ok(_) => {
+                    node_to_insert.entity_name = Some(name);
+                    valid_nodes.push(node_to_insert)
+                }
+                Err(_e) => {
+                    // println!("{}", e);
                     //silent error. will just indicate peer that some node is erroneous
-                    invalid_nodes.push(node.node.id);
+                    invalid_nodes.push(node_to_insert.id)
                 }
             }
         }
-        let auth_service = self.auth_service.clone();
-        let _ = self
-            .graph_database
-            .reader
-            .send_async(Box::new(move |conn| {
-                let val_nodes =
-                    FullNode::prepare_for_insert(&room_id, valid_nodes, conn).map_err(Error::from);
-                match val_nodes {
-                    Ok(val_nodes) => {
-                        let msg =
-                            AuthorisationMessage::AddFullNode(val_nodes, invalid_nodes, reply);
-                        let _ = auth_service.send_blocking(msg);
-                    }
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                    }
-                }
-            }))
-            .await;
+
+        let msg = AuthorisationMessage::AddNodes(valid_nodes, invalid_nodes, reply);
+        let _ = self.auth_service.send(msg).await;
     }
 
     pub async fn delete_edges(&self, mut edges: Vec<EdgeDeletionEntry>, reply: Sender<Result<()>>) {

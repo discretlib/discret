@@ -8,7 +8,6 @@ use crate::{
     security::{
         base64_encode, derive_uid, uid_decode, uid_encode, Ed25519SigningKey, SigningKey, Uid,
     },
-    synchronisation::node_full::FullNode,
 };
 
 use super::{
@@ -16,7 +15,7 @@ use super::{
     deletion::DeletionQuery,
     edge::EdgeDeletionEntry,
     mutation_query::{InsertEntity, MutationQuery},
-    node::NodeDeletionEntry,
+    node::{NodeDeletionEntry, NodeToInsert},
     room::*,
     room_node::{prepare_new_room, prepare_room_with_history, RoomNode},
     sqlite_database::{BufferedDatabaseWriter, WriteMessage, Writeable},
@@ -36,7 +35,7 @@ pub enum AuthorisationMessage {
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomsForPeer(Vec<u8>, i64, Sender<HashSet<Uid>>),
-    AddFullNode(Vec<FullNode>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
+    AddNodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     DeleteEdges(
         Vec<(EdgeDeletionEntry, Option<Vec<u8>>)>,
         Sender<Result<()>>,
@@ -263,16 +262,16 @@ impl AuthorisationService {
                 let _ = reply.send(rooms);
             }
 
-            AuthorisationMessage::AddFullNode(valid_nodes, mut invalid_node, reply) => {
+            AuthorisationMessage::AddNodes(valid_nodes, mut invalid_node, reply) => {
                 let mut write_nodes = Vec::new();
 
                 for node in valid_nodes {
-                    match auth.validate_full_node(&node) {
+                    match auth.validate_node(&node) {
                         true => write_nodes.push(node),
-                        false => invalid_node.push(node.node.id),
+                        false => invalid_node.push(node.id),
                     }
                 }
-                let query = WriteMessage::FullNode(write_nodes, invalid_node, reply);
+                let query = WriteMessage::Nodes(write_nodes, invalid_node, reply);
 
                 let _ = database_writer.send(query).await;
             }
@@ -1014,35 +1013,40 @@ impl RoomAuthorisations {
         Ok(insert)
     }
 
-    pub fn validate_full_node(&self, node: &FullNode) -> bool {
-        let required_right = match &node.old_verifying_key {
-            Some(old_key) => match old_key.eq(&node.node.verifying_key) {
+    pub fn validate_node(&self, node_to_insert: &NodeToInsert) -> bool {
+        let node = match &node_to_insert.node {
+            Some(n) => n,
+            None => return false,
+        };
+
+        let required_right = match &node_to_insert.old_verifying_key {
+            Some(old_key) => match old_key.eq(&node.verifying_key) {
                 true => RightType::MutateSelf,
                 false => RightType::MutateAll,
             },
             None => RightType::MutateSelf,
         };
-        let room_id = &node.node.room_id;
+        let room_id = &node.room_id;
         if room_id.is_none() {
-            return false;
+            return false; //during synchronisation only non empty rooms make sense
         }
         let room_id = room_id.unwrap();
 
-        if let Some(old_room_id) = &node.old_room_id {
+        if let Some(old_room_id) = &node_to_insert.old_room_id {
             if !old_room_id.eq(&room_id) {
                 let room = self.rooms.get(old_room_id);
                 if room.is_none() {
                     return false;
                 }
                 let room = room.unwrap();
-                if node.entity_name.is_none() {
+                if node_to_insert.entity_name.is_none() {
                     return false;
                 }
-                let entity_name = &node.entity_name.clone().unwrap();
+                let entity_name = &node_to_insert.entity_name.clone().unwrap();
                 if !room.can(
-                    &node.node.verifying_key,
+                    &node.verifying_key,
                     entity_name,
-                    node.node.mdate,
+                    node.mdate,
                     &required_right,
                 ) {
                     return false;
@@ -1056,36 +1060,36 @@ impl RoomAuthorisations {
         }
         let room = room.unwrap();
 
-        if node.entity_name.is_none() {
+        if node_to_insert.entity_name.is_none() {
             return false;
         }
-        let entity_name = &node.entity_name.clone().unwrap();
+        let entity_name = &node_to_insert.entity_name.clone().unwrap();
         if !room.can(
-            &node.node.verifying_key,
+            &node.verifying_key,
             entity_name,
-            node.node.mdate,
+            node.mdate,
             &required_right,
         ) {
             return false;
         }
 
-        for edge in &node.edges {
-            let required_right = match &node.old_verifying_key {
-                Some(old_key) => match old_key.eq(&edge.verifying_key) {
-                    true => RightType::MutateSelf,
-                    false => RightType::MutateAll,
-                },
-                None => RightType::MutateSelf,
-            };
-            if !room.can(
-                &edge.verifying_key,
-                entity_name,
-                edge.cdate,
-                &required_right,
-            ) {
-                return false;
-            }
-        }
+        // for edge in &node_to_insert.edges {
+        //     let required_right = match &node_to_insert.old_verifying_key {
+        //         Some(old_key) => match old_key.eq(&edge.verifying_key) {
+        //             true => RightType::MutateSelf,
+        //             false => RightType::MutateAll,
+        //         },
+        //         None => RightType::MutateSelf,
+        //     };
+        //     if !room.can(
+        //         &edge.verifying_key,
+        //         entity_name,
+        //         edge.cdate,
+        //         &required_right,
+        //     ) {
+        //         return false;
+        //     }
+        // }
 
         true
     }

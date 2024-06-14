@@ -116,7 +116,7 @@ impl RoomNode {
     }
 
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, ROOM_ENT_SHORT, conn)?;
+        let node = Node::get_with_entity(id, ROOM_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
         }
@@ -304,7 +304,7 @@ impl AuthorisationNode {
     }
 
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, AUTHORISATION_ENT_SHORT, conn)?;
+        let node = Node::get_with_entity(id, AUTHORISATION_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
         }
@@ -402,7 +402,7 @@ impl UserNode {
     }
 
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, USER_AUTH_ENT_SHORT, conn)?;
+        let node = Node::get_with_entity(id, USER_AUTH_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
         }
@@ -462,7 +462,7 @@ impl EntityRightNode {
     }
 
     pub fn read(conn: &Connection, id: &Uid) -> std::result::Result<Option<Self>, rusqlite::Error> {
-        let node = Node::get(id, ENTITY_RIGHT_ENT_SHORT, conn)?;
+        let node = Node::get_with_entity(id, ENTITY_RIGHT_ENT_SHORT, conn)?;
         if node.is_none() {
             return Ok(None);
         }

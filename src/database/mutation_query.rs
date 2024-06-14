@@ -339,7 +339,7 @@ impl MutationQuery {
                 let id_s = Self::base64_field(id_field, parameters)?
                     .ok_or(Error::InvalidId(entity_name.clone()))?;
                 let id = uid_from(id_s)?;
-                let mut node: NodeToMutate = match Node::get(&id, entity_short, conn)? {
+                let mut node: NodeToMutate = match Node::get_with_entity(&id, entity_short, conn)? {
                     Some(old_node) => {
                         let node_room = if room_id.is_some() {
                             room_id

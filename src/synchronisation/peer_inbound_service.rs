@@ -38,9 +38,8 @@ use crate::{
 };
 
 use super::{
-    node_full::FullNode, peer_outbound_service::InboundQueryService,
-    room_locking_service::RoomLockService, Answer, Error, IdentityAnswer, LocalEvent, Query,
-    QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
+    peer_outbound_service::InboundQueryService, room_locking_service::RoomLockService, Answer,
+    Error, IdentityAnswer, LocalEvent, Query, QueryProtocol, RemoteEvent, NETWORK_TIMEOUT_SEC,
 };
 
 static QUERY_SEND_BUFFER: usize = 10;
@@ -882,68 +881,64 @@ impl LocalPeerService {
             }
         }
 
-        let filtered = db.filter_existing_node(remote_nodes, date).await?;
+        let filtered = db.filter_existing_node(remote_nodes).await?;
         if !filtered.is_empty() {
             has_changes = true;
         } else {
             return Ok(has_changes);
         }
-        let max_nodes = 128;
-        let mut current_list = Vec::with_capacity(max_nodes);
-        let mut tasks = Vec::new();
 
-        //request nodes in batch to reduce memory usage
-        for node_identifier in filtered {
-            current_list.push(node_identifier.id);
-            if current_list.len() == max_nodes {
-                let list = current_list;
-                let qs = query_service.clone();
-                let db = db.clone();
-                let verify_service = verify_service.clone();
-                let room_id = room_id;
-                let spawn: tokio::task::JoinHandle<Result<(), crate::Error>> =
-                    tokio::spawn(async move {
-                        let mut result_recv: Receiver<Result<Vec<FullNode>, Error>> =
-                            LocalPeerService::query_multiple(&qs, Query::FullNodes(room_id, list))
-                                .await;
-                        while let Some(nodes) = result_recv.recv().await {
-                            let nodes = nodes?;
-                            let nodes = verify_service.verify_full_nodes(nodes).await?;
-                            db.add_full_nodes(room_id, nodes).await?;
+        let batch_size = 2048;
+        let mut node_list = Vec::with_capacity(batch_size);
+        let mut edge_list = Vec::with_capacity(batch_size);
+        let mut node_map = HashMap::with_capacity(batch_size);
+
+        for node_to_insert in filtered {
+            node_list.push(node_to_insert.id);
+            edge_list.push((node_to_insert.id, node_to_insert.old_mdate));
+            node_map.insert(node_to_insert.id, node_to_insert);
+            if node_list.len() == batch_size {
+                let mut result_recv: Receiver<Result<Vec<Node>, Error>> =
+                    LocalPeerService::query_multiple(
+                        &query_service,
+                        Query::Nodes(room_id, node_list.clone()),
+                    )
+                    .await;
+                while let Some(nodes) = result_recv.recv().await {
+                    let nodes = nodes?;
+                    let nodes = verify_service.verify_nodes(nodes).await?;
+                    let mut nodes_to_insert = Vec::with_capacity(nodes.len());
+                    for mut node in nodes {
+                        if let Some(mut nti) = node_map.remove(&node.id) {
+                            node._local_id = nti.old_local_id;
+                            nti.node = Some(node);
+                            nodes_to_insert.push(nti);
                         }
-                        Ok(())
-                    });
-                tasks.push(spawn);
-                current_list = Vec::with_capacity(max_nodes);
+                    }
+                    db.add_nodes(room_id, nodes_to_insert).await?;
+                }
+
+                node_list.clear();
+                node_map.clear();
             }
         }
-        if !current_list.is_empty() {
-            let qs = query_service.clone();
-            let db = db.clone();
-            let verify_service = verify_service.clone();
-            let room_id = room_id;
-            let spawn: tokio::task::JoinHandle<Result<(), crate::Error>> =
-                tokio::spawn(async move {
-                    let mut result_recv: Receiver<Result<Vec<FullNode>, Error>> =
-                        LocalPeerService::query_multiple(
-                            &qs,
-                            Query::FullNodes(room_id, current_list),
-                        )
-                        .await;
-                    while let Some(nodes) = result_recv.recv().await {
-                        let nodes = nodes?;
-                        let nodes = verify_service.verify_full_nodes(nodes).await?;
-                        db.add_full_nodes(room_id, nodes).await?;
-                    }
-                    Ok(())
-                });
-            tasks.push(spawn);
-        }
 
-        let tasks = futures::future::join_all(tasks).await;
-        for task in tasks {
-            if let Err(e) = task {
-                return Err(crate::Error::from(e));
+        if !node_list.is_empty() {
+            let mut result_recv: Receiver<Result<Vec<Node>, Error>> =
+                LocalPeerService::query_multiple(&query_service, Query::Nodes(room_id, node_list))
+                    .await;
+            while let Some(nodes) = result_recv.recv().await {
+                let nodes = nodes?;
+                let nodes = verify_service.verify_nodes(nodes).await?;
+                let mut nodes_to_insert = Vec::with_capacity(nodes.len());
+                for mut node in nodes {
+                    if let Some(mut nti) = node_map.remove(&node.id) {
+                        node._local_id = nti.old_local_id;
+                        nti.node = Some(node);
+                        nodes_to_insert.push(nti);
+                    }
+                }
+                db.add_nodes(room_id, nodes_to_insert).await?;
             }
         }
 

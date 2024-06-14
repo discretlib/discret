@@ -58,7 +58,7 @@ impl DeletionQuery {
                 .unwrap();
 
             let src = uid_decode(src)?;
-            let node = Node::get(&src, &del.short_name, conn)?;
+            let node = Node::get_with_entity(&src, &del.short_name, conn)?;
             if let Some(node) = node {
                 if del.references.is_empty() {
                     deletion_query.nodes.push(NodeDelete {

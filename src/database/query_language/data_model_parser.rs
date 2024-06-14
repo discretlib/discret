@@ -730,6 +730,149 @@ impl DataModel {
     }
 }
 
+pub fn validate_json_for_entity(
+    entity: &Entity,
+    json: &Option<String>,
+) -> Result<(), crate::database::Error> {
+    if let Some(json_str) = json {
+        let json: serde_json::Value = serde_json::from_str(json_str)?;
+        if !json.is_object() {
+            return Err(crate::database::Error::InvalidJsonObject(
+                "in NodeFull".to_string(),
+            ));
+        }
+        let json = json.as_object().unwrap();
+        for f in &entity.fields {
+            let name = f.0;
+            let field = f.1;
+            let short_name = &field.short_name;
+            if !field.is_system {
+                match field.field_type {
+                    FieldType::Boolean => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                if value.as_bool().is_none() {
+                                    return Err(crate::database::Error::InvalidJsonFieldValue(
+                                        name.to_string(),
+                                        "Boolean".to_string(),
+                                    ));
+                                }
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                }
+                            }
+                        };
+                    }
+                    FieldType::Float => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                if value.as_f64().is_none() {
+                                    return Err(crate::database::Error::InvalidJsonFieldValue(
+                                        name.to_string(),
+                                        "Float".to_string(),
+                                    ));
+                                }
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                }
+                            }
+                        };
+                    }
+                    FieldType::Base64 => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                match value.as_str() {
+                                    Some(str) => base64_decode(str.as_bytes())?,
+                                    None => {
+                                        return Err(crate::database::Error::InvalidJsonFieldValue(
+                                            name.to_string(),
+                                            "Base64".to_string(),
+                                        ))
+                                    }
+                                };
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                };
+                            }
+                        };
+                    }
+                    FieldType::Integer => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                if value.as_i64().is_none() {
+                                    return Err(crate::database::Error::InvalidJsonFieldValue(
+                                        name.to_string(),
+                                        "Integer".to_string(),
+                                    ));
+                                }
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                }
+                            }
+                        };
+                    }
+                    FieldType::String => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                if value.as_str().is_none() {
+                                    return Err(crate::database::Error::InvalidJsonFieldValue(
+                                        name.to_string(),
+                                        "String".to_string(),
+                                    ));
+                                }
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                }
+                            }
+                        };
+                    }
+                    FieldType::Json => {
+                        match json.get(short_name) {
+                            Some(value) => {
+                                if !value.is_object() && !value.is_array() {
+                                    return Err(crate::database::Error::InvalidJsonFieldValue(
+                                        name.to_string(),
+                                        "Json".to_string(),
+                                    ));
+                                }
+                            }
+                            None => {
+                                if !field.nullable && field.default_value.is_none() {
+                                    return Err(crate::database::Error::MissingJsonField(
+                                        name.to_string(),
+                                    ));
+                                }
+                            }
+                        };
+                    }
+                    FieldType::Array(_) | FieldType::Entity(_) => {}
+                };
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
     pub entity_name: String,

@@ -233,8 +233,9 @@ async fn invites() {
             }
         }
     });
-    let s = tokio::time::timeout(Duration::from_millis(1000), handle)
+    tokio::time::timeout(Duration::from_millis(1000), handle)
         .await
+        .unwrap()
         .unwrap();
 
     let query = "query{

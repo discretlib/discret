@@ -12,6 +12,7 @@ use crate::{
     date_utils::{date, date_next_day, now},
     security::{base64_encode, import_verifying_key, new_uid, uid_encode, SigningKey, Uid},
 };
+
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -283,23 +284,20 @@ impl Node {
     };
 
     ///
-    /// SQL Query to retrieve a Node by its primary key
-    ///
-    pub const NODE_QUERY: &'static str = "
-    SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
-    FROM _node 
-    WHERE 
-        id = ? AND 
-        _entity = ?";
-    ///
     /// Retrieve a node using its primary key
     ///
-    pub fn get(
+    pub fn get_with_entity(
         id: &Uid,
         entity: &str,
         conn: &Connection,
     ) -> std::result::Result<Option<Box<Node>>, rusqlite::Error> {
-        let mut get_stmt = conn.prepare_cached(Self::NODE_QUERY)?;
+        const QUERY: &str = "
+            SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
+            FROM _node 
+            WHERE 
+            id = ? AND 
+            _entity = ?";
+        let mut get_stmt = conn.prepare_cached(QUERY)?;
         let node = get_stmt
             .query_row((id, entity), Self::NODE_MAPPING)
             .optional()?;
@@ -511,11 +509,10 @@ impl Node {
     // remaining id will be requested during synchonisation
     // the set is provided by the get_ids_for_room_at method
     //
-    pub fn retain_missing_id(
+    pub fn filter_existing(
         node_ids: &mut HashSet<NodeIdentifier>,
-        day: i64,
         conn: &Connection,
-    ) -> Result<()> {
+    ) -> Result<Vec<NodeToInsert>> {
         let it = &mut node_ids.iter().peekable();
         let mut q = String::new();
         let mut ids = Vec::new();
@@ -527,24 +524,35 @@ impl Node {
             ids.push(&node.id);
         }
 
-        let query = format!(
-            "SELECT id, mdate ,_signature
-            FROM _node 
-            WHERE 
-                mdate >= {} AND 
-                id in ({}) ",
-            date(day),
-            q,
-        );
+        let query = format!("
+        SELECT id , room_id, cdate, mdate, _entity,_json, _binary, verifying_key, _signature, rowid  
+        FROM _node 
+        WHERE 
+         id in ({}) ",
+            q,);
 
         let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query(params_from_iter(ids.iter()))?;
 
+        let mut result = Vec::new();
         while let Some(row) = rows.next()? {
-            let existing = NodeIdentifier {
+            let node = Node {
                 id: row.get(0)?,
-                mdate: row.get(1)?,
-                signature: row.get(2)?,
+                room_id: row.get(1)?,
+                cdate: row.get(2)?,
+                mdate: row.get(3)?,
+                _entity: row.get(4)?,
+                _json: row.get(5)?,
+                _binary: row.get(6)?,
+                verifying_key: row.get(7)?,
+                _signature: row.get(8)?,
+                _local_id: row.get(9)?,
+            };
+
+            let existing = NodeIdentifier {
+                id: node.id,
+                mdate: node.mdate,
+                signature: node._signature,
             };
 
             if let Some(new) = node_ids.get(&existing) {
@@ -558,8 +566,129 @@ impl Node {
                 //      OR signature are equals: no need to update
                 if (new.mdate.eq(&existing.mdate)) && (new.signature <= existing.signature) {
                     node_ids.remove(&existing);
+                } else {
+                    let node_id = node_ids.take(&existing).unwrap();
+
+                    let old_fts = if let Some(json_str) = node._json {
+                        let json: serde_json::Value = serde_json::from_str(&json_str)?;
+                        let mut old_tfs = String::new();
+                        extract_json(&json, &mut old_tfs)?;
+                        Some(old_tfs)
+                    } else {
+                        None
+                    };
+
+                    let node_to_insert = NodeToInsert {
+                        id: node_id.id,
+                        node: None,
+                        entity_name: None,
+                        index: false,
+                        old_local_id: node._local_id,
+                        old_room_id: node.room_id,
+                        old_mdate: node.mdate,
+                        old_verifying_key: Some(node.verifying_key),
+                        old_fts_str: old_fts,
+                        node_fts_str: None,
+                    };
+
+                    result.push(node_to_insert);
                 }
             }
+        }
+
+        for node_id in node_ids.drain() {
+            let node_to_insert = NodeToInsert {
+                id: node_id.id,
+                node: None,
+                entity_name: None,
+                index: false,
+                old_local_id: None,
+                old_room_id: None,
+                old_mdate: 0,
+                old_verifying_key: None,
+                old_fts_str: None,
+                node_fts_str: None,
+            };
+
+            result.push(node_to_insert);
+        }
+
+        Ok(result)
+    }
+
+    pub fn filtered_by_room(
+        room_id: &Uid,
+        node_ids: Vec<Uid>,
+        batch_size: usize,
+        sender: &mpsc::Sender<Result<Vec<Node>>>,
+        conn: &Connection,
+    ) -> Result<()> {
+        let it = &mut node_ids.iter().peekable();
+        let mut q = String::new();
+        while let Some(_) = it.next() {
+            q.push('?');
+            if it.peek().is_some() {
+                q.push(',');
+            }
+        }
+
+        let query = format!("
+        SELECT 
+            _node.id , _node.room_id, _node.cdate, _node.mdate, _node._entity, _node._json, _node._binary, _node.verifying_key, _node._signature, rowid,
+            
+        FROM _node
+        WHERE 
+            _node.id in ({}) 
+        ", q);
+
+        let mut stmt = conn.prepare(&query)?;
+        let mut rows = stmt.query(params_from_iter(node_ids.iter()))?;
+
+        let mut len = 0;
+        let mut res: Vec<Node> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: Uid = row.get(0)?;
+            let db_room_id: Option<Uid> = row.get(1)?;
+            match &db_room_id {
+                Some(rid) => {
+                    if !rid.eq(room_id) {
+                        continue;
+                    }
+                }
+                None => {
+                    continue;
+                }
+            }
+            let node = Node {
+                id: id,
+                room_id: db_room_id,
+                cdate: row.get(2)?,
+                mdate: row.get(3)?,
+                _entity: row.get(4)?,
+                _json: row.get(5)?,
+                _binary: row.get(6)?,
+                verifying_key: row.get(7)?,
+                _signature: row.get(8)?,
+                _local_id: row.get(9)?,
+            };
+            let size = bincode::serialized_size(&node)?;
+            let insert_len = len + size + VEC_OVERHEAD;
+
+            if insert_len > batch_size as u64 {
+                let ready = res;
+                res = Vec::new();
+                len = 0;
+                let s = sender.blocking_send(Ok(ready));
+                if s.is_err() {
+                    break;
+                }
+            } else {
+                len = insert_len;
+            }
+            res.push(node);
+        }
+        if !res.is_empty() {
+            let _ = sender.blocking_send(Ok(res));
         }
         Ok(())
     }
@@ -642,6 +771,53 @@ impl PartialEq for NodeIdentifier {
 impl Hash for NodeIdentifier {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+///
+/// data structure that will gather all information required to properly insert a node
+/// used during synchronisation
+///
+#[derive(Default)]
+pub struct NodeToInsert {
+    pub id: Uid,
+    pub node: Option<Node>,
+    pub entity_name: Option<String>,
+    pub index: bool,
+    pub old_room_id: Option<Uid>,
+    pub old_mdate: i64,
+    pub old_verifying_key: Option<Vec<u8>>,
+    pub old_local_id: Option<i64>,
+    pub old_fts_str: Option<String>,
+    pub node_fts_str: Option<String>,
+}
+impl NodeToInsert {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
+        if self.node.is_none() {
+            return;
+        }
+        let node = self.node.as_ref().unwrap();
+
+        if let Some(room_id) = &node.room_id {
+            if let Some(old_id) = &self.old_room_id {
+                if !room_id.eq(old_id) {
+                    daily_log.set_need_update(old_id.clone(), &node._entity, self.old_mdate);
+                }
+            }
+            daily_log.set_need_update(room_id.clone(), &node._entity, node.mdate);
+        }
+    }
+}
+
+impl Writeable for NodeToInsert {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        if self.node.is_none() {
+            return Ok(());
+        }
+        let node = self.node.as_mut().unwrap();
+        node.write(conn, self.index, &self.old_fts_str, &self.node_fts_str)?;
+
+        Ok(())
     }
 }
 
@@ -1054,7 +1230,7 @@ mod tests {
         node.sign(&signing_key).unwrap();
         node.write(&conn, false, &None, &None).unwrap();
 
-        let new_node = Node::get(&node.id, entity, &conn).unwrap();
+        let new_node = Node::get_with_entity(&node.id, entity, &conn).unwrap();
         assert!(new_node.is_some());
 
         Node::delete(&node.id, &conn).unwrap();
@@ -1174,7 +1350,7 @@ mod tests {
         let ids_2 = receive.blocking_recv().unwrap().unwrap();
         assert_eq!(2, ids_2.len());
 
-        Node::retain_missing_id(&mut ids, date, &conn).unwrap();
+        Node::filter_existing(&mut ids, &conn).unwrap();
         assert_eq!(0, ids.len());
     }
 
@@ -1216,7 +1392,9 @@ mod tests {
         assert_eq!(&node._entity, &entry.entity);
         assert_eq!(&node.mdate, &entry.mdate);
 
-        assert!(Node::get(&node.id, &entity, &conn).unwrap().is_some());
+        assert!(Node::get_with_entity(&node.id, &entity, &conn)
+            .unwrap()
+            .is_some());
 
         let log_with_author =
             NodeDeletionEntry::with_previous_authors(deletion_logs, &conn).unwrap();
@@ -1226,6 +1404,8 @@ mod tests {
             log_with_author.into_iter().map(|e| e.1 .0).collect();
         NodeDeletionEntry::delete_all(&mut deletion, &mut DailyMutations::new(), &conn).unwrap();
 
-        assert!(Node::get(&node.id, &entity, &conn).unwrap().is_none());
+        assert!(Node::get_with_entity(&node.id, &entity, &conn)
+            .unwrap()
+            .is_none());
     }
 }
