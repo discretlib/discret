@@ -1,3 +1,4 @@
+pub mod beacon;
 pub mod endpoint;
 pub mod multicast;
 pub mod peer_manager;
@@ -8,7 +9,8 @@ use std::{io, net::SocketAddr};
 use thiserror::Error;
 
 use crate::{security::MeetingToken, Uid};
-
+//Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
+pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConnectionInfo {
     pub endpoint_id: Uid,

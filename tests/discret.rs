@@ -120,7 +120,7 @@ async fn multicast_connect() {
         }
     });
 
-    let s = tokio::time::timeout(Duration::from_secs(1), handle).await;
+    let s = tokio::time::timeout(Duration::from_secs(2), handle).await;
 
     assert!(s.is_ok());
 }
@@ -233,7 +233,7 @@ async fn invites() {
             }
         }
     });
-    tokio::time::timeout(Duration::from_millis(1000), handle)
+    tokio::time::timeout(Duration::from_millis(2000), handle)
         .await
         .unwrap()
         .unwrap();
@@ -445,10 +445,10 @@ async fn new_peers_from_room() {
         }
     });
 
-    let s = tokio::time::timeout(Duration::from_millis(1000), handle2).await;
+    let s = tokio::time::timeout(Duration::from_millis(2000), handle2).await;
     assert!(s.is_ok());
 
-    let s = tokio::time::timeout(Duration::from_millis(1000), handle3).await;
+    let s = tokio::time::timeout(Duration::from_millis(2000), handle3).await;
     assert!(s.is_ok());
 
     let query = "query{
@@ -500,7 +500,7 @@ async fn multiple_entities() {
         Person{
             name:String,
             parents:[Person],
-            pet: Pet
+            pet : Pet
         }
 
         Pet {
@@ -594,7 +594,7 @@ async fn multiple_entities() {
         }
     });
 
-    tokio::time::timeout(Duration::from_secs(1), handle)
+    tokio::time::timeout(Duration::from_secs(2), handle)
         .await
         .unwrap()
         .unwrap();

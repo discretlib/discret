@@ -8,15 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Configuration {
     ///
-    /// default: 512
-    ///
-    /// Defines number of concurent connection the system can have.
-    /// TODO: can be changed at runtime?
-    /// TODO: upon new connection attempts, the least recently used connection will be discarded.
-    ///
-    //pub max_connected_peers: usize,
-
-    ///
     /// default: 4
     ///
     /// defines the global parellism capabilities.
@@ -96,7 +87,7 @@ pub struct Configuration {
     pub max_object_size_in_kb: u64,
 
     ///
-    /// Default 4096
+    /// Default 2048
     /// set the maximum cache size for the database reading threads. increasing it can improve performances
     /// Every read threads consumes up to that amount, meaning that increasing the "parallelism" configuration will increase the memory usage
     ///
@@ -131,6 +122,16 @@ pub struct Configuration {
     pub write_buffer_length: usize,
 
     ///
+    /// default 60000ms (60 seconds)
+    /// how often an annouces are sent over the network
+    ///
+    pub announce_frequency_in_ms: u64,
+
+    ///
+    /// enbable multicast discovery
+    ///
+    pub enable_multicast: bool,
+    ///
     /// default: 0.0.0.0
     ///
     /// Discret uses the IP multicast feature to discover peers on local networks.
@@ -146,10 +147,15 @@ pub struct Configuration {
     pub multicast_ipv4_group: String,
 
     ///
-    /// default 60000ms (60 seconds)
-    /// how often an annouce is sent over network
+    /// default: true
+    /// enable beacon peer discovery
     ///
-    pub announce_frequency_in_ms: u64,
+    pub enable_beacons: bool,
+
+    ///
+    /// list of Beacon servers that are used for peer discovery
+    ///
+    pub beacons: Vec<BeaconConfig>,
 
     ///
     /// Default: false (disabled)
@@ -171,19 +177,24 @@ impl Default for Configuration {
             auto_accept_local_device: true,
             auto_allow_new_peers: false,
             max_object_size_in_kb: 256,
-            read_cache_size_in_kb: 4096,
+            read_cache_size_in_kb: 2048,
             write_cache_size_in_kb: 2048,
             write_buffer_length: 1024,
+            announce_frequency_in_ms: 60000,
+            enable_multicast: true,
             multicast_ipv4_interface: "0.0.0.0".to_string(),
             multicast_ipv4_group: "224.0.0.224:22402".to_string(),
-            announce_frequency_in_ms: 60000,
+            enable_beacons: true,
+            beacons: Vec::new(),
             enable_database_memory_security: false,
         }
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Beacon {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BeaconConfig {
     address: String,
+    ipv4_port: u16,
+    ipv6_port: u16,
     cert_hash: String,
 }

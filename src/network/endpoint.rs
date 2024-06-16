@@ -24,10 +24,7 @@ use crate::{
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error};
-
-//Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
+use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error, ALPN_QUIC_HTTP};
 
 static MAX_CONNECTION_RETRY: usize = 4;
 
