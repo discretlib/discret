@@ -723,8 +723,9 @@ impl PeerManager {
         &mut self,
         peers: Vec<Node>,
         auto_allow_new_peers: bool,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<bool, crate::Error> {
         let room_id = uid_encode(&self.private_room_id);
+        let mut pending = false;
         let mut send_announce = false;
         for peer in peers {
             let verifying_key = base64_encode(&peer.verifying_key);
@@ -758,12 +759,13 @@ impl PeerManager {
                     &self.db,
                 )
                 .await?;
+                pending = true;
             }
         }
         if send_announce {
             self.send_annouces().await?;
         }
-        Ok(())
+        Ok(pending)
     }
 
     pub async fn beacon_connection_failed(&mut self, address: SocketAddr, error: String) {

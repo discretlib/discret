@@ -74,8 +74,8 @@ async fn main() {
                         )
                         .await
                         .unwrap();
-                    let query_result = ResultParser::new(&result).unwrap();
-                    let res: Vec<Chat> = query_result.array("res").unwrap();
+                    let mut query_result = ResultParser::new(&result).unwrap();
+                    let res: Vec<Chat> = query_result.take_array("res").unwrap();
                     for msg in res {
                         last_date = msg.mdate;
                         last_id = msg.id;

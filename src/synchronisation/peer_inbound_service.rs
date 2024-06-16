@@ -404,7 +404,7 @@ impl LocalPeerService {
                     .await;
 
                 let validated = receive.await??;
-
+                
                 if validated {
                     conn_ready.store(true, Ordering::Relaxed);
 
@@ -414,6 +414,7 @@ impl LocalPeerService {
 
                     peer_service.connected(verifying_key, connection_id).await;
                 } else {
+                    
                     peer_service
                         .disconnect(verifying_key, circuit_id, connection_id)
                         .await;

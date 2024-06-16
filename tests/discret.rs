@@ -54,8 +54,8 @@ async fn minimal() {
     struct Id {
         id: String,
     }
-    let parser = ResultParser::new(&mut_result).unwrap();
-    let ids: Id = parser.object("result").unwrap();
+    let mut parser = ResultParser::new(&mut_result).unwrap();
+    let ids: Id = parser.take_object("result").unwrap();
     let id = ids.id;
 
     let mut params = Parameters::new();
@@ -292,8 +292,8 @@ async fn invites() {
     struct Auth {
         id: String,
     }
-    let parser = ResultParser::new(&result).unwrap();
-    let mut ids: Ids = parser.object("sys.Room").unwrap();
+    let mut parser = ResultParser::new(&result).unwrap();
+    let mut ids: Ids = parser.take_object("sys.Room").unwrap();
     let room_id = ids.id;
     let auth_id = ids.authorisations.pop().unwrap().id;
 
@@ -348,11 +348,13 @@ async fn invites() {
             }
         }
     });
-    tokio::time::timeout(Duration::from_millis(2000), handle)
+    tokio::time::timeout(Duration::from_millis(3000), handle)
         .await
         .unwrap()
         .unwrap();
 
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    //allowedpeers can be synchronized after room synchronisation so we wati for them a little
     let query = "query{
         Person{
             name
@@ -379,14 +381,14 @@ async fn invites() {
     }
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids[0].id.len() > 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 2);
 
     let query = "query{
@@ -396,13 +398,13 @@ async fn invites() {
     }";
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.OwnedInvite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.OwnedInvite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let query = "query{
@@ -412,13 +414,13 @@ async fn invites() {
     }";
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.Invite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.Invite").unwrap();
     assert_eq!(ids.len(), 0);
 }
 
@@ -489,8 +491,8 @@ async fn invites_beacon_ipv6() {
     struct Auth {
         id: String,
     }
-    let parser = ResultParser::new(&result).unwrap();
-    let mut ids: Ids = parser.object("sys.Room").unwrap();
+    let mut parser = ResultParser::new(&result).unwrap();
+    let mut ids: Ids = parser.take_object("sys.Room").unwrap();
     let room_id = ids.id;
     let auth_id = ids.authorisations.pop().unwrap().id;
 
@@ -549,6 +551,8 @@ async fn invites_beacon_ipv6() {
         .await
         .unwrap()
         .unwrap();
+    //allowedpeers can be synchronized after room synchronisation so we wati for them a little
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let query = "query{
         Person{
@@ -576,14 +580,14 @@ async fn invites_beacon_ipv6() {
     }
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids[0].id.len() > 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 2);
 
     let query = "query{
@@ -593,13 +597,13 @@ async fn invites_beacon_ipv6() {
     }";
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.OwnedInvite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.OwnedInvite").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.OwnedInvite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let query = "query{
@@ -609,13 +613,13 @@ async fn invites_beacon_ipv6() {
     }";
 
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.Invite").unwrap();
     assert_eq!(ids.len(), 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.Invite").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.Invite").unwrap();
     assert_eq!(ids.len(), 0);
 }
 
@@ -670,8 +674,8 @@ async fn new_peers_from_room() {
     struct Auth {
         id: String,
     }
-    let parser = ResultParser::new(&result).unwrap();
-    let mut ids: Ids = parser.object("sys.Room").unwrap();
+    let mut parser = ResultParser::new(&result).unwrap();
+    let mut ids: Ids = parser.take_object("sys.Room").unwrap();
     let room_id = ids.id;
     let auth_id = ids.authorisations.pop().unwrap().id;
     let new_room = uid_decode(&room_id).unwrap();
@@ -788,19 +792,19 @@ async fn new_peers_from_room() {
         pub id: String,
     }
     let res1 = discret1.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res1).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res1).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 0);
 
     let res2 = discret2.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res2).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res2).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids[0].id.len() > 0);
 
     let res3 = discret3.query(query, None).await.unwrap();
-    let parser = ResultParser::new(&res3).unwrap();
-    let ids: Vec<Id> = parser.array("sys.AllowedPeer").unwrap();
+    let mut parser = ResultParser::new(&res3).unwrap();
+    let ids: Vec<Id> = parser.take_array("sys.AllowedPeer").unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids[0].id.len() > 0);
 }

@@ -2069,8 +2069,8 @@ mod tests {
             pub comment: String
         }
 
-        let query_result = ResultParser::new(&result).unwrap();
-        let persons: Vec<Person> = query_result.array("ns.Person").unwrap();
+        let mut query_result = ResultParser::new(&result).unwrap();
+        let persons: Vec<Person> = query_result.take_array("ns.Person").unwrap();
 
         assert_eq!(3, persons.len());
         assert_eq!("Alice", persons[0].name);

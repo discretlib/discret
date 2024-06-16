@@ -542,8 +542,8 @@ impl AllowedPeer {
 
         let peer_str = db.query(query, Some(param)).await?;
 
-        let query_result: ResultParser = ResultParser::new(&peer_str)?;
-        let mut result: Vec<Peer> = query_result.array("result")?;
+        let mut query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let mut result: Vec<Peer> = query_result.take_array("result")?;
 
         if result.is_empty() {
             return Err(crate::Error::from(Error::UnknownPeer()));
@@ -567,8 +567,8 @@ impl AllowedPeer {
         param.add("room_id", room_id.to_string())?;
         param.add("peer_id", peer_id.to_string())?;
         let peer_str = db.query(query, Some(param)).await?;
-        let query_result: ResultParser = ResultParser::new(&peer_str)?;
-        let mut result: Vec<AllowedPeer> = query_result.array("result")?;
+        let mut query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let mut result: Vec<AllowedPeer> = query_result.take_array("result")?;
 
         if !result.is_empty() {
             return Ok(result.pop().unwrap());
@@ -620,8 +620,8 @@ impl AllowedPeer {
         param.add("status", status.value().to_string())?;
 
         let peer_str = db.query(query, Some(param)).await?;
-        let query_result: ResultParser = ResultParser::new(&peer_str)?;
-        let result: Vec<AllowedPeer> = query_result.array("result")?;
+        let mut query_result: ResultParser = ResultParser::new(&peer_str)?;
+        let result: Vec<AllowedPeer> = query_result.take_array("result")?;
 
         Ok(result)
     }
@@ -719,8 +719,8 @@ impl AllowedHardware {
                 Some(param),
             )
             .await?;
-        let query_result: ResultParser = ResultParser::new(&res)?;
-        let mut result: Vec<Self> = query_result.array("result")?;
+        let mut query_result: ResultParser = ResultParser::new(&res)?;
+        let mut result: Vec<Self> = query_result.take_array("result")?;
         Ok(result.pop())
     }
 
@@ -818,8 +818,8 @@ impl OwnedInvite {
         }
 
         let mut list = Vec::new();
-        let q = ResultParser::new(&result)?;
-        let invites: Vec<SerProdInvite> = q.array("sys.OwnedInvite")?;
+        let mut q = ResultParser::new(&result)?;
+        let invites: Vec<SerProdInvite> = q.take_array("sys.OwnedInvite")?;
         for invite in invites {
             let id = uid_decode(&invite.id)?;
             let room = match invite.room {
@@ -888,8 +888,8 @@ impl Invite {
         struct Id {
             id: String,
         }
-        let parser = ResultParser::new(&res).unwrap();
-        let id: Id = parser.object("sys.OwnedInvite").unwrap();
+        let mut parser = ResultParser::new(&res).unwrap();
+        let id: Id = parser.take_object("sys.OwnedInvite").unwrap();
 
         let invite_id = id.id;
         let invite_id = uid_decode(&invite_id)?;
@@ -936,8 +936,8 @@ impl Invite {
             id: String,
         }
 
-        let q = ResultParser::new(&result)?;
-        let ids: Vec<InvId> = q.array("sys.Invite")?;
+        let mut q = ResultParser::new(&result)?;
+        let ids: Vec<InvId> = q.take_array("sys.Invite")?;
 
         for id in ids {
             let mut param = Parameters::new();
@@ -981,8 +981,8 @@ impl Invite {
         struct InvId {
             id: String,
         }
-        let q = ResultParser::new(&result)?;
-        let ids: Vec<InvId> = q.array("sys.Invite")?;
+        let mut q = ResultParser::new(&result)?;
+        let ids: Vec<InvId> = q.take_array("sys.Invite")?;
 
         if !ids.is_empty() {
             return Ok(());
@@ -1037,8 +1037,8 @@ impl Invite {
         }
 
         let mut list = Vec::new();
-        let q = ResultParser::new(&result)?;
-        let invites: Vec<SerInvite> = q.array("sys.Invite")?;
+        let mut q = ResultParser::new(&result)?;
+        let invites: Vec<SerInvite> = q.take_array("sys.Invite")?;
         for invite in invites {
             let invite_id = uid_decode(&invite.invite_id)?;
             let application = invite.application;

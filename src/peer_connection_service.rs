@@ -351,9 +351,15 @@ impl PeerConnectionService {
             }
 
             PeerConnectionMessage::NewPeer(peers) => {
-                peer_manager
+                if peer_manager
                     .add_new_peers(peers, configuration.auto_allow_new_peers)
-                    .await?;
+                    .await?
+                {
+                    let _ = event_service
+                        .sender
+                        .send(EventServiceMessage::PendingPeer())
+                        .await;
+                }
             }
 
             PeerConnectionMessage::SendAnnounce() => {
@@ -395,6 +401,14 @@ impl PeerConnectionService {
                         configuration.auto_accept_local_device,
                     )
                     .await;
+                if let Ok(val) = valid.as_ref() {
+                    if !val {
+                        let _ = event_service
+                            .sender
+                            .send(EventServiceMessage::PendingHardware())
+                            .await;
+                    }
+                }
                 let _ = reply.send(valid);
             }
             PeerConnectionMessage::BeaconConnectionFailed(address, error) => {

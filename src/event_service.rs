@@ -14,6 +14,8 @@ pub enum EventServiceMessage {
     PeerConnected(Vec<u8>, i64, Uid),
     PeerDisconnected(Vec<u8>, i64, Uid),
     RoomSynchronized(Uid),
+    PendingPeer(),
+    PendingHardware(),
 }
 
 #[derive(Clone)]
@@ -23,6 +25,8 @@ pub enum Event {
     PeerConnected(Vec<u8>, i64, Uid),
     PeerDisconnected(Vec<u8>, i64, Uid),
     RoomSynchronized(Uid),
+    PendingPeer(),
+    PendingHardware(),
 }
 
 #[derive(Clone)]
@@ -63,6 +67,12 @@ impl EventService {
                     }
                     EventServiceMessage::RoomSynchronized(room) => {
                         let _ = broadcast.send(Event::RoomSynchronized(room));
+                    }
+                    EventServiceMessage::PendingPeer() => {
+                        let _ = broadcast.send(Event::PendingPeer());
+                    }
+                    EventServiceMessage::PendingHardware() => {
+                        let _ = broadcast.send(Event::PendingHardware());
                     }
                 };
             }

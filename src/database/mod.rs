@@ -37,45 +37,62 @@ impl ResultParser {
         let parsed: Value = serde_json::from_str(result)?;
         Ok(Self { parsed })
     }
-
-    pub fn array<T: DeserializeOwned>(&self, f: &str) -> std::result::Result<Vec<T>, crate::Error> {
+    ///
+    /// consume the array found for the field and convert it to an array of the generic type T
+    ///
+    pub fn take_array<T: DeserializeOwned>(
+        &mut self,
+        field: &str,
+    ) -> std::result::Result<Vec<T>, crate::Error> {
         let mut re = Vec::new();
-        let obj = self.parsed.as_object();
+        let obj = self.parsed.as_object_mut();
         if obj.is_none() {
             return Err(crate::Error::from(Error::InvalidJsonObject("".to_string())));
         }
         let obj = obj.unwrap();
-        let field = obj.get(f);
-        if field.is_none() {
-            return Err(crate::Error::from(Error::MissingJsonField(f.to_string())));
+        let f = obj.remove(field);
+        if f.is_none() {
+            return Err(crate::Error::from(Error::MissingJsonField(
+                field.to_string(),
+            )));
         }
-        let field = field.unwrap();
-        let field_array = field.as_array();
-        if field_array.is_none() {
-            return Err(crate::Error::from(Error::InvalidJSonArray(f.to_string())));
-        }
-        let field_array = field_array.unwrap();
-        for value in field_array.clone() {
-            let entry: T = serde_json::from_value(value)?;
-            re.push(entry);
+        let f = f.unwrap();
+
+        if let Value::Array(field_array) = f {
+            for value in field_array {
+                let entry: T = serde_json::from_value(value)?;
+                re.push(entry);
+            }
+        } else {
+            return Err(crate::Error::from(Error::InvalidJSonArray(
+                field.to_string(),
+            )));
         }
 
         Ok(re)
     }
 
-    pub fn object<T: DeserializeOwned>(&self, f: &str) -> std::result::Result<T, crate::Error> {
-        let obj = self.parsed.as_object();
+    ///
+    /// consume the object found for the field and convert it to an object of the generic type T
+    ///
+    pub fn take_object<T: DeserializeOwned>(
+        &mut self,
+        field: &str,
+    ) -> std::result::Result<T, crate::Error> {
+        let obj = self.parsed.as_object_mut();
         if obj.is_none() {
             return Err(crate::Error::from(Error::InvalidJsonObject("".to_string())));
         }
         let obj = obj.unwrap();
-        let field = obj.get(f);
-        if field.is_none() {
-            return Err(crate::Error::from(Error::MissingJsonField(f.to_string())));
+        let f = obj.remove(field);
+        if f.is_none() {
+            return Err(crate::Error::from(Error::MissingJsonField(
+                field.to_string(),
+            )));
         }
-        let field = field.unwrap();
+        let f = f.unwrap();
 
-        let obj: T = serde_json::from_value(field.clone())?;
+        let obj: T = serde_json::from_value(f)?;
 
         Ok(obj)
     }
