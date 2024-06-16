@@ -5,12 +5,14 @@ pub mod peer_manager;
 pub mod shared_buffers;
 use serde::{Deserialize, Serialize};
 
-use std::{io, net::SocketAddr};
+use std::io;
 use thiserror::Error;
 
 use crate::{security::MeetingToken, Uid};
-//Application-Layer Protocol Negotiation (ALPN). Use the HTTP/3 over QUIC v1
+
+//Application-Layer Protocol Negotiation (ALPN). Use the tag used for HTTP/3 over QUIC v1
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConnectionInfo {
     pub endpoint_id: Uid,
@@ -22,7 +24,6 @@ pub struct ConnectionInfo {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AnnounceHeader {
-    socket_adress: SocketAddr,
     endpoint_id: Uid,
     certificate_hash: [u8; 32],
     signature: Vec<u8>,
@@ -30,7 +31,6 @@ pub struct AnnounceHeader {
 impl AnnounceHeader {
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.socket_adress.to_string().as_bytes());
         hasher.update(&self.endpoint_id);
         hasher.update(&self.certificate_hash);
         *hasher.finalize().as_bytes()

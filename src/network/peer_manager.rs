@@ -46,42 +46,50 @@ pub const MAX_ANNOUNCE_TOKENS: usize = 512;
 
 const DERIVE_STRING: &str = "P";
 
+pub struct BeaconInfo {
+    pub cert_hash: [u8; 32],
+    pub header: AnnounceHeader,
+    pub retry: u8,
+}
+
+pub struct MulticastInfo {
+    sender: mpsc::Sender<MulticastMessage>,
+    probe_value: [u8; 32],
+    nonce: [u8; 32],
+    header: AnnounceHeader,
+}
+
 pub struct PeerManager {
     app_name: String,
     endpoint: DiscretEndpoint,
-    multicast_discovery: mpsc::Sender<MulticastMessage>,
+
     private_room_id: Uid,
-    pub verifying_key: Vec<u8>,
+    verifying_key: Vec<u8>,
+    meeting_secret: MeetingSecret,
 
-    pub meeting_secret: MeetingSecret,
+    multicast: Option<MulticastInfo>,
 
-    pub allowed_peers: Vec<AllowedPeer>,
-
+    allowed_peers: Vec<AllowedPeer>,
     owned_invites: Vec<OwnedInvite>,
     invites: Vec<Invite>,
 
-    pub allowed_token: HashMap<MeetingToken, Vec<TokenType>>,
-
+    allowed_token: HashMap<MeetingToken, Vec<TokenType>>,
     connection_progress: HashMap<[u8; 32], bool>,
     connected: HashMap<[u8; 32], (Connection, Uid, MeetingToken)>,
     connected_tokens: HashMap<MeetingToken, HashSet<[u8; 32]>>,
     local_circuit: HashSet<[u8; 32]>,
+    beacons: HashMap<SocketAddr, BeaconInfo>,
+    connected_beacons: HashMap<SocketAddr, mpsc::Sender<Announce>>,
 
     db: GraphDatabaseService,
     logs: LogService,
     verify_service: SignatureVerificationService,
-
-    probe_value: [u8; 32],
-    ipv4_header: Option<AnnounceHeader>,
-    ipv6_header: Option<AnnounceHeader>,
-
-    multicast_nonce: [u8; 32],
 }
 impl PeerManager {
     pub async fn new(
         app_name: String,
         endpoint: DiscretEndpoint,
-        multicast_discovery: mpsc::Sender<MulticastMessage>,
+        multicast_discovery: Option<mpsc::Sender<MulticastMessage>>,
         db: GraphDatabaseService,
         logs: LogService,
         verify_service: SignatureVerificationService,
@@ -112,18 +120,34 @@ impl PeerManager {
             entry.push(TokenType::Invite(invite.clone()));
         }
 
-        let probe_value = random32();
-        let _ = multicast_discovery
-            .send(MulticastMessage::ProbeLocalIp(probe_value))
-            .await;
-        let multicast_nonce = random32();
+        let multicast = if let Some(multicast_discovery) = multicast_discovery {
+            let probe_value = random32();
+            let nonce = random32();
+            let mut header = AnnounceHeader {
+                endpoint_id: endpoint.id,
+                certificate_hash: endpoint.ipv4_cert_hash,
+                signature: Vec::new(),
+            };
+            let (_verifying, signature) = db.sign(header.hash().to_vec()).await;
+            header.signature = signature;
+
+            Some(MulticastInfo {
+                sender: multicast_discovery,
+                probe_value,
+                nonce,
+                header,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             app_name,
             endpoint,
-            multicast_discovery,
             private_room_id,
             verifying_key,
             meeting_secret,
+            multicast,
             allowed_peers,
             owned_invites,
             invites,
@@ -132,14 +156,59 @@ impl PeerManager {
             connected_tokens: HashMap::new(),
             connection_progress: HashMap::new(),
             local_circuit: HashSet::new(),
+            beacons: HashMap::new(),
+            connected_beacons: HashMap::new(),
             db,
             logs,
             verify_service,
-            probe_value,
-            ipv4_header: None,
-            ipv6_header: None,
-            multicast_nonce,
         })
+    }
+
+    pub async fn add_beacon(
+        &mut self,
+        hostname: &str,
+        cert_hash: &str,
+    ) -> Result<(), crate::Error> {
+        for address in tokio::net::lookup_host(&hostname).await? {
+            let local_cert_has = if address.is_ipv4() {
+                self.endpoint.ipv4_cert_hash
+            } else {
+                self.endpoint.ipv6_cert_hash
+            };
+
+            let mut header = AnnounceHeader {
+                endpoint_id: self.endpoint.id,
+                certificate_hash: local_cert_has,
+                signature: Vec::new(),
+            };
+            let (_verifying, signature) = self.db.sign(header.hash().to_vec()).await;
+            header.signature = signature;
+
+            let deserialized = base64_decode(cert_hash.as_bytes())?;
+
+            let cert_hash: [u8; 32] = deserialized
+                .try_into()
+                .map_err(|_| crate::Error::InvalidCertificateHash(cert_hash.to_string()))?;
+
+            self.beacons.insert(
+                address,
+                BeaconInfo {
+                    cert_hash: cert_hash.clone(),
+                    header: header,
+                    retry: 0,
+                },
+            );
+
+            let _ = self
+                .endpoint
+                .sender
+                .send(EndpointMessage::InitiateBeaconConnection(
+                    address,
+                    cert_hash.clone(),
+                ))
+                .await;
+        }
+        Ok(())
     }
 
     pub async fn send_annouces(&self) -> Result<(), crate::Error> {
@@ -151,87 +220,62 @@ impl PeerManager {
                 MAX_ANNOUNCE_TOKENS
             )));
         }
+        let mut tokens: Vec<MeetingToken> = Vec::new();
+        for tok in &self.allowed_peers {
+            tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
+        }
 
-        if let Some(ipv4_header) = &self.ipv4_header {
-            let mut tokens: Vec<MeetingToken> = Vec::new();
-            for tok in &self.allowed_peers {
-                tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
-            }
+        for inv in &self.invites {
+            let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
+            tokens.push(meeting_token);
+        }
 
-            for inv in &self.invites {
-                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
-                println!(
-                    "{}: Anouncing invite {}",
-                    ipv4_header.socket_adress,
-                    base64_encode(&meeting_token)
-                );
-                tokens.push(meeting_token);
-            }
+        for owned in &self.owned_invites {
+            let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
 
-            for owned in &self.owned_invites {
-                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
+            tokens.push(meeting_token);
+        }
 
-                println!(
-                    "{}: Anouncing owned invite {}",
-                    ipv4_header.socket_adress,
-                    base64_encode(&meeting_token)
-                );
-                tokens.push(meeting_token);
-            }
-
+        if let Some(multicast) = &self.multicast {
             let ipv4_announce = Announce {
-                header: ipv4_header.clone(),
-                tokens,
+                header: multicast.header.clone(),
+                tokens: tokens.clone(),
             };
-
-            self.multicast_discovery
-                .send(MulticastMessage::Annouce(ipv4_announce))
+            multicast
+                .sender
+                .send(MulticastMessage::Annouce(
+                    ipv4_announce,
+                    self.endpoint.ipv4_port,
+                ))
                 .await
                 .map_err(|_| crate::Error::ChannelError("MulticastMessage send".to_string()))?;
+        }
+
+        for (address, sender) in &self.connected_beacons {
+            if let Some(info) = self.beacons.get(address) {
+                let announce = Announce {
+                    header: info.header.clone(),
+                    tokens: tokens.clone(),
+                };
+                let _ = sender.send(announce).await;
+            }
         }
 
         Ok(())
     }
 
-    pub async fn validate_probe(
-        &mut self,
-        probe_value: [u8; 32],
-        address: SocketAddr,
-    ) -> Result<bool, Error> {
-        if self.ipv4_header.is_some() {
-            return Ok(false);
-        }
-        if probe_value.eq(&self.probe_value) {
-            let ipv4_adress = SocketAddr::new(address.ip(), self.endpoint.ipv4_port);
-            self.logs.info(format!("Local Adress {}", &address.ip()));
-            let mut ipv4_header = AnnounceHeader {
-                socket_adress: ipv4_adress,
-                endpoint_id: self.endpoint.id,
-                certificate_hash: self.endpoint.ipv4_cert_hash,
-                signature: Vec::new(),
-            };
-
-            let (_verifying, signature) = self.db.sign(ipv4_header.hash().to_vec()).await;
-            ipv4_header.signature = signature;
-            self.ipv4_header = Some(ipv4_header);
-
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    pub async fn process_announce(
+    pub async fn multicast_announce(
         &mut self,
         a: Announce,
         address: SocketAddr,
+        port: u16,
         local: bool,
     ) -> Result<(), crate::Error> {
-        if self.ipv4_header.is_none() {
+        if self.multicast.is_none() {
             return Ok(());
         }
-        if !a.header.socket_adress.ip().eq(&address.ip()) {
-            return Ok(());
-        }
+        let multicast = self.multicast.as_ref().unwrap();
+
         if a.header.endpoint_id.eq(&self.endpoint.id) {
             return Ok(());
         }
@@ -244,8 +288,6 @@ impl PeerManager {
         if *connection_progress {
             return Ok(());
         }
-
-        let header = self.ipv4_header.as_ref().unwrap();
 
         for candidate in &a.tokens {
             if let Some(verifying_keys) = self.allowed_token.get(candidate) {
@@ -269,31 +311,24 @@ impl PeerManager {
                     if validated {
                         *connection_progress = true;
 
-                        let target: SocketAddr = a.header.socket_adress;
-
-                        let _ = self
-                            .multicast_discovery
+                        let _ = multicast
+                            .sender
                             .send(MulticastMessage::InitiateConnection(
-                                header.clone(),
+                                multicast.header.clone(),
                                 *candidate,
+                                self.endpoint.ipv4_port,
                             ))
                             .await;
-
-                        println!(
-                            "{} -> {} for token {}",
-                            self.ipv4_header.as_ref().unwrap().socket_adress,
-                            target,
-                            base64_encode(candidate)
-                        );
 
                         if local {
                             self.local_circuit.insert(circuit_id);
                         }
+                        let address = SocketAddr::new(address.ip(), port);
                         let _ = self
                             .endpoint
                             .sender
                             .send(EndpointMessage::InitiateConnection(
-                                target,
+                                address,
                                 a.header.certificate_hash,
                                 a.header.endpoint_id,
                                 *candidate,
@@ -307,19 +342,18 @@ impl PeerManager {
         Ok(())
     }
 
-    pub async fn process_initiate_connection(
+    pub async fn multicast_initiate_connection(
         &mut self,
         header: AnnounceHeader,
         token: MeetingToken,
         address: SocketAddr,
+        port: u16,
         local: bool,
     ) -> Result<(), crate::Error> {
-        if self.ipv4_header.is_none() {
+        if self.multicast.is_none() {
             return Ok(());
         }
-        if !header.socket_adress.ip().eq(&address.ip()) {
-            return Ok(());
-        }
+
         if header.endpoint_id == self.endpoint.id {
             return Ok(());
         }
@@ -353,21 +387,16 @@ impl PeerManager {
 
                     if validated {
                         *connection_progress = true;
-                        let target: SocketAddr = header.socket_adress;
-                        println!(
-                            "{} -> {} for token {}",
-                            self.ipv4_header.as_ref().unwrap().socket_adress,
-                            target,
-                            base64_encode(&token)
-                        );
+
                         if local {
                             self.local_circuit.insert(circuit_id);
                         }
+                        let address = SocketAddr::new(address.ip(), port);
                         let _ = self
                             .endpoint
                             .sender
                             .send(EndpointMessage::InitiateConnection(
-                                target,
+                                address,
                                 header.certificate_hash,
                                 header.endpoint_id,
                                 token,
@@ -384,7 +413,7 @@ impl PeerManager {
     pub fn is_local_circuit(&self, circuit_id: &[u8; 32]) -> bool {
         self.local_circuit.contains(circuit_id)
     }
-    //peer to peer connectoin tends to create two connections
+    //peer to peer connection tends to create two connections
     //we arbitrarily remove the on the highest conn_id (the newest conn, Uids starts with a timestamps)
     pub fn add_connection(
         &mut self,
@@ -466,29 +495,20 @@ impl PeerManager {
         *hash.as_bytes()
     }
 
-    pub async fn validate_hardware(
-        &self,
-        circuit_id: &[u8; 32],
-        hardware: HardwareFingerprint,
-        auto_allow_local: bool,
-    ) -> bool {
-        let s = self
-            .validate_hardware_int(circuit_id, hardware, auto_allow_local)
-            .await;
-
-        match s {
-            Ok(valid) => valid,
-            Err(e) => {
-                self.logs.error(
-                    "PeerManager.validate_hardware".to_string(),
-                    crate::Error::from(e),
-                );
-                false
-            }
-        }
+    pub async fn init_hardware(&self, hardware: HardwareFingerprint) -> Result<(), crate::Error> {
+        let allowed_status = "allowed";
+        AllowedHardware::put(
+            hardware.id,
+            self.private_room_id,
+            &hardware.name,
+            allowed_status,
+            &self.db,
+        )
+        .await?;
+        Ok(())
     }
 
-    pub async fn validate_hardware_int(
+    pub async fn validate_hardware(
         &self,
         circuit_id: &[u8; 32],
         hardware: HardwareFingerprint,
@@ -742,6 +762,138 @@ impl PeerManager {
         }
         if send_announce {
             self.send_annouces().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn beacon_connection_failed(&mut self, address: SocketAddr, error: String) {
+        if let Some(beacon) = self.beacons.get_mut(&address) {
+            beacon.retry += 1;
+            if beacon.retry <= 3 {
+                let _ = self
+                    .endpoint
+                    .sender
+                    .send(EndpointMessage::InitiateBeaconConnection(
+                        address,
+                        beacon.cert_hash.clone(),
+                    ))
+                    .await;
+            } else {
+                self.logs.error(
+                    "beacon_connection_failed".to_string(),
+                    crate::Error::BeaconConnectionFailed(address.to_string(), error),
+                );
+            }
+        }
+    }
+    pub async fn beacon_connected(
+        &mut self,
+        address: SocketAddr,
+        sender: mpsc::Sender<Announce>,
+    ) -> Result<(), crate::Error> {
+        if let Some(info) = self.beacons.get(&address) {
+            let mut tokens: Vec<MeetingToken> = Vec::new();
+            for tok in &self.allowed_peers {
+                tokens.push(MeetingSecret::decode_token(&tok.meeting_token)?);
+            }
+
+            for inv in &self.invites {
+                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
+                tokens.push(meeting_token);
+            }
+
+            for owned in &self.owned_invites {
+                let meeting_token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
+                tokens.push(meeting_token);
+            }
+
+            let announce = Announce {
+                header: info.header.clone(),
+                tokens: tokens.clone(),
+            };
+            let _ = sender.send(announce).await;
+            self.connected_beacons.insert(address, sender);
+        }
+        Ok(())
+    }
+
+    pub async fn beacon_disconnected(&mut self, address: SocketAddr) {
+        if let Some(beacon) = self.beacons.get_mut(&address) {
+            beacon.retry += 1;
+            if beacon.retry <= 3 {
+                let _ = self
+                    .endpoint
+                    .sender
+                    .send(EndpointMessage::InitiateBeaconConnection(
+                        address,
+                        beacon.cert_hash.clone(),
+                    ))
+                    .await;
+            } else {
+                self.logs
+                    .info(format!("Beacon disconnected: {}", address.to_string()));
+            }
+        }
+        self.connected_beacons.remove(&address);
+    }
+    pub async fn beacon_initiate_connection(
+        &mut self,
+        address: SocketAddr,
+        header: AnnounceHeader,
+        token: MeetingToken,
+    ) -> Result<(), crate::Error> {
+        if self.beacons.is_empty() {
+            return Ok(());
+        }
+
+        if header.endpoint_id == self.endpoint.id {
+            return Ok(());
+        }
+
+        let circuit_id = Self::circuit_id(header.endpoint_id, self.endpoint.id);
+        let connection_progress = self.connection_progress.entry(circuit_id).or_default();
+        if *connection_progress {
+            return Ok(());
+        }
+        if self.connected.contains_key(&circuit_id) {
+            return Ok(());
+        }
+        if let Some(verifying_keys) = self.allowed_token.get(&token) {
+            if !*connection_progress {
+                for token_type in verifying_keys {
+                    let hash_to_verify = header.hash();
+                    let signature = header.signature.clone();
+                    let (validated, identifier) = match token_type {
+                        TokenType::AllowedPeer(peer) => {
+                            let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
+                            let validated = self
+                                .verify_service
+                                .verify_hash(signature, hash_to_verify, verifying_key.clone())
+                                .await;
+
+                            (validated, verifying_key)
+                        }
+                        TokenType::OwnedInvite(owned) => (true, owned.id.to_vec()),
+                        TokenType::Invite(inv) => (true, inv.invite_id.to_vec()),
+                    };
+
+                    if validated {
+                        *connection_progress = true;
+
+                        let _ = self
+                            .endpoint
+                            .sender
+                            .send(EndpointMessage::InitiateConnection(
+                                address,
+                                header.certificate_hash,
+                                header.endpoint_id,
+                                token,
+                                identifier,
+                            ))
+                            .await;
+                    }
+                }
+            }
         }
         Ok(())
     }

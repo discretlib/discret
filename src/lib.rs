@@ -50,7 +50,7 @@ mod synchronisation;
 
 use database::graph_database::GraphDatabaseService;
 use event_service::EventService;
-use log_service::LogService;
+
 use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
 use security::{derive_key, MeetingSecret};
 
@@ -64,7 +64,7 @@ use tokio::{runtime::Runtime, sync::broadcast};
 type Result<T> = std::result::Result<T, Error>;
 
 pub use crate::{
-    configuration::Configuration,
+    configuration::{BeaconConfig, Configuration},
     database::{
         query_language::parameter::{Parameters, ParametersAdd},
         room::Room,
@@ -72,9 +72,12 @@ pub use crate::{
         DataModification, ResultParser,
     },
     event_service::Event,
+    log_service::LogService,
     log_service::{Log, LogMessage},
+    network::beacon::Beacon,
     security::{
-        base64_decode, base64_encode, default_uid, derive_pass_phrase, uid_decode, uid_encode, Uid,
+        base64_decode, base64_encode, default_uid, derive_pass_phrase, generate_x509_certificate,
+        hash, uid_decode, uid_encode, Uid,
     },
 };
 
@@ -149,6 +152,12 @@ pub enum Error {
 
     #[error("{0} Nodes where rejected during synchronisation of room: {1} at date: {2}")]
     NodeRejected(usize, String, i64),
+
+    #[error("invalid certificate hash: '{0}'")]
+    InvalidCertificateHash(String),
+
+    #[error("Connection to Beacon {0} failed, reason: {1}")]
+    BeaconConnectionFailed(String, String),
 
     #[error("{0}")]
     InvalidConnection(String),

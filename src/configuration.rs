@@ -193,8 +193,6 @@ impl Default for Configuration {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BeaconConfig {
-    address: String,
-    ipv4_port: u16,
-    ipv6_port: u16,
-    cert_hash: String,
+    pub hostname: String,
+    pub cert_hash: String,
 }

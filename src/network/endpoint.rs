@@ -24,7 +24,10 @@ use crate::{
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
 };
 
-use super::{shared_buffers::SharedBuffers, ConnectionInfo, Error, ALPN_QUIC_HTTP};
+use super::{
+    beacon::BeaconMessage, shared_buffers::SharedBuffers, Announce, ConnectionInfo, Error,
+    ALPN_QUIC_HTTP,
+};
 
 static MAX_CONNECTION_RETRY: usize = 4;
 
@@ -39,6 +42,7 @@ static EVENT_STREAM: u8 = 3;
 
 pub enum EndpointMessage {
     InitiateConnection(SocketAddr, [u8; 32], Uid, MeetingToken, Vec<u8>),
+    InitiateBeaconConnection(SocketAddr, [u8; 32]),
 }
 
 pub struct DiscretEndpoint {
@@ -115,6 +119,18 @@ impl DiscretEndpoint {
                             buffer_size,
                         );
                     }
+                    EndpointMessage::InitiateBeaconConnection(address, cert_hash) => {
+                        Self::initiate_beacon_connection(
+                            address,
+                            cert_hash,
+                            cert_verifier.clone(),
+                            &peer_s,
+                            &logs,
+                            &ipv4,
+                            &ipv6,
+                        )
+                        .await;
+                    }
                 }
             }
         });
@@ -186,7 +202,6 @@ impl DiscretEndpoint {
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         max_buffer_size: usize,
     ) {
-        let log = log.clone();
         let endpoint = if address.is_ipv4() {
             ipv4_endpoint.clone()
         } else {
@@ -202,12 +217,19 @@ impl DiscretEndpoint {
             }
         };
         let peer_service = peer_service.clone();
-
+        let log = log.clone();
         let input_buffers = input_buffers.clone();
         let output_buffers = output_buffers.clone();
         let identifier = identifier.clone();
         let name = random_domain_name();
         cert_verifier.add_valid_certificate(name.clone(), cert_hash);
+
+        log.info(format!(
+            "Connecting: {} -> {}",
+            &endpoint.local_addr().unwrap(),
+            address
+        ));
+
         tokio::spawn(async move {
             for i in 0..MAX_CONNECTION_RETRY {
                 let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
@@ -242,7 +264,7 @@ impl DiscretEndpoint {
                                     );
                                     let _ = &peer_service
                                         .sender
-                                        .send(PeerConnectionMessage::ConnectionFailed(
+                                        .send(PeerConnectionMessage::PeerConnectionFailed(
                                             endpoint_id,
                                             remote_id,
                                         ))
@@ -263,7 +285,7 @@ impl DiscretEndpoint {
                                     );
                                     let _ = &peer_service
                                         .sender
-                                        .send(PeerConnectionMessage::ConnectionFailed(
+                                        .send(PeerConnectionMessage::PeerConnectionFailed(
                                             endpoint_id,
                                             remote_id,
                                         ))
@@ -281,7 +303,7 @@ impl DiscretEndpoint {
                         }
                         let _ = &peer_service
                             .sender
-                            .send(PeerConnectionMessage::ConnectionFailed(
+                            .send(PeerConnectionMessage::PeerConnectionFailed(
                                 endpoint_id,
                                 remote_id,
                             ))
@@ -475,9 +497,7 @@ impl DiscretEndpoint {
                     break;
                 }
 
-                let sent = answer_send
-                    .write_u32(buffer.len().try_into().unwrap())
-                    .await;
+                let sent = answer_send.write_u32(buffer.len() as u32).await;
                 if sent.is_err() {
                     break;
                 }
@@ -547,7 +567,7 @@ impl DiscretEndpoint {
                     break;
                 }
 
-                let sent = query_send.write_u32(buffer.len().try_into().unwrap()).await;
+                let sent = query_send.write_u32(buffer.len() as u32).await;
                 if sent.is_err() {
                     break;
                 }
@@ -641,6 +661,173 @@ impl DiscretEndpoint {
                 in_event_rcv,
             ))
             .await;
+    }
+
+    pub async fn initiate_beacon_connection(
+        address: SocketAddr,
+        cert_hash: [u8; 32],
+        cert_verifier: Arc<ServerCertVerifier>,
+        peer_service: &PeerConnectionService,
+        log: &LogService,
+        ipv4_endpoint: &Endpoint,
+        ipv6_endpoint: &Option<Endpoint>,
+    ) {
+        let endpoint = if address.is_ipv4() {
+            ipv4_endpoint.clone()
+        } else {
+            match ipv6_endpoint {
+                Some(endpoint) => endpoint.clone(),
+                None => {
+                    log.error(
+                        "IPV6 not supported".to_string(),
+                        crate::Error::from(Error::IPV6NotSuported()),
+                    );
+                    return;
+                }
+            }
+        };
+
+        let peer_service = peer_service.clone();
+        let name = random_domain_name();
+        cert_verifier.add_valid_certificate(name.clone(), cert_hash);
+
+        log.info(format!(
+            "Connecting to beacon: {} -> {}",
+            &endpoint.local_addr().unwrap(),
+            address
+        ));
+
+        tokio::spawn(async move {
+            let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
+                endpoint.connect(address, &name);
+            match conn_result {
+                Ok(connecting) => match connecting.await {
+                    Ok(conn) => {
+                        if let Err(e) = Self::start_beacon_client(conn, &peer_service).await {
+                            let _ = &peer_service
+                                .sender
+                                .send(PeerConnectionMessage::BeaconConnectionFailed(
+                                    address,
+                                    e.to_string(),
+                                ))
+                                .await;
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = &peer_service
+                            .sender
+                            .send(PeerConnectionMessage::BeaconConnectionFailed(
+                                address,
+                                e.to_string(),
+                            ))
+                            .await;
+                    }
+                },
+                Err(e) => {
+                    let _ = &peer_service
+                        .sender
+                        .send(PeerConnectionMessage::BeaconConnectionFailed(
+                            address,
+                            e.to_string(),
+                        ))
+                        .await;
+                }
+            }
+        });
+    }
+
+    pub async fn start_beacon_client(
+        conn: Connection,
+        peer_service: &PeerConnectionService,
+    ) -> Result<(), Error> {
+        let (mut beacon_send_stream, mut beacon_recv_stream) = conn.open_bi().await?;
+        beacon_send_stream.write_u8(ANSWER_STREAM).await?;
+
+        let (beacon_send, mut beacon_recv) = mpsc::channel::<Announce>(1);
+
+        let _ = &peer_service
+            .sender
+            .send(PeerConnectionMessage::BeaconConnected(
+                conn.remote_address(),
+                beacon_send,
+            ))
+            .await;
+        let peer_s = peer_service.clone();
+        let con = conn.clone();
+        tokio::spawn(async move {
+            while let Some(announce) = beacon_recv.recv().await {
+                let bin = bincode::serialize(&announce);
+                if let Err(_) = bin {
+                    break;
+                }
+                let bin = bin.unwrap();
+                let sent = beacon_send_stream.write_u32(bin.len() as u32).await;
+                if sent.is_err() {
+                    break;
+                }
+                let sent = beacon_send_stream.write_all(&bin).await;
+                if sent.is_err() {
+                    break;
+                }
+            }
+            con.close(VarInt::from(1 as u8), "".as_bytes());
+            let _ = &peer_s
+                .sender
+                .send(PeerConnectionMessage::BeaconDisconnected(
+                    con.remote_address(),
+                ))
+                .await;
+        });
+
+        let peer_s = peer_service.clone();
+        let con = conn.clone();
+        tokio::spawn(async move {
+            let mut buffer: Vec<u8> = vec![0; 512];
+            loop {
+                let len = beacon_recv_stream.read_u32().await;
+                if len.is_err() {
+                    break;
+                }
+                let len: usize = len.unwrap().try_into().unwrap();
+                if len > buffer.len() {
+                    println!("beacon response too large");
+                    break;
+                }
+                let answer_bytes = beacon_recv_stream.read_exact(&mut buffer[0..len]).await;
+                if answer_bytes.is_err() {
+                    break;
+                }
+
+                let msg: Result<BeaconMessage, Box<bincode::ErrorKind>> =
+                    bincode::deserialize(&buffer[0..len]);
+                if msg.is_err() {
+                    break;
+                }
+
+                let msg = msg.unwrap();
+                match msg {
+                    BeaconMessage::InitiateConnection(header, adress, token) => {
+                        let _ = &peer_s
+                            .sender
+                            .send(PeerConnectionMessage::BeaconInitiateConnection(
+                                adress, header, token,
+                            ))
+                            .await;
+                    }
+                }
+            }
+
+            con.close(VarInt::from(1 as u8), "".as_bytes());
+            let _ = &peer_s
+                .sender
+                .send(PeerConnectionMessage::BeaconDisconnected(
+                    con.remote_address(),
+                ))
+                .await;
+        });
+
+        Ok(())
     }
 }
 

@@ -16,9 +16,9 @@ use crate::{
         endpoint::DiscretEndpoint,
         multicast::{self, MulticastMessage},
         peer_manager::{self, PeerManager, TokenType},
-        ConnectionInfo,
+        Announce, AnnounceHeader, ConnectionInfo,
     },
-    security::{HardwareFingerprint, MeetingSecret, Uid},
+    security::{HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -44,7 +44,7 @@ pub enum PeerConnectionMessage {
         mpsc::Sender<RemoteEvent>,
         mpsc::Receiver<RemoteEvent>,
     ),
-    ConnectionFailed(Uid, Uid),
+    PeerConnectionFailed(Uid, Uid),
     PeerConnected(Vec<u8>, Uid),
     PeerDisconnected(Vec<u8>, [u8; 32], Uid),
     ValidateHardware([u8; 32], HardwareFingerprint, oneshot::Sender<Result<bool>>),
@@ -54,6 +54,10 @@ pub enum PeerConnectionMessage {
     MulticastMessage(MulticastMessage, SocketAddr),
     CreateInvite(Option<DefaultRoom>, oneshot::Sender<Result<Vec<u8>>>),
     AcceptInvite(Vec<u8>),
+    BeaconConnectionFailed(SocketAddr, String),
+    BeaconConnected(SocketAddr, mpsc::Sender<Announce>),
+    BeaconDisconnected(SocketAddr),
+    BeaconInitiateConnection(SocketAddr, AnnounceHeader, MeetingToken),
 }
 
 static PEER_CHANNEL_SIZE: usize = 32;
@@ -96,15 +100,21 @@ impl PeerConnectionService {
         )
         .await?;
 
-        let multicast_adress: SocketAddr = configuration.multicast_ipv4_group.parse()?; // SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
-        let multicast_ipv4_interface: Ipv4Addr = configuration.multicast_ipv4_interface.parse()?;
-        let multicast_discovery = multicast::start_multicast_discovery(
-            multicast_adress,
-            multicast_ipv4_interface,
-            peer_service.clone(),
-            logs.clone(),
-        )
-        .await?;
+        let multicast_discovery = if configuration.enable_multicast {
+            let multicast_adress: SocketAddr = configuration.multicast_ipv4_group.parse()?; // SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
+            let multicast_ipv4_interface: Ipv4Addr =
+                configuration.multicast_ipv4_interface.parse()?;
+            let multicast_discovery = multicast::start_multicast_discovery(
+                multicast_adress,
+                multicast_ipv4_interface,
+                peer_service.clone(),
+                logs.clone(),
+            )
+            .await?;
+            Some(multicast_discovery)
+        } else {
+            None
+        };
 
         let mut peer_manager = PeerManager::new(
             app_name,
@@ -118,6 +128,31 @@ impl PeerConnectionService {
             meeting_secret,
         )
         .await?;
+        let fingerprint = HardwareFingerprint::new()?;
+        peer_manager.init_hardware(fingerprint).await?;
+
+        if configuration.enable_beacons {
+            for beacon in &configuration.beacons {
+                peer_manager
+                    .add_beacon(&beacon.hostname, &beacon.cert_hash)
+                    .await?;
+            }
+        }
+
+        let service = peer_service.clone();
+        let frequency = configuration.announce_frequency_in_ms;
+
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_millis(frequency));
+
+            loop {
+                interval.tick().await;
+                let _ = service
+                    .sender
+                    .send(PeerConnectionMessage::SendAnnounce())
+                    .await;
+            }
+        });
 
         tokio::spawn(async move {
             let mut event_receiver = events.subcribe().await;
@@ -330,39 +365,19 @@ impl PeerConnectionService {
                 }
             }
             PeerConnectionMessage::MulticastMessage(message, address) => match message {
-                MulticastMessage::ProbeLocalIp(probe_value) => {
-                    let probed = peer_manager
-                        .validate_probe(probe_value, address)
-                        .await
-                        .unwrap();
-                    //ip have been retrieved and headers have been initialised, we can start sending anounce
-                    if probed {
-                        let service = peer_service.clone();
-                        let frequency = configuration.announce_frequency_in_ms;
-                        tokio::spawn(async move {
-                            let mut interval = time::interval(Duration::from_millis(frequency));
-
-                            loop {
-                                interval.tick().await;
-                                let _ = service
-                                    .sender
-                                    .send(PeerConnectionMessage::SendAnnounce())
-                                    .await;
-                            }
-                        });
-                    }
-                }
-                MulticastMessage::Annouce(a) => {
-                    peer_manager.process_announce(a, address, true).await?
-                }
-                MulticastMessage::InitiateConnection(header, token) => {
+                MulticastMessage::Annouce(a, port) => {
                     peer_manager
-                        .process_initiate_connection(header, token, address, true)
+                        .multicast_announce(a, address, port, true)
+                        .await?
+                }
+                MulticastMessage::InitiateConnection(header, token, port) => {
+                    peer_manager
+                        .multicast_initiate_connection(header, token, address, port, true)
                         .await?
                 }
             },
 
-            PeerConnectionMessage::ConnectionFailed(endpoint_id, remote_id) => {
+            PeerConnectionMessage::PeerConnectionFailed(endpoint_id, remote_id) => {
                 peer_manager.clean_progress(endpoint_id, remote_id);
             }
             PeerConnectionMessage::CreateInvite(default_room, reply) => {
@@ -374,13 +389,27 @@ impl PeerConnectionService {
             }
             PeerConnectionMessage::ValidateHardware(circuit, fingerprint, reply) => {
                 let valid = peer_manager
-                    .validate_hardware_int(
+                    .validate_hardware(
                         &circuit,
                         fingerprint,
                         configuration.auto_accept_local_device,
                     )
                     .await;
                 let _ = reply.send(valid);
+            }
+            PeerConnectionMessage::BeaconConnectionFailed(address, error) => {
+                peer_manager.beacon_connection_failed(address, error).await;
+            }
+            PeerConnectionMessage::BeaconConnected(address, sender) => {
+                peer_manager.beacon_connected(address, sender).await?;
+            }
+            PeerConnectionMessage::BeaconDisconnected(address) => {
+                peer_manager.beacon_disconnected(address).await;
+            }
+            PeerConnectionMessage::BeaconInitiateConnection(address, header, token) => {
+                peer_manager
+                    .beacon_initiate_connection(address, header, token)
+                    .await?;
             }
         }
         Ok(())

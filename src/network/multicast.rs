@@ -19,9 +19,8 @@ const MULTICAST_MTU: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 pub enum MulticastMessage {
-    ProbeLocalIp([u8; 32]),
-    Annouce(Announce),
-    InitiateConnection(AnnounceHeader, MeetingToken),
+    Annouce(Announce, u16),
+    InitiateConnection(AnnounceHeader, MeetingToken, u16),
 }
 
 //#[allow(clippy::unnecessary_unwrap)]

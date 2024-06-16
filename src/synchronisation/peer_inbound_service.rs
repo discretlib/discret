@@ -404,6 +404,7 @@ impl LocalPeerService {
                     .await;
 
                 let validated = receive.await??;
+
                 if validated {
                     conn_ready.store(true, Ordering::Relaxed);
 

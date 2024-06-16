@@ -17,14 +17,13 @@ use crate::{log_service::LogService, security::MeetingToken};
 use super::{shared_buffers::SharedBuffers, Announce, AnnounceHeader, ALPN_QUIC_HTTP};
 
 #[derive(Serialize, Deserialize)]
-enum BeaconMessage {
-    InitiateConnection(AnnounceHeader, MeetingToken),
-    SocketAdress(SocketAddr),
+pub enum BeaconMessage {
+    InitiateConnection(AnnounceHeader, SocketAddr, MeetingToken),
 }
 
-struct Beacon {}
+pub struct Beacon {}
 impl Beacon {
-    fn new(
+    pub fn start(
         ipv4_port: u16,
         ipv6_port: u16,
         der: Vec<u8>,
@@ -110,16 +109,10 @@ impl Beacon {
         meeting_point: Arc<Mutex<MeetingPoint>>,
     ) -> Result<(), super::Error> {
         let new_conn = incoming.await?;
-
-        let (mut send, mut recv) = new_conn.accept_bi().await?;
+        let (send, mut recv) = new_conn.accept_bi().await?;
 
         recv.read_u8().await?;
-        let msg = BeaconMessage::SocketAdress(new_conn.remote_address());
-        let buffer = bincode::serialize(&msg)?;
-        send.write_u32(buffer.len() as u32).await?;
-        send.write_all(&buffer).await?;
 
-        drop(buffer);
         let ibuff = input_buffers.clone();
         tokio::spawn(async move {
             let id = new_conn.stable_id();
@@ -213,14 +206,15 @@ impl MeetingPoint {
         for token in tokens {
             let entry = self.meeting.entry(**token).or_default();
             let mut insert = true;
-            for conn in entry.iter() {
-                let mut other_peer = conn.lock().await;
+            for other_conn in entry.iter() {
+                let mut other_peer = other_conn.lock().await;
                 if other_peer.conn.stable_id() == id {
                     insert = false;
                 } else {
                     let mut this_peer = conn.lock().await;
                     let this_msg = BeaconMessage::InitiateConnection(
                         other_peer.header.clone().unwrap(),
+                        other_peer.conn.remote_address(),
                         **token,
                     );
                     self.buffer.clear();
@@ -243,6 +237,7 @@ impl MeetingPoint {
 
                     let other_msg = BeaconMessage::InitiateConnection(
                         this_peer.header.clone().unwrap(),
+                        this_peer.conn.remote_address(),
                         **token,
                     );
                     self.buffer.clear();
@@ -257,9 +252,16 @@ impl MeetingPoint {
                     {
                         other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
                     }
+
                     if other_peer.sender.write_all(&self.buffer).await.is_err() {
                         other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
                     }
+
+                    // println!(
+                    //     "Beacon connect {} <-> {}",
+                    //     this_peer.conn.remote_address(),
+                    //     other_peer.conn.remote_address()
+                    // );
                 }
             }
             if insert {
