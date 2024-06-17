@@ -2078,4 +2078,135 @@ mod tests {
         assert_eq!("John", persons[2].name);
     }
 
+
+    #[test]
+    fn query_with_null_default() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+            ns {
+                Person {
+                    name : String nullable
+                }
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutate {
+                P3: ns.Person { name:"Bob"  }
+                P1: ns.Person { }
+                P2: ns.Person { name:"Alice"}
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mut param = Parameters::new();
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                ns.Person(order_by(name ASC)) {
+                    name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+        
+        #[derive(Deserialize)]
+        struct Person{
+            pub name:Option<String>,
+        }
+
+        let mut query_result = ResultParser::new(&result).unwrap();
+        let persons: Vec<Person> = query_result.take_array("ns.Person").unwrap();
+
+        assert_eq!(3, persons.len());
+        assert_eq!(None, persons[0].name);
+        assert_eq!("Alice", persons[1].name.as_ref().unwrap());
+        assert_eq!("Bob", persons[2].name.as_ref().unwrap());
+
+        data_model
+            .update(
+                r#"
+            ns {
+                Person {
+                    name : String default "anonymous",
+                    age : Integer default 10,
+                    weight : Float default 12.0,
+                    is_nice : Boolean default true
+                }
+            }
+        "#,
+            )
+            .unwrap();
+        
+        let query_parser = QueryParser::parse(
+            r#"
+            query sample{
+                ns.Person(age >= 10, is_nice=true, weight > 2, name="anonymous") {
+                    name
+                    age
+                    weight
+                    is_nice
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+    
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+    
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+
+        #[derive(Deserialize)]
+        struct Person2{
+            pub name:String,
+            pub age : i64,
+            pub weight : f64,
+            pub is_nice : i32 
+        }
+
+        
+        let mut query_result = ResultParser::new(&result).unwrap();
+        let persons: Vec<Person2> = query_result.take_array("ns.Person").unwrap();
+
+
+
+        assert_eq!(1, persons.len());
+        assert_eq!("anonymous", persons[0].name);
+        assert_eq!(10, persons[0].age);
+        assert_eq!(12.0, persons[0].weight);
+        assert_eq!(1, persons[0].is_nice);
+
+    }
 }

@@ -676,19 +676,104 @@ fn get_where_filters(params: &EntityParams, prepared_query: &mut SingleQuery, t:
                             &filter.name, operation, &value
                         ));
                     }
-                    _ => {
-                        if filter.is_selected {
-                            q.push_str(&format!(
-                                "value->>'$.{}' {} {}",
-                                &filter.name, operation, &value
-                            ));
-                        } else {
-                            q.push_str(&format!(
-                                "_json->>'$.{}' {} {}",
-                                &filter.field.short_name, operation, &value
-                            ));
+                    _ => match &filter.field.default_value {
+                        Some(default) => {
+                            q.push_str("CASE\n");
+                            // tab(&mut q, t);
+                            // (
+                            //
+                            //     CASE ?1
+                            //         WHEN ?2 //default value
+                            //         THEN
+                            //             name = ?1 or name is null
+                            //         ELSE
+                            //             name = ?1
+                            //     END
+                            // )
+
+                            match default {
+                                ParamValue::Boolean(v) => {
+                                    tab(&mut q, t + 1);
+                                    q.push_str(&format!(
+                                        "WHEN {} {} {} THEN ",
+                                        v, operation, &value
+                                    ));
+                                }
+                                ParamValue::Integer(v) => {
+                                    tab(&mut q, t + 1);
+                                    q.push_str(&format!(
+                                        "WHEN {} {} {} THEN ",
+                                        v, operation, &value
+                                    ));
+                                }
+                                ParamValue::Float(v) => {
+                                    tab(&mut q, t + 1);
+                                    q.push_str(&format!(
+                                        "WHEN {} {} {} THEN ",
+                                        v, operation, &value
+                                    ));
+                                }
+                                ParamValue::String(v) => {
+                                    tab(&mut q, t + 1);
+                                    q.push_str(&format!(
+                                        "WHEN '{}' {} {} THEN ",
+                                        v, operation, &value
+                                    ));
+                                }
+                                ParamValue::Binary(v) => {
+                                    tab(&mut q, t + 1);
+                                    q.push_str(&format!(
+                                        "WHEN '{}' {} {} THEN ",
+                                        v, operation, &value
+                                    ));
+                                }
+                                _ => unreachable!(),
+                            }
+
+                            if filter.is_selected {
+                                q.push_str(&format!(
+                                    "value->>'$.{}' {} {} OR value->>'$.{}' is null \n",
+                                    &filter.name, operation, &value, &filter.name
+                                ));
+                            } else {
+                                q.push_str(&format!(
+                                    "_json->>'$.{}' {} {} OR _json->>'$.{}' is null \n",
+                                    &filter.field.short_name,
+                                    operation,
+                                    &value,
+                                    &filter.field.short_name,
+                                ));
+                            }
+                            tab(&mut q, t + 1);
+                            q.push_str("ELSE ");
+                            if filter.is_selected {
+                                q.push_str(&format!(
+                                    "value->>'$.{}' {} {} \n",
+                                    &filter.name, operation, &value
+                                ));
+                            } else {
+                                q.push_str(&format!(
+                                    "_json->>'$.{}' {} {} \n",
+                                    &filter.field.short_name, operation, &value
+                                ));
+                            }
+                            tab(&mut q, t);
+                            q.push_str("END");
                         }
-                    }
+                        None => {
+                            if filter.is_selected {
+                                q.push_str(&format!(
+                                    "value->>'$.{}' {} {}",
+                                    &filter.name, operation, &value
+                                ));
+                            } else {
+                                q.push_str(&format!(
+                                    "_json->>'$.{}' {} {}",
+                                    &filter.field.short_name, operation, &value
+                                ));
+                            }
+                        }
+                    },
                 }
             }
 

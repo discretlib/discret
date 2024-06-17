@@ -23,7 +23,7 @@ comma    =  { "," }
 mutation      = { SOI ~ mutation_name ~ "{" ~ entity+ ~ "}" ~ EOI }
 mutation_name = { "mutate" ~ (identifier)? }
 
-entity      = { entity_name ~ "{" ~ field+ ~ "}" }
+entity      = { entity_name ~ "{" ~ field* ~ "}" }
 entity_name = { namespace_entity ~ (":" ~ namespace_entity)? }
 
 field = { identifier ~ ":" ~ value }
