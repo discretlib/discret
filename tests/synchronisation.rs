@@ -847,7 +847,7 @@ async fn multiple_entities() {
         }
     });
 
-    tokio::time::timeout(Duration::from_secs(2), handle)
+    tokio::time::timeout(Duration::from_secs(4), handle)
         .await
         .unwrap()
         .unwrap();

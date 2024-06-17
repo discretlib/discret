@@ -323,6 +323,7 @@ impl GraphDatabaseService {
                 );
                 let _ = dbsender.send(msg).await;
             }
+            let _ = dbsender.send(DbMessage::ComputeDailyLog()).await;
         });
         (send, recv_res)
     }

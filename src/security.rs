@@ -407,11 +407,11 @@ pub const UID_SIZE: usize = 16;
 pub type Uid = [u8; UID_SIZE];
 const DEFAULT_UID: Uid = [0; UID_SIZE];
 ///
-/// generate a 16 byte uid with the time on the first 4 bytes to improve index locality
+/// generate a 16 byte uid with the time on the first 6 bytes to improve index locality
 ///
 ///
 pub fn new_uid() -> Uid {
-    const TIME_BYTES: usize = 4;
+    const TIME_BYTES: usize = 6;
     let time = now();
     let time = &time.to_be_bytes()[TIME_BYTES..];
 
