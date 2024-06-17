@@ -144,34 +144,42 @@ impl DiscretEndpoint {
 
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
-                let new_conn =
-                    Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size).await;
-                if let Err(e) = new_conn {
-                    logs.error(
-                        "ipv4 - start_accepted".to_string(),
-                        crate::Error::from(Error::from(e)),
-                    );
-                }
+                let logs = logs.clone();
+                let peer_s = peer_s.clone();
+                let i_buff = i_buff.clone();
+                let o_buff = o_buff.clone();
+                tokio::spawn(async move {
+                    let new_conn =
+                        Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
+                            .await;
+                    if let Err(e) = new_conn {
+                        logs.error(
+                            "ipv4 - start_accepted".to_string(),
+                            crate::Error::from(Error::from(e)),
+                        );
+                    }
+                });
             }
         });
 
         if let Some(endpoint) = ipv6_endpoint {
             tokio::spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
-                    let new_conn = Self::start_accepted(
-                        &peer_service,
-                        incoming,
-                        &input_buffers,
-                        &output_buffers,
-                        buffer_size,
-                    )
-                    .await;
-                    if let Err(e) = new_conn {
-                        log.error(
-                            "ipv6 - start_accepted".to_string(),
-                            crate::Error::from(Error::from(e)),
-                        );
-                    }
+                    let logs = log.clone();
+                    let peer_s = peer_service.clone();
+                    let i_buff = input_buffers.clone();
+                    let o_buff = output_buffers.clone();
+                    tokio::spawn(async move {
+                        let new_conn =
+                            Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
+                                .await;
+                        if let Err(e) = new_conn {
+                            logs.error(
+                                "ipv6 - start_accepted".to_string(),
+                                crate::Error::from(Error::from(e)),
+                            );
+                        };
+                    });
                 }
             });
         }
