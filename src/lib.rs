@@ -49,6 +49,7 @@ mod signature_verification_service;
 mod synchronisation;
 
 use database::graph_database::GraphDatabaseService;
+use database::mutation_query::MutationQuery;
 use event_service::EventService;
 
 use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
@@ -58,7 +59,7 @@ use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::{runtime::Runtime, sync::broadcast};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -254,6 +255,22 @@ impl Discret {
         p: Option<Parameters>,
     ) -> std::result::Result<String, Error> {
         Ok(self.db.mutate(m, p).await?)
+    }
+
+    ///
+    /// Allow to send a stream of mutation. Usefull for batch insertion as you do have to wait for the mutation to finished before sending another.
+    ///
+    /// The receiver retrieve an internal representation of the mutation query to avoid the JSON result creation, wich is probably unecessary when doing batch insert.
+    /// To get the JSON, call the  MutationQuery.result() method
+    ///
+    pub fn mutation_stream(
+        &self,
+    ) -> (
+        mpsc::Sender<(String, Option<Parameters>)>,
+        mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>,
+    ) {
+        self.db.mutation_stream()
+        // Ok(self.db.mutate(m, p).await?)
     }
 
     ///

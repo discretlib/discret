@@ -9,7 +9,10 @@ use tokio::sync::{
 use crate::security::{base64_decode, base64_encode, Uid};
 
 use super::{
-    authorisation_service::{AuthorisationMessage, RoomMutationWriteQuery, RoomNodeWriteQuery},
+    authorisation_service::{
+        AuthorisationMessage, RoomMutationStreamWriteQuery, RoomMutationWriteQuery,
+        RoomNodeWriteQuery,
+    },
     daily_log::{DailyLog, DailyLogsUpdate, DailyMutations},
     deletion::DeletionQuery,
     edge::{Edge, EdgeDeletionEntry},
@@ -323,7 +326,12 @@ pub trait Writeable {
 pub enum WriteMessage {
     Deletion(DeletionQuery, Sender<Result<DeletionQuery>>),
     Mutation(MutationQuery, Sender<Result<MutationQuery>>),
+    MutationStream(MutationQuery, mpsc::Sender<Result<MutationQuery>>),
     RoomMutation(RoomMutationWriteQuery, mpsc::Sender<AuthorisationMessage>),
+    RoomMutationStream(
+        RoomMutationStreamWriteQuery,
+        mpsc::Sender<AuthorisationMessage>,
+    ),
     RoomNode(RoomNodeWriteQuery, mpsc::Sender<AuthorisationMessage>),
     Nodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
     Edges(Vec<Edge>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
@@ -444,8 +452,13 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::Deletion(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
+
                                 WriteMessage::Mutation(q, r) => {
                                     let _ = r.send(Ok(q));
+                                }
+
+                                WriteMessage::MutationStream(q, r) => {
+                                    let _ = r.blocking_send(Ok(q));
                                 }
 
                                 WriteMessage::RoomMutation(q, r) => {
@@ -453,12 +466,19 @@ impl BufferedDatabaseWriter {
                                         AuthorisationMessage::RoomMutationWrite(Ok(()), q),
                                     );
                                 }
+                                WriteMessage::RoomMutationStream(q, r) => {
+                                    let _ = r.blocking_send(
+                                        AuthorisationMessage::RoomMutationStreamWrite(Ok(()), q),
+                                    );
+                                }
+
                                 WriteMessage::RoomNode(q, r) => {
                                     let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
                                         Ok(()),
                                         q,
                                     ));
                                 }
+
                                 WriteMessage::Write(q, r) => {
                                     let _ = r.send(Ok(q));
                                 }
@@ -493,6 +513,11 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::Mutation(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
+
+                                WriteMessage::MutationStream(_, r) => {
+                                    let _ =
+                                        r.blocking_send(Err(Error::DatabaseWrite(e.to_string())));
+                                }
                                 WriteMessage::RoomMutation(q, r) => {
                                     let _ =
                                         r.blocking_send(AuthorisationMessage::RoomMutationWrite(
@@ -500,6 +525,15 @@ impl BufferedDatabaseWriter {
                                             q,
                                         ));
                                 }
+                                WriteMessage::RoomMutationStream(q, r) => {
+                                    let _ = r.blocking_send(
+                                        AuthorisationMessage::RoomMutationStreamWrite(
+                                            Err(Error::DatabaseWrite(e.to_string())),
+                                            q,
+                                        ),
+                                    );
+                                }
+
                                 WriteMessage::RoomNode(q, r) => {
                                     let _ = r.blocking_send(AuthorisationMessage::RoomNodeWrite(
                                         Err(Error::DatabaseWrite(e.to_string())),
@@ -560,6 +594,14 @@ impl BufferedDatabaseWriter {
                     query.update_daily_logs(&mut daily_log);
                 }
 
+                WriteMessage::MutationStream(query, _) => {
+                    if let Err(e) = query.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                    query.update_daily_logs(&mut daily_log);
+                }
+
                 WriteMessage::Nodes(node, _, _) => {
                     for nti in node {
                         if let Err(e) = nti.write(conn) {
@@ -580,6 +622,14 @@ impl BufferedDatabaseWriter {
                 }
 
                 WriteMessage::RoomMutation(query, _) => {
+                    if let Err(e) = query.write(conn) {
+                        conn.execute("ROLLBACK", [])?;
+                        return Err(e);
+                    }
+                    query.update_daily_logs(&mut daily_log);
+                }
+
+                WriteMessage::RoomMutationStream(query, _) => {
                     if let Err(e) = query.write(conn) {
                         conn.execute("ROLLBACK", [])?;
                         return Err(e);

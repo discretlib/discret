@@ -44,6 +44,7 @@ const LRU_SIZE: usize = 128;
 pub enum DbMessage {
     Query(String, Parameters, Sender<Result<String>>),
     Mutate(String, Parameters, Sender<Result<MutationQuery>>),
+    MutateStream(String, Parameters, mpsc::Sender<Result<MutationQuery>>),
     Delete(String, Parameters, Sender<Result<DeletionQuery>>),
     DataModelUpdate(String, Sender<Result<String>>),
     DataModel(Sender<Result<String>>),
@@ -125,6 +126,19 @@ impl GraphDatabaseService {
                             }
                         }
                     }
+
+                    DbMessage::MutateStream(mutation, parameters, reply) => {
+                        let mutation = db.get_cached_mutation(&mutation);
+                        match mutation {
+                            Ok(cache) => {
+                                db.mutate_stream(cache, parameters, reply).await;
+                            }
+                            Err(err) => {
+                                let _ = reply.send(Err(err)).await;
+                            }
+                        }
+                    }
+
                     DbMessage::Delete(deletion, parameters, reply) => {
                         let deletion = db.get_cached_deletion(&deletion);
                         match deletion {
@@ -283,6 +297,34 @@ impl GraphDatabaseService {
             Ok(query) => query.result(),
             Err(e) => Err(e),
         }
+    }
+
+    ///
+    /// Allow to send a stream of mutation. Usefull for batch insertion as you do have to wait for the mutation to finished before sending another.
+    ///
+    /// The receiver retrieve an internal representation of the mutation query to avoid the JSON result creation, wich is probably unecessary when doing batch insert.
+    /// To get the JSON, call the  MutationQuery.result() method
+    ///
+    pub fn mutation_stream(
+        &self,
+    ) -> (
+        mpsc::Sender<(String, Option<Parameters>)>,
+        mpsc::Receiver<Result<MutationQuery>>,
+    ) {
+        let (send, mut recv) = mpsc::channel::<(String, Option<Parameters>)>(2);
+        let (send_res, recv_res) = mpsc::channel::<Result<MutationQuery>>(2);
+        let dbsender = self.sender.clone();
+        tokio::spawn(async move {
+            while let Some((mutate, param_opt)) = recv.recv().await {
+                let msg = DbMessage::MutateStream(
+                    mutate,
+                    param_opt.unwrap_or_default(),
+                    send_res.clone(),
+                );
+                let _ = dbsender.send(msg).await;
+            }
+        });
+        (send, recv_res)
     }
 
     ///
@@ -1055,6 +1097,33 @@ impl GraphDatabase {
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
+                    }
+                }
+            }))
+            .await;
+    }
+
+    pub async fn mutate_stream(
+        &mut self,
+        mutation: Arc<MutationParser>,
+        mut parameters: Parameters,
+        reply: mpsc::Sender<Result<MutationQuery>>,
+    ) {
+        let auth_service = self.auth_service.clone();
+        let _ = self
+            .graph_database
+            .reader
+            .send_async(Box::new(move |conn| {
+                let mutation_query =
+                    MutationQuery::execute(&mut parameters, mutation.clone(), conn);
+
+                match mutation_query {
+                    Ok(muta) => {
+                        let msg = AuthorisationMessage::MutationStream(muta, reply);
+                        let _ = auth_service.send_blocking(msg);
+                    }
+                    Err(e) => {
+                        let _ = reply.blocking_send(Err(e));
                     }
                 }
             }))

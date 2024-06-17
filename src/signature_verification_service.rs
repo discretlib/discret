@@ -9,6 +9,8 @@ use crate::{
     },
     security::import_verifying_key,
 };
+//use ed25519_dalek::{verify_batch, Signature, Signer, SigningKey, VerifyingKey};
+
 use tokio::sync::oneshot::{self};
 
 pub enum VerificationMessage {
@@ -81,11 +83,37 @@ impl SignatureVerificationService {
     }
 
     pub fn nodes_check(nodes: Vec<Node>) -> Result<Vec<Node>> {
+        //  verify_batch();
+
         for node in &nodes {
             node.verify()?;
         }
         Ok(nodes)
     }
+
+    // pub fn nodes_check(nodes: Vec<Node>) -> Result<Vec<Node>> {
+    //     //  verify_batch();
+    //     let mut hashes = Vec::with_capacity(nodes.len());
+    //     let mut signatures = Vec::with_capacity(nodes.len());
+    //     let verifying_keys = Vec::with_capacity(nodes.len());
+    //     for node in &nodes {
+    //         let hash = node.hash()?;
+    //         hashes.push(hash.as_bytes().to_owned());
+
+    //         let sign = node._signature.clone();
+    //         let sign: [u8; 64] = sign.try_into().unwrap();
+    //         let sig = ed25519_dalek::Signature::from_bytes(&sign);
+    //         signatures.push(sig);
+
+    //         node.verify()?;
+    //     }
+    //     let mut messages: Vec<&[u8]> = Vec::with_capacity(nodes.len());
+    //     for msg in &hashes {
+    //         messages.push(msg);
+    //     }
+    //     verify_batch(&messages, &signatures, &verifying_keys).map_err(|e| crate::Error::);
+    //     Ok(nodes)
+    // }
 
     pub fn edges_check(edges: Vec<Edge>) -> Result<Vec<Edge>> {
         for edge in &edges {

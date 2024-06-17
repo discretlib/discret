@@ -31,7 +31,9 @@ pub enum AuthorisationMessage {
     Load(String, Sender<super::Result<()>>),
     Deletion(DeletionQuery, Sender<super::Result<DeletionQuery>>),
     Mutation(MutationQuery, Sender<super::Result<MutationQuery>>),
+    MutationStream(MutationQuery, mpsc::Sender<super::Result<MutationQuery>>),
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
+    RoomMutationStreamWrite(Result<()>, RoomMutationStreamWriteQuery),
     RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomsForPeer(Vec<u8>, i64, Sender<HashSet<Uid>>),
@@ -64,6 +66,30 @@ impl Writeable for RoomMutationWriteQuery {
     }
 }
 impl RoomMutationWriteQuery {
+    pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
+        for insert in &self.mutation_query.mutate_entities {
+            if !self.room_list.contains(&insert.node_to_mutate.id) {
+                insert.update_daily_logs(daily_log);
+            }
+        }
+    }
+}
+
+pub struct RoomMutationStreamWriteQuery {
+    room_list: HashSet<Uid>,
+    mutation_query: MutationQuery,
+    reply: mpsc::Sender<super::Result<MutationQuery>>,
+}
+impl Writeable for RoomMutationStreamWriteQuery {
+    fn write(&mut self, conn: &rusqlite::Connection) -> std::result::Result<(), rusqlite::Error> {
+        self.mutation_query.write(conn)?;
+        for room_id in &self.room_list {
+            RoomChangelog::log_room_definition(room_id, self.mutation_query.date, conn)?;
+        }
+        Ok(())
+    }
+}
+impl RoomMutationStreamWriteQuery {
     pub fn update_daily_logs(&self, daily_log: &mut DailyMutations) {
         for insert in &self.mutation_query.mutate_entities {
             if !self.room_list.contains(&insert.node_to_mutate.id) {
@@ -193,6 +219,37 @@ impl AuthorisationService {
                 };
             }
 
+            AuthorisationMessage::MutationStream(mut mutation_query, reply) => {
+                match auth.validate_mutation(&mut mutation_query) {
+                    Ok(rooms) => match rooms.is_empty() {
+                        true => {
+                            let query = WriteMessage::MutationStream(mutation_query, reply);
+                            let _ = database_writer.send(query).await;
+                        }
+                        false => {
+                            let mut room_list: HashSet<Uid> = HashSet::new();
+                            for room in rooms {
+                                room_list.insert(room.id);
+                            }
+                            let query = WriteMessage::RoomMutationStream(
+                                RoomMutationStreamWriteQuery {
+                                    room_list,
+                                    mutation_query,
+                                    reply,
+                                },
+                                self_sender.clone(),
+                            );
+
+                            let _ = database_writer.send(query).await;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = reply.send(Err(e)).await;
+                        return;
+                    }
+                }
+            }
+
             AuthorisationMessage::RoomMutationWrite(result, mut query) => match result {
                 Ok(_) => {
                     match auth.validate_mutation(&mut query.mutation_query) {
@@ -212,6 +269,28 @@ impl AuthorisationService {
                 }
                 Err(e) => {
                     let _ = query.reply.send(Err(e));
+                }
+            },
+
+            AuthorisationMessage::RoomMutationStreamWrite(result, mut query) => match result {
+                Ok(_) => {
+                    match auth.validate_mutation(&mut query.mutation_query) {
+                        Ok(rooms) => {
+                            for room in rooms {
+                                auth.add_room(room.clone());
+                                event_service
+                                    .notify(EventServiceMessage::RoomModified(room))
+                                    .await;
+                            }
+                            let _ = query.reply.send(Ok(query.mutation_query)).await;
+                        }
+                        Err(e) => {
+                            let _ = query.reply.send(Err(e)).await;
+                        }
+                    };
+                }
+                Err(e) => {
+                    let _ = query.reply.send(Err(e)).await;
                 }
             },
 

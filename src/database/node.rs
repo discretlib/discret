@@ -148,7 +148,7 @@ impl Node {
             && self.verifying_key.eq(&node.verifying_key)
     }
 
-    fn hash(&self) -> Result<blake3::Hash> {
+    pub fn hash(&self) -> Result<blake3::Hash> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.id);
         if let Some(rid) = &self.room_id {
