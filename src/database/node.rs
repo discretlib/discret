@@ -946,24 +946,15 @@ impl NodeDeletionEntry {
         daily_log: &mut DailyMutations,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        let mut nodes_id: Vec<Uid> = Vec::with_capacity(nodes.len());
-        let it = &mut nodes.into_iter().peekable();
-
-        let mut in_clause = String::new();
-        while let Some(node) = it.next() {
-            in_clause.push('?');
-            nodes_id.push(node.id);
-            if it.peek().is_some() {
-                in_clause.push(',');
-            }
-            //deletiong log is written before real deletion but this function is performed inside a transaction
+        let query = "DELETE FROM _node WHERE room_id=? AND id=?";
+        let mut stmt = conn.prepare_cached(&query)?;
+        for node in nodes {
+            stmt.execute((node.room_id, node.id))?;
             node.write(conn)?;
             daily_log.set_need_update(node.room_id, &node.entity, node.deletion_date);
             daily_log.set_need_update(node.room_id, &node.entity, node.mdate);
         }
-        let query = format!("DELETE FROM _node WHERE id in ({})", in_clause);
-        let mut stmt = conn.prepare(&query)?;
-        stmt.execute(params_from_iter(nodes_id.iter()))?;
+
         Ok(())
     }
 }

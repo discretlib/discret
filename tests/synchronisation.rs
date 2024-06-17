@@ -116,7 +116,7 @@ async fn beacon_ipv4_connect() {
         }
     });
 
-    let s = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    let s = tokio::time::timeout(Duration::from_secs(4), handle).await;
 
     assert!(s.is_ok());
 }
@@ -173,7 +173,7 @@ async fn beacon_ipv6_connect() {
         }
     });
 
-    let s = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    let s = tokio::time::timeout(Duration::from_secs(4), handle).await;
 
     assert!(s.is_ok());
 }

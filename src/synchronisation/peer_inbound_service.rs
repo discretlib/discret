@@ -404,7 +404,7 @@ impl LocalPeerService {
                     .await;
 
                 let validated = receive.await??;
-                
+
                 if validated {
                     conn_ready.store(true, Ordering::Relaxed);
 
@@ -414,7 +414,6 @@ impl LocalPeerService {
 
                     peer_service.connected(verifying_key, connection_id).await;
                 } else {
-                    
                     peer_service
                         .disconnect(verifying_key, circuit_id, connection_id)
                         .await;
@@ -870,18 +869,7 @@ impl LocalPeerService {
             if !node_deletion.is_empty() {
                 has_changes = true;
                 let node_deletion = verify_service.verify_node_log(node_deletion).await?;
-                let max_deletion = 512;
-                let mut current = Vec::with_capacity(max_deletion);
-                for node_del in node_deletion {
-                    current.push(node_del);
-                    if current.len() == max_deletion {
-                        db.delete_nodes(current).await?;
-                        current = Vec::with_capacity(max_deletion);
-                    }
-                }
-                if !current.is_empty() {
-                    db.delete_nodes(current).await?;
-                }
+                db.delete_nodes(node_deletion).await?;
             }
         }
         //node insertion
