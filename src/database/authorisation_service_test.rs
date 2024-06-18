@@ -19,16 +19,6 @@ mod tests {
     fn init_database_path() {
         let path: PathBuf = DATA_PATH.into();
         fs::create_dir_all(&path).unwrap();
-        let paths = fs::read_dir(path).unwrap();
-
-        for path in paths {
-            let dir = path.unwrap().path();
-            let paths = fs::read_dir(dir).unwrap();
-            for file in paths {
-                let files = file.unwrap().path();
-                let _ = fs::remove_file(&files);
-            }
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
