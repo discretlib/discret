@@ -1,9 +1,8 @@
 use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use discret::{
-    base64_encode, generate_x509_certificate, hash, uid_decode, uid_encode, Beacon, BeaconConfig,
-    Configuration, DefaultRoom, Discret, Event, LogService, Parameters, ParametersAdd,
-    ResultParser,
+    base64_encode, generate_x509_certificate, hash, Beacon, BeaconConfig, Configuration,
+    DefaultRoom, Discret, Event, LogService, Parameters, ParametersAdd, ResultParser,
 };
 use rand::{rngs::OsRng, RngCore};
 
@@ -195,9 +194,7 @@ async fn invites() {
             .unwrap();
 
     let mut param = Parameters::new();
-    param
-        .add("key", base64_encode(discret1.verifying_key()))
-        .unwrap();
+    param.add("key", discret1.verifying_key()).unwrap();
     let result = discret1
         .mutate(
             r#"mutate mut {
@@ -267,7 +264,7 @@ async fn invites() {
 
     discret2.accept_invite(invite).await.unwrap();
 
-    let new_room = uid_decode(&room_id).unwrap();
+    let new_room = room_id;
 
     let mut events = discret2.subscribe_for_events().await;
     let handle = tokio::spawn(async move {
@@ -394,9 +391,7 @@ async fn invites_beacon_ipv6() {
             .unwrap();
 
     let mut param = Parameters::new();
-    param
-        .add("key", base64_encode(discret1.verifying_key()))
-        .unwrap();
+    param.add("key", discret1.verifying_key()).unwrap();
     let result = discret1
         .mutate(
             r#"mutate mut {
@@ -466,7 +461,7 @@ async fn invites_beacon_ipv6() {
 
     discret2.accept_invite(invite).await.unwrap();
 
-    let new_room = uid_decode(&room_id).unwrap();
+    let new_room = room_id;
 
     let mut events = discret2.subscribe_for_events().await;
     let handle = tokio::spawn(async move {
@@ -577,9 +572,7 @@ async fn new_peers_from_room() {
             .unwrap();
 
     let mut param = Parameters::new();
-    param
-        .add("key", base64_encode(discret1.verifying_key()))
-        .unwrap();
+    param.add("key", discret1.verifying_key()).unwrap();
     let result = discret1
         .mutate(
             r#"mutate mut {
@@ -613,14 +606,13 @@ async fn new_peers_from_room() {
     }
     let mut parser = ResultParser::new(&result).unwrap();
     let mut ids: Ids = parser.take_object("sys.Room").unwrap();
-    let room_id = ids.id;
+    let new_room = ids.id;
     let auth_id = ids.authorisations.pop().unwrap().id;
-    let new_room = uid_decode(&room_id).unwrap();
 
     // println!("{}", res.json);
 
     let mut param = Parameters::new();
-    param.add("room_id", room_id.clone()).unwrap();
+    param.add("room_id", new_room.clone()).unwrap();
 
     discret1
         .mutate(
@@ -637,7 +629,7 @@ async fn new_peers_from_room() {
 
     let invite = discret1
         .invite(Some(DefaultRoom {
-            room: room_id.clone(),
+            room: new_room.clone(),
             authorisation: auth_id.clone(),
         }))
         .await
@@ -652,13 +644,14 @@ async fn new_peers_from_room() {
     discret2.accept_invite(invite).await.unwrap();
 
     let mut events = discret2.subscribe_for_events().await;
+    let new_r = new_room.clone();
     let handle2 = tokio::spawn(async move {
         loop {
             let event = events.recv().await;
             match event {
                 Ok(e) => match e {
                     Event::RoomSynchronized(room_id) => {
-                        assert_eq!(room_id, new_room);
+                        assert_eq!(room_id, new_r);
                         break;
                     }
                     _ => {}
@@ -674,7 +667,7 @@ async fn new_peers_from_room() {
         .unwrap();
     let invite = discret1
         .invite(Some(DefaultRoom {
-            room: room_id.clone(),
+            room: new_room.clone(),
             authorisation: auth_id,
         }))
         .await
@@ -773,9 +766,7 @@ async fn multiple_entities() {
     .unwrap();
 
     let mut param = Parameters::new();
-    param
-        .add("room_id", uid_encode(&discret1.private_room()))
-        .unwrap();
+    param.add("room_id", discret1.private_room()).unwrap();
 
     let mutation = r#"
             mutate {

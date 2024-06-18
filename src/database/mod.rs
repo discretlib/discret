@@ -20,7 +20,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::Uid;
+use crate::{base64_encode, Uid};
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub const VEC_OVERHEAD: u64 = 4;
@@ -99,11 +99,11 @@ impl ResultParser {
 }
 
 pub struct DataModification {
-    pub rooms: HashMap<Uid, HashMap<String, Vec<i64>>>,
+    pub rooms: HashMap<String, HashMap<String, Vec<i64>>>,
 }
 impl DataModification {
     pub fn add(&mut self, room: Uid, entity: String, date: i64) {
-        let room = self.rooms.entry(room).or_default();
+        let room = self.rooms.entry(base64_encode(&room)).or_default();
         let entity = room.entry(entity).or_default();
         entity.push(date);
     }

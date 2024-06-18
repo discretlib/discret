@@ -26,7 +26,7 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    Configuration, DefaultRoom, Result,
+    uid_decode, Configuration, DefaultRoom, Result,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
@@ -434,7 +434,7 @@ impl PeerConnectionService {
             Event::DataChanged(data_modif) => {
                 let mut rooms = Vec::new();
                 for room in &data_modif.rooms {
-                    rooms.push(room.0.clone());
+                    rooms.push(uid_decode(room.0).unwrap());
                 }
                 let _ = local_event_broadcast.send(LocalEvent::RoomDataChanged(rooms));
             }

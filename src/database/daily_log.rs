@@ -648,10 +648,9 @@ mod tests {
             Error,
         },
         date_utils::{date, now},
-        default_uid,
         event_service::EventService,
         log_service::LogService,
-        security::{base64_encode, new_uid, random32},
+        security::{base64_encode, default_uid, new_uid, random32},
     };
 
     use super::*;
@@ -769,7 +768,7 @@ mod tests {
         while let Ok(e) = events.recv().await {
             match e {
                 crate::event_service::Event::DataChanged(log) => {
-                    let dates = log.rooms.get(bin_room_id).unwrap();
+                    let dates = log.rooms.get(&room_id).unwrap();
                     assert_eq!(1, dates.len());
 
                     break;

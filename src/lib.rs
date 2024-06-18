@@ -53,7 +53,7 @@ use database::mutation_query::MutationQuery;
 use event_service::EventService;
 
 use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
-use security::{derive_key, MeetingSecret};
+use security::{default_uid, derive_key, uid_decode, uid_encode, MeetingSecret, Uid};
 
 use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
@@ -76,10 +76,7 @@ pub use crate::{
     log_service::LogService,
     log_service::{Log, LogMessage},
     network::beacon::Beacon,
-    security::{
-        base64_decode, base64_encode, default_uid, derive_pass_phrase, generate_x509_certificate,
-        hash, uid_decode, uid_encode, Uid,
-    },
+    security::{base64_decode, base64_encode, derive_pass_phrase, generate_x509_certificate, hash},
 };
 
 ///
@@ -171,6 +168,13 @@ pub enum Error {
 
     #[error("{0}")]
     Unsupported(String),
+}
+
+///
+/// return the zero filled uid in base bas64
+///
+pub fn zero_uid() -> String {
+    uid_encode(&default_uid())
 }
 
 #[derive(Clone)]
@@ -319,16 +323,16 @@ impl Discret {
     /// Every data you create will be signed using the associated signing_key, and  
     /// other peers will use this verifying key to ensure the integrity of the data
     ///
-    pub fn verifying_key(&self) -> &Vec<u8> {
-        &self.verifying_key
+    pub fn verifying_key(&self) -> String {
+        base64_encode(&self.verifying_key)
     }
 
     ///
     /// This special room is used internally to store system data
     /// you can use it to query and update the sys.* entities
     ///
-    pub fn private_room(&self) -> Uid {
-        self.private_room_id
+    pub fn private_room(&self) -> String {
+        base64_encode(&self.private_room_id)
     }
 
     ///
@@ -450,12 +454,12 @@ impl DiscretBlocking {
             .block_on(self.discret.query(q, p))
     }
 
-    pub fn verifying_key(&self) -> &Vec<u8> {
-        &self.discret.verifying_key
+    pub fn verifying_key(&self) -> String {
+        self.discret.verifying_key()
     }
 
-    pub fn private_room(&self) -> Uid {
-        self.discret.private_room_id
+    pub fn private_room(&self) -> String {
+        self.discret.private_room()
     }
 
     pub fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {

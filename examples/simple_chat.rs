@@ -1,8 +1,7 @@
 use std::{io, path::PathBuf};
 
 use discret::{
-    default_uid, derive_pass_phrase, uid_encode, Configuration, Discret, Parameters, ParametersAdd,
-    ResultParser,
+    derive_pass_phrase, zero_uid, Configuration, Discret, Parameters, ParametersAdd, ResultParser,
 };
 use serde::Deserialize;
 
@@ -43,10 +42,10 @@ async fn main() {
     let eapp = app.clone();
     tokio::spawn(async move {
         let mut last_date = 0;
-        let mut last_id = uid_encode(&default_uid());
+        let mut last_id = zero_uid();
 
         //data will is inserted in your private room
-        let private_room = uid_encode(&eapp.private_room());
+        let private_room = eapp.private_room();
         while let Ok(event) = events.recv().await {
             match event {
                 discret::Event::DataChanged(_) => {
@@ -88,7 +87,7 @@ async fn main() {
     });
 
     //data is inserted in your private room
-    let private_room = uid_encode(&app.private_room());
+    let private_room = app.private_room();
     let stdin = io::stdin();
     let mut line = String::new();
     println!("{}", "Write Something!");

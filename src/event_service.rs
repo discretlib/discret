@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
+    base64_encode,
     database::{room::Room, DataModification},
     security::Uid,
 };
@@ -22,9 +23,9 @@ pub enum EventServiceMessage {
 pub enum Event {
     DataChanged(Arc<DataModification>),
     RoomModified(Arc<Room>),
-    PeerConnected(Vec<u8>, i64, Uid),
-    PeerDisconnected(Vec<u8>, i64, Uid),
-    RoomSynchronized(Uid),
+    PeerConnected(Vec<u8>, i64, String),
+    PeerDisconnected(Vec<u8>, i64, String),
+    RoomSynchronized(String),
     PendingPeer(),
     PendingHardware(),
 }
@@ -55,18 +56,18 @@ impl EventService {
                         let _ = broadcast.send(Event::PeerConnected(
                             verifying_key,
                             date,
-                            connection_id,
+                            base64_encode(&connection_id),
                         ));
                     }
                     EventServiceMessage::PeerDisconnected(verifying_key, date, connection_id) => {
                         let _ = broadcast.send(Event::PeerDisconnected(
                             verifying_key,
                             date,
-                            connection_id,
+                            base64_encode(&connection_id),
                         ));
                     }
                     EventServiceMessage::RoomSynchronized(room) => {
-                        let _ = broadcast.send(Event::RoomSynchronized(room));
+                        let _ = broadcast.send(Event::RoomSynchronized(base64_encode(&room)));
                     }
                     EventServiceMessage::PendingPeer() => {
                         let _ = broadcast.send(Event::PendingPeer());
