@@ -4,7 +4,7 @@ name = "discret"
 version = "0.6.0"
 license = "AGPL"
 authors = ["Adrien Salais <adrien.salais@proton.me>"]
-keywords = ["p2p, peer to peer, GraphQl"]
+keywords = ["p2p, peer to peer, GraphQl, QUIC"]
 edition = "2021"
 
 
