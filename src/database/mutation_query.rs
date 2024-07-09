@@ -617,12 +617,15 @@ mod tests {
     use rusqlite::Connection;
     use serde::{Deserialize, Serialize};
 
-    use crate::database::{
-        query::{PreparedQueries, Query},
-        query_language::{
-            data_model_parser::DataModel, parameter::ParametersAdd, query_parser::QueryParser,
+    use crate::{
+        database::{
+            query::{PreparedQueries, Query},
+            query_language::{
+                data_model_parser::DataModel, parameter::ParametersAdd, query_parser::QueryParser,
+            },
+            sqlite_database::prepare_connection,
         },
-        sqlite_database::prepare_connection,
+        ResultParser,
     };
 
     use super::*;
@@ -1240,5 +1243,157 @@ mod tests {
         assert_eq!(shelter_one.mdate, shelter_one2.mdate);
 
         assert_eq!(2, pet2.previous.len());
+    }
+
+    #[test]
+    fn mutation_documentation_examples() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+           {
+                Person {
+                    name: String,
+                    surname: String nullable,
+                    parents:[Person]
+                }
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+                mutate {
+                    Person {
+                        name : "Doe"
+                        surname: "John"
+                    }
+                } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+               mutate {
+                p1: Person {
+                    name : "Doe"
+                    surname: "John"
+                }
+
+                p2: Person {
+                    name : "Alice"
+                }
+
+                last: Person {
+                    name : "Bob"
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutate {
+                result: Person {
+                    name : "Doe"
+                    surname: "John"
+                    parents: [
+                        {
+                            name : "Alice"
+                        },{
+                            name : "Bob"
+                        }
+                    ]
+                }
+            }"#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let result = mutation_query.to_json().unwrap().to_string();
+        #[derive(Deserialize)]
+        struct PersonId {
+            id: String,
+        }
+        let mut parser = ResultParser::new(&result).unwrap();
+
+        let ids: PersonId = parser.take_object("result").unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutate {
+                Person {
+                    id : $id
+                    parents: null
+                }
+            }"#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        param.add("id", ids.id.clone()).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                Person (id=$id, nullable(parents) )  {
+                    name
+                    parents {
+                        name
+                    }
+                }                
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let query = PreparedQueries::build(&query_parser).unwrap();
+        let sql_queries = Arc::new(query);
+        let parser = Arc::new(query_parser);
+
+        let mut param = Parameters::new();
+        param.add("id", ids.id).unwrap();
+        let mut sql = Query {
+            parameters: param,
+            parser: parser.clone(),
+            sql_queries: sql_queries.clone(),
+        };
+
+        let result_str = sql.read(&conn).unwrap();
+
+        println!("{}", result_str);
     }
 }

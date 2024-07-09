@@ -2209,4 +2209,197 @@ mod tests {
         assert_eq!(1, persons[0].is_nice);
 
     }
+
+
+    #[test]
+    fn query_documentation_examples() {
+        let mut data_model = DataModel::new();
+        data_model
+            .update(
+                "
+           {
+                Person {
+                    name: String,
+                    surname: String nullable,
+                    parents:[Person],
+                    pet: Pet,
+                }
+
+                Pet{
+                    name: String
+                }
+            }
+        ",
+            )
+            .unwrap();
+
+        let mutation = MutationParser::parse(
+            r#"
+            mutate {
+                Person {
+                    name : "Doe"
+                    surname: "John"
+                    parents:  [
+                        {
+                            name : "Coop"
+                            surname: "Alice"
+                        } 
+                        ,{
+                            name: "Doe" 
+                            pet:{ name:"Kiki" }
+                        }
+                    ]
+                    pet: {name:"Truffle"}
+                   
+                }
+            } "#,
+            &data_model,
+        )
+        .unwrap();
+
+        let mut param = Parameters::new();
+        let conn = Connection::open_in_memory().unwrap();
+        prepare_connection(&conn).unwrap();
+
+        let mutation = Arc::new(mutation);
+        let mut mutation_query = MutationQuery::execute(&mut param, mutation, &conn).unwrap();
+        mutation_query.write(&conn).unwrap();
+        
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                result: Person {
+                    name
+                    surname
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let _ = sql.read(&conn).unwrap();
+
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                persons: Person {
+                    name
+                    surname
+                }
+
+                pets: Pet{
+                    name
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let _ = sql.read(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                Person (
+                    name="Doe"
+                    ) {
+                    name
+                    surname
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let _ = sql.read(&conn).unwrap();
+
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                Person (
+                    surname="John",
+                    name="Doe"
+                    ) {
+                    name
+                    surname
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let _ = sql.read(&conn).unwrap();
+
+        let query_parser = QueryParser::parse(
+            r#"
+            query {
+                Person (
+                    surname != null,
+                    name="Doe"
+                    ) {
+                    name
+                    surname
+                }
+            }
+        "#,
+            &data_model,
+        )
+        .unwrap();
+        let query = PreparedQueries::build(&query_parser).unwrap();
+
+
+        let param = Parameters::new();
+        let mut sql = Query {
+            parameters: param,
+            parser: Arc::new(query_parser),
+            sql_queries: Arc::new(query),
+        };
+        let result = sql.read(&conn).unwrap();
+
+
+        println!("{}",result);
+
+    }
+
+
+
+
 }
