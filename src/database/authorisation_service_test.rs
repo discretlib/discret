@@ -3,6 +3,8 @@ mod tests {
 
     use std::{fs, path::PathBuf};
 
+    use serde::Deserialize;
+
     use crate::{
         configuration::Configuration,
         database::{
@@ -13,6 +15,7 @@ mod tests {
         event_service::EventService,
         log_service::LogService,
         security::{base64_encode, random32, uid_decode},
+        ResultParser,
     };
 
     const DATA_PATH: &str = "test_data/database/authorisation_service_test/";
@@ -1133,5 +1136,340 @@ mod tests {
             .await;
         let log_entries = log_entries_recv.recv().await.unwrap().unwrap();
         assert_eq!(2, log_entries.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn room_documentation_blog_example() {
+        init_database_path();
+        let data_model = "
+        blog {
+            Article {
+                title: String,
+                content: String
+            }
+
+            Comment {
+                article: blog.Article,
+                comment: String
+            }
+        }";
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let (app, verifying_key, _) = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            &random32(),
+            path,
+            &Configuration::default(),
+            EventService::new(),
+            LogService::start(),
+        )
+        .await
+        .unwrap();
+        let user_id = base64_encode(&verifying_key);
+        let mut param = Parameters::default();
+        param.add("author", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate_raw(
+                r#"mutate {
+                sys.Room{
+                    admin: [{
+                        verif_key:$author
+                    }]
+
+                    authorisations:[{
+                        name:"authors"
+                        rights:[{
+                                entity:"blog.Article"
+                                mutate_self:true
+                                mutate_all:true
+                            },{
+                                entity:"Comment"
+                                mutate_self:true
+                                mutate_all:true
+                            }
+                        ]
+                        users:[{
+                            verif_key:$author
+                        }]
+                    },{
+                        name:"readers"
+                        rights:[ {
+                                entity:"blog.Comment"
+                                mutate_self:true
+                                mutate_all:false
+                        }]
+
+                        users:[{
+                            verif_key:$author
+                        }]
+                    }]
+                }
+            }
+            "#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        let room_insert = &room.mutate_entities[0];
+
+        let room_id = base64_encode(&room_insert.node_to_mutate.id);
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+
+        let res = app
+            .mutate(
+                r#"mutate {
+           res: blog.Article{
+                room_id: $room_id
+                title: "hello"
+                content: "world"
+            }
+        }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        #[derive(Deserialize)]
+        struct Id {
+            id: String,
+        }
+
+        let mut parser = ResultParser::new(&res).unwrap();
+        let ids: Id = parser.take_object("res").unwrap();
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_id.clone()).unwrap();
+        param.add("article", ids.id.clone()).unwrap();
+
+        app.mutate(
+            r#"mutate {
+                    res:  blog.Comment {
+                        room_id: $room_id
+                        article: {id:$article}
+                        comment: "a nice comment"
+                    }
+                }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let res = app
+            .query(
+                r#"query {
+                    res:  blog.Comment {
+                        room_id
+                        comment
+                        article {
+                            title
+                            content
+                        }
+                    }
+                }"#,
+                None,
+            )
+            .await
+            .unwrap();
+        println!("{}", res);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn room_documentation_shared_calendar_example() {
+        init_database_path();
+        let data_model = "
+        cal {
+            Calendar {
+                name: String,
+                appointments: [cal.Appointment],
+            }
+
+            Appointment {
+                start: Integer,
+                end: Integer,
+                detail: cal.AppointmentDetail
+            }
+
+            AppointmentDetail {
+                title: String,
+            }
+        }";
+
+        let secret = random32();
+        let path: PathBuf = DATA_PATH.into();
+        let (app, verifying_key, _) = GraphDatabaseService::start(
+            "authorisation app",
+            data_model,
+            &secret,
+            &random32(),
+            path,
+            &Configuration::default(),
+            EventService::new(),
+            LogService::start(),
+        )
+        .await
+        .unwrap();
+        let user_id = base64_encode(&verifying_key);
+        let mut param = Parameters::default();
+        param.add("author", user_id.clone()).unwrap();
+
+        let room = app
+            .mutate_raw(
+                r#"mutate {
+                    sys.Room{
+                        admin: [{
+                            verif_key:$author
+                        }]
+                        authorisations:[{
+                            name:"authors"
+                            rights:[
+                                {
+                                    entity:"cal.Calendar"
+                                    mutate_self:true
+                                    mutate_all:true
+                                },
+                                {
+                                    entity:"cal.Appointment"
+                                    mutate_self:true
+                                    mutate_all:true
+                                }
+                            ]
+                            users:[{
+                                verif_key:$author
+                            }]
+                        },{
+                            name:"readers"
+                            users:[{
+                                verif_key:$author
+                            }]
+                        }]
+                    }
+                }
+            "#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        let room_insert = &room.mutate_entities[0];
+        let room_calendar_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("author", user_id.clone()).unwrap();
+        let room = app
+            .mutate_raw(
+                r#"mutate {
+                sys.Room{
+                    admin: [{
+                        verif_key:$author
+                    }]
+                    authorisations:[{
+                        name:"authors"
+                        rights:[
+                            {
+                                entity:"cal.AppointmentDetail"
+                                mutate_self:true
+                                mutate_all:true
+                            }
+                        ]
+                        users:[{
+                            verif_key:$author
+                        }]
+                    },{
+                        name:"readers"
+                        users:[{
+                            verif_key:$author
+                        }]
+                    }]
+                }
+            }
+            "#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        let room_insert = &room.mutate_entities[0];
+        let room_cal_detail_id = base64_encode(&room_insert.node_to_mutate.id);
+
+        let mut param = Parameters::default();
+        param.add("room_id", room_calendar_id.clone()).unwrap();
+
+        let res = app
+            .mutate(
+                r#"mutate {
+                res: cal.Calendar{
+                        room_id: $room_id
+                        name: "my calendar"
+                    }
+                }"#,
+                Some(param),
+            )
+            .await
+            .unwrap();
+        #[derive(Deserialize)]
+        struct Id {
+            id: String,
+        }
+
+        let mut parser = ResultParser::new(&res).unwrap();
+        let ids: Id = parser.take_object("res").unwrap();
+
+        let mut param = Parameters::default();
+        param.add("calendar_id", ids.id.clone()).unwrap();
+        param
+            .add("room_calendar_id", room_calendar_id.clone())
+            .unwrap();
+        param
+            .add("room_cal_detail_id", room_cal_detail_id.clone())
+            .unwrap();
+        param.add("start_date", 0).unwrap();
+        param.add("end_date", 1675).unwrap();
+
+        app.mutate(
+            r#"mutate {
+                cal.Calendar {
+                    id:$calendar_id
+                    appointments:[{
+                        room_id: $room_calendar_id
+                        start: $start_date
+                        end:$end_date
+                        detail:{
+                            room_id: $room_cal_detail_id
+                            title: "An important meeting"
+                        }
+                    }]
+                }
+            }"#,
+            Some(param),
+        )
+        .await
+        .unwrap();
+
+        let res = app
+            .query(
+                r#"query {
+                     cal.Calendar {
+                        room_id
+                        name
+                        appointments(
+                            nullable(detail)
+                            ){
+                            room_id
+                            start
+                            end
+                            detail{
+                                room_id
+                                title
+                            }
+                        }
+                    }
+                }"#,
+                None,
+            )
+            .await
+            .unwrap();
+        println!("{}", res);
     }
 }
