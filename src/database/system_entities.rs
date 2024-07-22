@@ -126,9 +126,7 @@ sys{
 
     Peer {
         pub_key: Base64 ,
-        name: String default "anonymous",
-        ext: Json default "{}",
-        index(verifying_key)
+        name: String default "anonymous"
     }
 
     AllowedPeer{

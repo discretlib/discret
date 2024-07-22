@@ -69,6 +69,19 @@ pub struct GraphDatabaseService {
     pub buffer_size: usize,
 }
 impl GraphDatabaseService {
+    pub fn database_exists(
+        app_key: &str,
+        key_material: &[u8; 32],
+        data_folder: &PathBuf,
+    ) -> std::result::Result<bool, crate::Error> {
+        let signature_key = derive_key(&format!("{} SIGNING_KEY", app_key), key_material);
+        let database_secret = derive_key("DATABASE_SECRET", &signature_key);
+        let database_key = derive_key("DATABASE_NAME", &database_secret);
+        let database_path = build_path(data_folder, &base64_encode(&database_key))?;
+        let exist = database_path.exists();
+        Ok(exist)
+    }
+
     pub async fn start(
         app_key: &str,
         datamodel: &str,

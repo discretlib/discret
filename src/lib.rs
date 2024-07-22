@@ -176,6 +176,16 @@ pub enum Error {
 pub fn zero_uid() -> String {
     uid_encode(&default_uid())
 }
+///
+/// Verify that the Discret database defined by the parameters exists.
+///
+pub fn database_exists(
+    app_key: &str,
+    key_material: &[u8; 32],
+    data_folder: &PathBuf,
+) -> std::result::Result<bool, Error> {
+    GraphDatabaseService::database_exists(app_key, key_material, data_folder)
+}
 
 #[derive(Clone)]
 pub struct Discret {

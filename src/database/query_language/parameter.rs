@@ -4,12 +4,7 @@ use crate::security::base64_decode;
 
 use super::{Error, ParamValue, VariableType};
 
-use pest::Parser;
-use pest_derive::Parser;
-
-#[derive(Parser)]
-#[grammar = "database/query_language/parameter.pest"]
-struct PestParser;
+use serde_json::Value;
 
 #[derive(Debug)]
 pub struct Variable {
@@ -373,55 +368,43 @@ impl Parameters {
         Ok(())
     }
 
-    pub fn parse(p: &str) -> Result<Self, Error> {
-        let mut parameters = Parameters {
-            params: HashMap::new(),
-        };
+    pub fn from_json(json: &str) -> Result<Self, Error> {
+        let mut param = Parameters::new();
 
-        let mut parse = match PestParser::parse(Rule::parameters, p) {
-            Err(e) => {
-                let message = format!("{}", e);
-                return Err(Error::Parser(message));
-            }
-            Ok(f) => f,
-        };
+        let parsed: Value = serde_json::from_str(json)?;
 
-        let param_pairs = parse.next().unwrap().into_inner();
-        for param_pair in param_pairs {
-            match param_pair.as_rule() {
-                Rule::field => {
-                    let mut pairs = param_pair.into_inner();
-                    let name = pairs.next().unwrap().as_str();
-                    let value_pair = pairs.next().unwrap().into_inner().next().unwrap();
-                    let value = value_pair.as_str();
-                    match value_pair.as_rule() {
-                        Rule::string => {
-                            parameters.add(name, value.to_string())?;
-                        }
-                        Rule::null => {
-                            parameters.add_null(name)?;
-                        }
-                        Rule::boolean => {
-                            let val: bool = value.parse()?;
-                            parameters.add(name, val)?;
-                        }
-                        Rule::integer => {
-                            let val: i64 = value.parse()?;
-                            parameters.add(name, val)?;
-                        }
-                        Rule::float => {
-                            let val: f64 = value.parse()?;
-                            parameters.add(name, val)?;
-                        }
-                        _ => unreachable!(),
+        let map = parsed.as_object().ok_or(Error::InvalidJsonParamObject())?;
+
+        for (key, value) in map {
+            match value {
+                Value::Null => {
+                    param.add_null(key)?;
+                }
+                Value::Bool(bool) => {
+                    param.add(key, *bool)?;
+                }
+                Value::Number(number) => {
+                    if number.is_i64() {
+                        let num = number.as_i64().unwrap();
+                        param.add(key, num)?;
+                    } else if number.is_u64() {
+                        let num = number.as_u64().unwrap();
+                        let num: i64 = num.try_into()?;
+                        param.add(key, num)?;
+                    } else if number.is_f64() {
+                        let num = number.as_f64().unwrap();
+                        param.add(key, num)?;
                     }
                 }
-                Rule::EOI => {}
-                _ => unreachable!(),
+                Value::String(str) => {
+                    param.add(key, str.to_string())?;
+                }
+                Value::Array(_) => return Err(Error::InvalidJsonParamField(key.to_string())),
+                Value::Object(_) => return Err(Error::InvalidJsonParamField(key.to_string())),
             }
         }
 
-        Ok(parameters)
+        Ok(param)
     }
 }
 
@@ -429,17 +412,17 @@ impl Parameters {
 mod tests {
 
     use super::*;
+
     #[test]
-    fn parse_valid_parameters() {
-        let _ = Parameters::parse(
+    fn parse_valid_json() {
+        let _ = Parameters::from_json(
             r#"
-            //comment
         {
             "a_float" : 1.2 ,
             "a_string":"hello .world" ,
             "a_bool" : true ,
             "a_null" : null ,
-            "an_integer" : -123,
+            "an_integer" : -123
         }
         "#,
         )

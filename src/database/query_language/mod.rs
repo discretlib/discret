@@ -113,6 +113,18 @@ impl fmt::Display for FieldType {
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error(transparent)]
+    JSON(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    BoolParsing(#[from] std::str::ParseBoolError),
+
+    #[error(transparent)]
+    IntParsing(#[from] std::num::ParseIntError),
+
+    #[error(transparent)]
+    TryfromIntError(#[from] std::num::TryFromIntError),
+
     #[error("{0}")]
     Parser(String),
 
@@ -177,12 +189,6 @@ pub enum Error {
     InvalidEntityOrdering(String, String, String),
 
     #[error(transparent)]
-    BoolParsing(#[from] std::str::ParseBoolError),
-
-    #[error(transparent)]
-    IntParsing(#[from] std::num::ParseIntError),
-
-    #[error(transparent)]
     FloatParsing(#[from] std::num::ParseFloatError),
 
     #[error("filter on entity {0} can only use operations 'is null' of 'is not null' ")]
@@ -228,4 +234,10 @@ pub enum Error {
 
     #[error("Field '{0}' has the type '{1}' and nullable is only valid for types that references an entity ")]
     InvalidNullableField(String, String),
+
+    #[error("the provided parameters could not be parsed in a valid JSON object")]
+    InvalidJsonParamObject(),
+
+    #[error("the provided parameters '{0}' cannot be an object or an array ")]
+    InvalidJsonParamField(String),
 }
