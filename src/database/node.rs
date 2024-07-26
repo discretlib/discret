@@ -328,14 +328,14 @@ impl Node {
     ) -> std::result::Result<(), rusqlite::Error> {
         static UPDATE_FTS_QUERY: &str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
         if let Some(id) = self._local_id {
-            if let Some(previous) = old_fts_str {
-                let mut delete_fts_stmt = conn.prepare_cached(
-                    "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, ?)",
-                )?;
-                delete_fts_stmt.execute((id, previous))?;
-            }
-
             if index {
+                if let Some(previous) = old_fts_str {
+                    let mut delete_fts_stmt = conn.prepare_cached(
+                        "INSERT INTO _node_fts (_node_fts, rowid, text) VALUES('delete', ?, ?)",
+                    )?;
+                    delete_fts_stmt.execute((id, previous))?;
+                }
+
                 if let Some(current) = node_fts_str {
                     let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
                     insert_fts_stmt.execute((id, current))?;
@@ -1157,6 +1157,50 @@ mod tests {
 
         let results = stmt.query_map(["inserted"], Node::NODE_MAPPING).unwrap();
         assert_eq!(0, results.count()); //Search table is correctly updated
+    }
+
+    #[test]
+    fn mutate_test() {
+        let conn = Connection::open_in_memory().unwrap();
+        Node::create_tables(&conn).unwrap();
+
+        let keypair = Ed25519SigningKey::new();
+
+        let good_json = r#"{
+            "randomtext": "Lorem ipsum dolor sit amet"
+        }"#
+        .to_string();
+
+        let mut node = Node {
+            _entity: "TEST".to_string(),
+            cdate: now(),
+            _json: Some(good_json),
+            ..Default::default()
+        };
+        node.sign(&keypair).unwrap();
+        node.write(
+            &conn,
+            true,
+            &None,
+            &Some(String::from("Lorem ipsum dolor sit amet")),
+        )
+        .unwrap();
+
+        node._json = Some(
+            r#"{
+            "randomtext": "dolor sit amet"
+        }"#
+            .to_string(),
+        );
+
+        node.sign(&keypair).unwrap();
+        node.write(
+            &conn,
+            true,
+            &None,
+            &Some(String::from("Lorem ipsum dolor sit amet")),
+        )
+        .unwrap();
     }
 
     #[test]

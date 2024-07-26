@@ -147,6 +147,7 @@ impl MutationQuery {
                     let val = serde_json::from_str(e)?;
                     let mut previous = String::new();
                     extract_json(&val, &mut previous)?;
+
                     if !previous.is_empty() {
                         node_to_mutate.old_fts_str = Some(previous);
                     }

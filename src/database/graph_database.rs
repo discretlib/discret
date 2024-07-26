@@ -1379,9 +1379,12 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
     }
 
+    use serde::Deserialize;
+
     use crate::{
         database::query_language::parameter::ParametersAdd,
         security::{random32, uid_encode},
+        ResultParser,
     };
 
     use super::*;
@@ -1713,5 +1716,69 @@ mod tests {
         )
         .await
         .expect("wildcard auth");
+    }
+
+    //
+    // issue occured when updating entity sys.Peer to set a name.
+    // this performs some deletion on the  _node_fts index that did not exits, causing an horrible:'database disk image is malformed'
+    //
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_peer_with_empty_fts() {
+        init_database_path();
+        let secret = random32();
+
+        let data_model = "";
+        let path: PathBuf = DATA_PATH.into();
+        let (app, verifying_key, system_room_id) = GraphDatabaseService::start(
+            "app",
+            &data_model,
+            &secret,
+            &random32(),
+            path,
+            &Configuration::default(),
+            EventService::new(),
+            LogService::start(),
+        )
+        .await
+        .unwrap();
+        let room_id = system_room_id;
+
+        let mut param = Parameters::new();
+        param.add("room_id", uid_encode(&room_id)).unwrap();
+
+        let query = "query{
+            res: sys.Peer(verifying_key=$verifyingKey){
+              id
+              name
+            }
+          }";
+
+        let verifying_key = base64_encode(&verifying_key);
+        let mut param = Parameters::new();
+        param.add("verifyingKey", verifying_key).unwrap();
+
+        let res = app.query(query, Some(param)).await.unwrap();
+        println!("{}", res);
+        #[derive(Deserialize)]
+        struct PeerId {
+            pub id: String,
+            pub name: String,
+        }
+
+        let mut query_result = ResultParser::new(&res).unwrap();
+        let peer_id: Vec<PeerId> = query_result.take_array("res").unwrap();
+
+        let my_id: String = peer_id[0].id.clone();
+        let mutate = r#"mutate {
+            sys.Peer{
+              id:$id
+              name:$name
+            }
+          }"#;
+
+        let mut param = Parameters::new();
+        param.add("id", my_id).unwrap();
+        param.add("name", "hello world".to_string()).unwrap();
+        app.mutate(mutate, Some(param)).await.unwrap();
     }
 }

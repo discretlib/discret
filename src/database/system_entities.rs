@@ -14,7 +14,7 @@ use crate::{
 use super::{
     edge::Edge,
     graph_database::GraphDatabaseService,
-    node::Node,
+    node::{extract_json, Node},
     sqlite_database::{Database, Writeable},
     Error, ResultParser,
 };
@@ -90,6 +90,7 @@ pub const RIGHT_MUTATE_SELF_SHORT: &str = "33";
 pub const RIGHT_MUTATE_ALL_SHORT: &str = "34";
 
 pub const PEER_PUB_KEY_SHORT: &str = "32";
+pub const PEER_NAME_SHORT: &str = "33";
 
 pub const ALLOWED_PEER_PEER_SHORT: &str = "32";
 pub const ALLOWED_PEER_TOKEN_SHORT: &str = "33";
@@ -106,7 +107,7 @@ sys{
         authorisations:[sys.Authorisation]
     }
     
-    Authorisation {
+    Authorisation( no_full_text_index) {
         name: String,
         rights:[sys.EntityRight] ,
         users:[sys.UserAuth],
@@ -124,12 +125,12 @@ sys{
         mutate_all: Boolean,
     }
 
-    Peer {
+    Peer{
         pub_key: Base64 ,
         name: String default "anonymous"
     }
 
-    AllowedPeer{
+    AllowedPeer(no_full_text_index){
         peer: sys.Peer,
         meeting_token: Base64,
         last_connection: Integer default 0,
@@ -162,10 +163,11 @@ pub struct Peer {
 impl Peer {
     pub fn create(id: Uid, meeting_pub_key: String) -> Node {
         let json = format!(
-            r#"{{ 
-                "{}": "{}" 
+            r#"{{
+                "{}": "{}", 
+                "{}": "" 
             }}"#,
-            PEER_PUB_KEY_SHORT, meeting_pub_key
+            PEER_PUB_KEY_SHORT, meeting_pub_key, PEER_NAME_SHORT
         );
 
         let node = Node {
@@ -655,7 +657,16 @@ pub async fn init_allowed_peers(
     if !exists {
         let mut peer_node = Peer::create(peer_uid, base64_encode(public_key));
         peer_node.sign(signing_key)?;
-        database.writer.write(Box::new(peer_node)).await?;
+
+        let mut index = String::new();
+        let val = serde_json::from_str(&peer_node._json.clone().unwrap())?;
+        extract_json(&val, &mut index)?;
+        let peer_writer = PeerWriter {
+            node: peer_node,
+            index,
+        };
+
+        database.writer.write(Box::new(peer_writer)).await?;
     }
 
     //init allowed_peer entity
@@ -685,6 +696,49 @@ pub async fn init_allowed_peers(
     }
 
     Ok(())
+}
+
+//Initialised Peers needs to be inserted with the ftse index, otherwise it is not possible to update their name without getting ans horrible:'database disk image is malformed' error
+pub struct PeerWriter {
+    pub node: Node,
+    pub index: String,
+}
+impl Writeable for PeerWriter {
+    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+        let mut insert_stmt = conn.prepare_cached(
+            "INSERT INTO _node ( 
+                        id,
+                        room_id,
+                        cdate,
+                        mdate,
+                        _entity,
+                        _json,
+                        _binary,
+                        verifying_key,
+                        _signature
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )",
+        )?;
+        let rowid = insert_stmt.insert((
+            &self.node.id,
+            &self.node.room_id,
+            &self.node.cdate,
+            &self.node.mdate,
+            &self.node._entity,
+            &self.node._json,
+            &self.node._binary,
+            &self.node.verifying_key,
+            &self.node._signature,
+        ))?;
+        static UPDATE_FTS_QUERY: &str = "INSERT INTO _node_fts (rowid, text) VALUES (?, ?)";
+
+        if !self.index.is_empty() {
+            let mut insert_fts_stmt = conn.prepare_cached(UPDATE_FTS_QUERY)?;
+            insert_fts_stmt.execute((rowid, &self.index))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
