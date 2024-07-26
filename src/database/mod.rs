@@ -16,7 +16,7 @@ pub mod sqlite_database;
 pub mod system_entities;
 use std::collections::HashMap;
 
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -98,6 +98,7 @@ impl ResultParser {
     }
 }
 
+#[derive(Serialize)]
 pub struct DataModification {
     pub rooms: HashMap<String, HashMap<String, Vec<i64>>>,
 }

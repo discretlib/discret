@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 #[tokio::main]
 async fn main() {
+    println!("{}", zero_uid());
     //define a datamodel
     let model = "{
         Chat{
@@ -24,7 +25,7 @@ async fn main() {
     let path: PathBuf = "test_data".into(); //where data is stored
 
     //value used to derives all necessary secrets
-    let key_material = derive_pass_phrase("my login", "my password");
+    let key_material = derive_pass_phrase("my logisn", "my password");
 
     //start the discret application
     let app = Discret::new(

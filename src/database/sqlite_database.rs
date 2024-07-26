@@ -48,11 +48,11 @@ pub fn create_connection(
     enable_memory_security: bool,
 ) -> Result<Connection> {
     let mut flags = rusqlite::OpenFlags::empty();
-    flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE);
     flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
+    flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE);
 
     //Don't follow unix symbolic link
-    flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW);
+    // flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW);
 
     //Disable mutex so a single connection can only be used by one thread.
     //
@@ -185,6 +185,14 @@ impl Database {
         write_buffer_size: usize,
         enable_memory_security: bool,
     ) -> Result<Self> {
+        let writer = BufferedDatabaseWriter::start(
+            write_buffer_size,
+            path,
+            secret,
+            write_cache_size_in_kb,
+            enable_memory_security,
+        )?;
+
         let reader = DatabaseReader::start(
             path,
             secret,
@@ -193,13 +201,6 @@ impl Database {
             enable_memory_security,
         )?;
 
-        let writer = BufferedDatabaseWriter::start(
-            write_buffer_size,
-            path,
-            secret,
-            write_cache_size_in_kb,
-            enable_memory_security,
-        )?;
         Ok(Database { reader, writer })
     }
 }
@@ -231,7 +232,7 @@ impl DatabaseReader {
             //        - the cleanup process at the beginning of some tests (see graph_database tests)
             //        - the rapid creation of several instance of the connection
             //
-            let ten_millis = time::Duration::from_millis(20);
+            let ten_millis = time::Duration::from_millis(50);
             thread::sleep(ten_millis);
             let conn =
                 create_connection(path, secret, cache_size_in_kb, enable_memory_security).unwrap();

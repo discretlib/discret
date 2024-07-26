@@ -300,7 +300,6 @@ impl Discret {
 
     ///
     /// Create an invitation
-    /// num_use indicate the number of time it can be used before beiing discarded
     ///   
     pub async fn invite(&self, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<u8>>>();
@@ -338,8 +337,8 @@ impl Discret {
     }
 
     ///
-    /// This special room is used internally to store system data
-    /// you can use it to query and update the sys.* entities
+    /// This special room is used internally to store system data.
+    /// you are allowed to used it to store any kind of private data that will only be synchronized with your devices.
     ///
     pub fn private_room(&self) -> String {
         base64_encode(&self.private_room_id)
@@ -371,7 +370,7 @@ impl Discret {
     }
 
     ///
-    /// Provide a JSON representation of the datamode  
+    /// Provide a JSON representation of the datamodel  
     ///
     /// the JSON contains the model plain text along with the internal datamodel representation
     ///
