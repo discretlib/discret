@@ -401,7 +401,7 @@ pub fn load_user_from_json(user_value: &serde_json::Value) -> Result<User> {
     let enabled = user_map.get("enabled").unwrap().as_bool().unwrap();
     let verifying_key = base64_decode(
         user_map
-            .get("verifying_key")
+            .get("verif_key")
             .unwrap()
             .as_str()
             .unwrap()

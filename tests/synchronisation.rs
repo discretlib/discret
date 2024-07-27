@@ -257,12 +257,15 @@ async fn invites() {
         .await
         .unwrap();
 
+    println!("inviter {}", discret1.verifying_key());
+
     let key_material = random32();
     let discret2: Discret = Discret::new(model, app_name, &key_material, path, config.clone())
         .await
         .unwrap();
 
     discret2.accept_invite(invite).await.unwrap();
+    println!("Accept Invite {}", discret2.verifying_key());
 
     let new_room = room_id;
 

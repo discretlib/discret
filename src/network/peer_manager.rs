@@ -392,6 +392,7 @@ impl PeerManager {
                             self.local_circuit.insert(circuit_id);
                         }
                         let address = SocketAddr::new(address.ip(), port);
+
                         let _ = self
                             .endpoint
                             .sender
@@ -564,15 +565,11 @@ impl PeerManager {
                             return Ok(token_type.clone());
                         }
                     }
-                    TokenType::OwnedInvite(owned) => {
-                        if key.eq(&owned.id.to_vec()) {
-                            return Ok(token_type.clone());
-                        }
+                    TokenType::OwnedInvite(_) => {
+                        return Ok(token_type.clone());
                     }
-                    TokenType::Invite(invite) => {
-                        if key.eq(&invite.invite_id.to_vec()) {
-                            return Ok(token_type.clone());
-                        }
+                    TokenType::Invite(_) => {
+                        return Ok(token_type.clone());
                     }
                 }
             }

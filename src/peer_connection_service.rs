@@ -97,6 +97,7 @@ impl PeerConnectionService {
             logs.clone(),
             configuration.parallelism + 1,
             buffer_size as usize,
+            &verifying_key,
         )
         .await?;
 
@@ -258,8 +259,8 @@ impl PeerConnectionService {
                 let circuit_id =
                     PeerManager::circuit_id(conn_info.endpoint_id, conn_info.remote_id);
 
-                let token =
-                    peer_manager.get_token_type(&conn_info.meeting_token, &conn_info.identifier)?;
+                let token = peer_manager
+                    .get_token_type(&conn_info.meeting_token, &conn_info.peer_verifying_key)?;
 
                 if let Some(conn) = connection {
                     peer_manager.add_connection(

@@ -1024,7 +1024,7 @@ impl RoomAuthorisations {
                 room_id
                 admin (order_by(mdate desc)) {
                     mdate
-                    verifying_key
+                    verif_key
                     enabled
                 }
                
@@ -1039,12 +1039,12 @@ impl RoomAuthorisations {
                     }
                     users(order_by(mdate desc)){
                         mdate
-                        verifying_key
+                        verif_key
                         enabled
                     }
                     user_admin (order_by(mdate desc)) {
                         mdate
-                        verifying_key
+                        verif_key
                         enabled
                     }
                 }

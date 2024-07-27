@@ -19,7 +19,7 @@ pub struct ConnectionInfo {
     pub remote_id: Uid,
     pub conn_id: Uid,
     pub meeting_token: MeetingToken,
-    pub identifier: Vec<u8>,
+    pub peer_verifying_key: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
