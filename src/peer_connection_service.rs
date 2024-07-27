@@ -72,7 +72,7 @@ pub struct PeerConnectionService {
 impl PeerConnectionService {
     pub async fn start(
         app_name: String,
-        verifying_key: Vec<u8>,
+        local_verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
         private_room_id: Uid,
         db: GraphDatabaseService,
@@ -88,8 +88,6 @@ impl PeerConnectionService {
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
-        let self_peer = db.get_peer_node(verifying_key.clone()).await?.unwrap();
-
         let buffer_size = configuration.max_object_size_in_kb * 1024 * 2;
 
         let endpoint = DiscretEndpoint::start(
@@ -97,7 +95,7 @@ impl PeerConnectionService {
             logs.clone(),
             configuration.parallelism + 1,
             buffer_size as usize,
-            &verifying_key,
+            &local_verifying_key,
         )
         .await?;
 
@@ -125,7 +123,7 @@ impl PeerConnectionService {
             logs.clone(),
             verify_service.clone(),
             private_room_id,
-            verifying_key.clone(),
+            local_verifying_key.clone(),
             meeting_secret,
         )
         .await?;
@@ -164,7 +162,7 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 let err = Self::process_peer_message(
                                     msg,
-                                    &self_peer,
+                                    local_verifying_key.clone(),
                                     &mut peer_manager,
                                     &db,
                                     &events,
@@ -234,11 +232,11 @@ impl PeerConnectionService {
 
     async fn process_peer_message(
         msg: PeerConnectionMessage,
-        self_peer: &Node,
+        local_verifying_key: Vec<u8>,
         peer_manager: &mut PeerManager,
         db: &GraphDatabaseService,
         event_service: &EventService,
-        logs: &LogService,
+        log_service: &LogService,
         peer_service: &PeerConnectionService,
         lock_service: &RoomLockService,
         verify_service: &SignatureVerificationService,
@@ -248,7 +246,7 @@ impl PeerConnectionService {
         match msg {
             PeerConnectionMessage::NewConnection(
                 connection,
-                conn_info,
+                connection_info,
                 answer_sender,
                 answer_receiver,
                 query_sender,
@@ -257,56 +255,58 @@ impl PeerConnectionService {
                 event_receiver,
             ) => {
                 let circuit_id =
-                    PeerManager::circuit_id(conn_info.endpoint_id, conn_info.remote_id);
+                    PeerManager::circuit_id(connection_info.endpoint_id, connection_info.remote_id);
 
-                let token = peer_manager
-                    .get_token_type(&conn_info.meeting_token, &conn_info.peer_verifying_key)?;
+                let token_type = peer_manager.get_token_type(
+                    &connection_info.meeting_token,
+                    &connection_info.peer_verifying_key,
+                )?;
 
                 if let Some(conn) = connection {
                     peer_manager.add_connection(
                         circuit_id,
                         conn,
-                        conn_info.conn_id,
-                        conn_info.meeting_token,
+                        connection_info.conn_id,
+                        connection_info.meeting_token,
                     )
                 };
 
-                let verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                let remote_verifying_key: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
                 let conn_ready = Arc::new(AtomicBool::new(true));
 
                 let inbound_query_service = InboundQueryService::start(
                     circuit_id,
-                    conn_info.conn_id,
+                    connection_info.conn_id,
                     RemotePeerHandle {
                         db: db.clone(),
                         allowed_room: HashSet::new(),
-                        peer: self_peer.clone(),
+                        verifying_key: local_verifying_key.clone(),
                         reply: answer_sender,
                     },
                     query_receiver,
-                    logs.clone(),
+                    log_service.clone(),
                     peer_service.clone(),
-                    verifying_key.clone(),
+                    remote_verifying_key.clone(),
                     conn_ready.clone(),
                 );
 
                 let query_service =
-                    QueryService::start(query_sender, answer_receiver, logs.clone());
+                    QueryService::start(query_sender, answer_receiver, log_service.clone());
 
                 LocalPeerService::start(
                     event_receiver,
                     local_event_broadcast,
                     circuit_id,
-                    conn_info.clone(),
-                    self_peer.verifying_key.clone(),
-                    token,
-                    verifying_key.clone(),
+                    connection_info.clone(),
+                    local_verifying_key.clone(),
+                    token_type,
+                    remote_verifying_key.clone(),
                     conn_ready,
                     db.clone(),
                     lock_service.clone(),
                     query_service,
                     event_sender.clone(),
-                    logs.clone(),
+                    log_service.clone(),
                     peer_service.clone(),
                     event_service.clone(),
                     inbound_query_service,
@@ -344,7 +344,7 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::InviteAccepted(token, peer) => {
                 if let Err(e) = peer_manager.invite_accepted(token, peer).await {
-                    logs.error(
+                    log_service.error(
                         "PeerConnectionMessage::InviteAccepted".to_string(),
                         crate::Error::from(e),
                     );
@@ -365,7 +365,7 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::SendAnnounce() => {
                 if let Err(e) = peer_manager.send_annouces().await {
-                    logs.error(
+                    log_service.error(
                         "PeerConnectionMessage::SendAnnounce".to_string(),
                         crate::Error::from(e),
                     );

@@ -230,7 +230,7 @@ impl LocalPeerService {
         mut local_event: broadcast::Receiver<LocalEvent>,
         circuit_id: [u8; 32],
         connection_info: ConnectionInfo,
-        local_key: Vec<u8>,
+        local_verifying_key: Vec<u8>,
         token_type: TokenType,
         remote_verifying_key: Arc<Mutex<Vec<u8>>>,
         conn_ready: Arc<AtomicBool>,
@@ -249,7 +249,7 @@ impl LocalPeerService {
         tokio::spawn(async move {
             match Self::initialise_connection(
                 &connection_info,
-                &local_key,
+                &local_verifying_key,
                 token_type,
                 &conn_ready,
                 &query_service,

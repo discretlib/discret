@@ -14,7 +14,7 @@ use tokio::sync::{
 
 use crate::{
     base64_encode,
-    database::{graph_database::GraphDatabaseService, node::Node},
+    database::graph_database::GraphDatabaseService,
     log_service::LogService,
     peer_connection_service::PeerConnectionService,
     security::{HardwareFingerprint, Uid},
@@ -85,12 +85,17 @@ impl InboundQueryService {
         match msg.query {
             Query::ProveIdentity(challenge) => {
                 let res = peer.db.sign(challenge).await;
+                let self_peer = peer
+                    .db
+                    .get_peer_node(peer.verifying_key.clone())
+                    .await?
+                    .unwrap();
                 peer.send(
                     msg.id,
                     true,
                     true,
                     IdentityAnswer {
-                        peer: peer.peer.clone(),
+                        peer: self_peer,
                         chall_signature: res.1,
                     },
                 )
@@ -100,7 +105,7 @@ impl InboundQueryService {
             Query::HardwareFingerprint() => {
                 let key = verifying_key.lock().await;
                 if !key.is_empty() {
-                    if key.eq(&peer.peer.verifying_key) {
+                    if key.eq(&peer.verifying_key) {
                         peer.send(msg.id, true, true, fingerprint.clone()).await?;
                     } else {
                         return Err(crate::Error::SecurityViolation(format!(
@@ -466,7 +471,7 @@ impl InboundQueryService {
 pub struct RemotePeerHandle {
     pub allowed_room: HashSet<Uid>,
     pub db: GraphDatabaseService,
-    pub peer: Node,
+    pub verifying_key: Vec<u8>,
     pub reply: mpsc::Sender<Answer>,
 }
 impl RemotePeerHandle {
