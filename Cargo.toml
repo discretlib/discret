@@ -9,14 +9,6 @@ edition = "2021"
 
 
 [dependencies]
-## database 
-# rusqlite = { version = "0.31.0", features = [
-#     "bundled",
-#     "backup",
-#     "hooks",
-#     "window",
-# ] }
-
 rusqlite = { version = "0.31.0", features = [
     "bundled-sqlcipher-vendored-openssl",
     "backup",
