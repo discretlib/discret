@@ -1,8 +1,7 @@
 //! Discret: Create local first, peer to peer application (P2P) using a GraphQL inspired API
 //!
 //! Discret hides the complexity of peer to peer networks and reduces it to a database synchronisation problem.
-//! Compared to traditional application, most of the new complexity resides in the Room rights managements.
-//! Depending on the rights you choose, Rooms can have many different use cases.
+//! Compared to traditional application, most of the new complexity resides in the rights managements.
 //!
 //! Creating an application requires a few steps
 //! - Create a datamodel that contains the entity that will be synchronized
