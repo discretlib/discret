@@ -5,13 +5,15 @@ use discret::{
 };
 use serde::Deserialize;
 
+//application unique identifier
+const APPLICATION_KEY: &str = "github.com/discretlib/rust_example_simple_chat";
+
 #[tokio::main]
 async fn main() {
-    println!("{}", zero_uid());
     //define a datamodel
-    let model = "{
-        Chat{
-            message:String
+    let model = "chat {
+        Message{
+            content:String
         }
     }";
     //this struct is used to parse the query result
@@ -19,18 +21,18 @@ async fn main() {
     struct Chat {
         pub id: String,
         pub mdate: i64,
-        pub message: String,
+        pub content: String,
     }
 
     let path: PathBuf = "test_data".into(); //where data is stored
 
-    //value used to derives all necessary secrets
-    let key_material = derive_pass_phrase("my logisn", "my password");
+    //used to derives all necessary secrets
+    let key_material: [u8; 32] = derive_pass_phrase("my login", "my password");
 
     //start the discret application
-    let app = Discret::new(
+    let app: Discret = Discret::new(
         model,
-        "example_chat",
+        APPLICATION_KEY,
         &key_material,
         path,
         Configuration::default(),
@@ -40,34 +42,33 @@ async fn main() {
 
     //listen for events
     let mut events = app.subscribe_for_events().await;
-    let eapp = app.clone();
+    let event_app: Discret = app.clone();
     tokio::spawn(async move {
         let mut last_date = 0;
         let mut last_id = zero_uid();
 
-        //data will is inserted in your private room
-        let private_room = eapp.private_room();
+        let private_room: String = event_app.private_room();
         while let Ok(event) = events.recv().await {
             match event {
+                //triggered when data is modified
                 discret::Event::DataChanged(_) => {
-                    //some data was modified
                     let mut param = Parameters::new();
                     param.add("mdate", last_date).unwrap();
                     param.add("id", last_id.clone()).unwrap();
                     param.add("room_id", private_room.clone()).unwrap();
 
-                    //get the latest data, the result is a string in the JSON format
-                    let result = eapp
+                    //get the latest data, the result is in the JSON format
+                    let result: String = event_app
                         .query(
                             "query {
-                                res: Chat(
+                                res: chat.Message(
                                     order_by(mdate asc, id asc), 
                                     after($mdate, $id),
                                     room_id = $room_id
                                 ) {
                                         id
                                         mdate
-                                        message
+                                        content
                                 }
                             }",
                             Some(param),
@@ -79,16 +80,16 @@ async fn main() {
                     for msg in res {
                         last_date = msg.mdate;
                         last_id = msg.id;
-                        println!("you said: {}", msg.message);
+                        println!("you said: {}", msg.content);
                     }
                 }
-                _ => {} //ignore other e vents
+                _ => {} //ignores other events
             }
         }
     });
 
     //data is inserted in your private room
-    let private_room = app.private_room();
+    let private_room: String = app.private_room();
     let stdin = io::stdin();
     let mut line = String::new();
     println!("{}", "Write Something!");
@@ -98,17 +99,17 @@ async fn main() {
             break;
         }
         line.pop();
-        let mut param = Parameters::new();
-        param.add("message", line.clone()).unwrap();
-        param.add("room_id", private_room.clone()).unwrap();
+        let mut params = Parameters::new();
+        params.add("message", line.clone()).unwrap();
+        params.add("room_id", private_room.clone()).unwrap();
         app.mutate(
             "mutate {
-                Chat{
+                chat.Message {
                     room_id:$room_id 
-                    message: $message 
+                    content: $message 
                 }
             }",
-            Some(param),
+            Some(params),
         )
         .await
         .unwrap();

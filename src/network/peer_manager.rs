@@ -41,6 +41,7 @@ const REASON_CONN_ELECTION: u16 = 1;
 //the remote peer does not hav to knwow why the connection is closed
 pub const REASON_UNKNOWN: u16 = 2;
 
+pub const MAX_MESSAGE_SIZE: usize = 4096;
 //with a 7 byte token, fits into a 4096 message
 pub const MAX_ANNOUNCE_TOKENS: usize = 512;
 

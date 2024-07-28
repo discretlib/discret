@@ -87,7 +87,7 @@ async fn beacon_ipv4_connect() {
         beacons: beacons_def,
         ..Default::default()
     };
-    let _ = Beacon::start(port, port + 1, der, pks_der, LogService::start(), 10, 4096).unwrap();
+    let _ = Beacon::start(port, port + 1, der, pks_der, LogService::start(), 10).unwrap();
 
     let _: Discret = Discret::new(model, "hello", &key_material, path, config.clone())
         .await
@@ -144,7 +144,7 @@ async fn beacon_ipv6_connect() {
         beacons: beacons_def,
         ..Default::default()
     };
-    let _ = Beacon::start(port - 1, port, der, pks_der, LogService::start(), 10, 4096).unwrap();
+    let _ = Beacon::start(port - 1, port, der, pks_der, LogService::start(), 10).unwrap();
 
     let _: Discret = Discret::new(model, "hello", &key_material, path, config.clone())
         .await
@@ -386,7 +386,7 @@ async fn invites_beacon_ipv6() {
         beacons: beacons_def,
         ..Default::default()
     };
-    let _ = Beacon::start(port - 1, port, der, pks_der, LogService::start(), 10, 4096).unwrap();
+    let _ = Beacon::start(port - 1, port, der, pks_der, LogService::start(), 10).unwrap();
 
     let discret1: Discret =
         Discret::new(model, app_name, &key_material, path.clone(), config.clone())

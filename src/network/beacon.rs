@@ -14,7 +14,10 @@ use tokio::{
 
 use crate::{log_service::LogService, security::MeetingToken};
 
-use super::{shared_buffers::SharedBuffers, Announce, AnnounceHeader, ALPN_QUIC_HTTP};
+use super::{
+    peer_manager::MAX_MESSAGE_SIZE, shared_buffers::SharedBuffers, Announce, AnnounceHeader,
+    ALPN_QUIC_HTTP,
+};
 
 #[derive(Serialize, Deserialize)]
 pub enum BeaconMessage {
@@ -30,7 +33,6 @@ impl Beacon {
         pks_der: Vec<u8>,
         log_service: LogService,
         num_buffers: usize,
-        max_buffer_size: usize,
     ) -> Result<Self, super::Error> {
         let input_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
 
@@ -40,7 +42,7 @@ impl Beacon {
             ipv4_endpoint,
             log_service.clone(),
             input_buffers.clone(),
-            max_buffer_size,
+            MAX_MESSAGE_SIZE,
         );
         let ipv6_addr: SocketAddr = format!("[::]:{}", ipv6_port).parse()?;
         let ipv6_endpoint = Self::enpoint(ipv6_addr, der, pks_der)?;
@@ -48,7 +50,7 @@ impl Beacon {
             ipv6_endpoint,
             log_service.clone(),
             input_buffers,
-            max_buffer_size,
+            MAX_MESSAGE_SIZE,
         );
         Ok(Self {})
     }
