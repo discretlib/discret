@@ -22,7 +22,7 @@ use crate::{
     },
     log_service::LogService,
     network::endpoint::EndpointMessage,
-    security::{random32, HardwareFingerprint, MeetingSecret, MeetingToken},
+    security::{HardwareFingerprint, MeetingSecret, MeetingToken},
     signature_verification_service::SignatureVerificationService,
     Uid,
 };
@@ -55,8 +55,8 @@ pub struct BeaconInfo {
 
 pub struct MulticastInfo {
     sender: mpsc::Sender<MulticastMessage>,
-    probe_value: [u8; 32],
-    nonce: [u8; 32],
+    // probe_value: [u8; 32],
+    // nonce: [u8; 32],
     header: AnnounceHeader,
 }
 
@@ -65,7 +65,7 @@ pub struct PeerManager {
     endpoint: DiscretEndpoint,
 
     private_room_id: Uid,
-    verifying_key: Vec<u8>,
+    //  verifying_key: Vec<u8>,
     meeting_secret: MeetingSecret,
 
     multicast: Option<MulticastInfo>,
@@ -95,7 +95,7 @@ impl PeerManager {
         logs: LogService,
         verify_service: SignatureVerificationService,
         private_room_id: Uid,
-        verifying_key: Vec<u8>,
+        //  verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
     ) -> Result<Self, crate::Error> {
         let allowed_peers = db.get_allowed_peers(private_room_id).await?;
@@ -122,8 +122,8 @@ impl PeerManager {
         }
 
         let multicast = if let Some(multicast_discovery) = multicast_discovery {
-            let probe_value = random32();
-            let nonce = random32();
+            // let probe_value = random32();
+            // let nonce = random32();
             let mut header = AnnounceHeader {
                 endpoint_id: endpoint.id,
                 certificate_hash: endpoint.ipv4_cert_hash,
@@ -134,8 +134,8 @@ impl PeerManager {
 
             Some(MulticastInfo {
                 sender: multicast_discovery,
-                probe_value,
-                nonce,
+                // probe_value,
+                // nonce,
                 header,
             })
         } else {
@@ -146,7 +146,7 @@ impl PeerManager {
             app_name,
             endpoint,
             private_room_id,
-            verifying_key,
+            //   verifying_key,
             meeting_secret,
             multicast,
             allowed_peers,

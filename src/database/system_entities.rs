@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::HashSet;
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
@@ -49,10 +50,10 @@ pub const ENTITY_RIGHT_ENT_SHORT: &str = "0.3";
 pub const PEER_ENT: &str = "sys.Peer";
 pub const PEER_ENT_SHORT: &str = "0.4";
 
-pub const ALLOWED_PEER_ENT: &str = "sys.AllowedPeer";
+//pub const ALLOWED_PEER_ENT: &str = "sys.AllowedPeer";
 pub const ALLOWED_PEER_ENT_SHORT: &str = "0.5";
 
-pub const ALLOWED_HARDWARE_ENT: &str = "sys.AllowedHardware";
+//pub const ALLOWED_HARDWARE_ENT: &str = "sys.AllowedHardware";
 pub const ALLOWED_HARDWARE_ENT_SHORT: &str = "0.6";
 
 //name of the system fields
@@ -461,25 +462,26 @@ impl Writeable for PeerNodes {
 pub enum Status {
     Enabled,
     Pending,
-    Disabled,
+    // Disabled,
 }
 impl Status {
     pub fn value(&self) -> &str {
         match self {
             Status::Enabled => STATUS_ENABLED,
             Status::Pending => STATUS_PENDING,
-            Status::Disabled => STATUS_DISABLED,
+            // Status::Disabled => STATUS_DISABLED,
         }
     }
 }
 
 pub const STATUS_ENABLED: &str = "enabled";
 pub const STATUS_PENDING: &str = "pending";
-pub const STATUS_DISABLED: &str = "disabled";
+//pub const STATUS_DISABLED: &str = "disabled";
+
 #[derive(Deserialize, Clone)]
 pub struct AllowedPeer {
     pub peer: Peer,
-    pub status: String,
+    //  pub status: String,
     pub meeting_token: String,
 }
 impl AllowedPeer {
@@ -594,7 +596,7 @@ impl AllowedPeer {
 
         Ok(Self {
             peer: peer_obj,
-            status: status.value().to_string(),
+            // status: status.value().to_string(),
             meeting_token: meeting_token.to_string(),
         })
     }

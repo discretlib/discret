@@ -1106,7 +1106,7 @@ fn get_group_by(fields: &Vec<QueryField>, t: usize) -> String {
 
 #[derive(Debug)]
 pub struct PreparedQueries {
-    pub name: String,
+    //  pub name: String,
     pub sql_queries: Vec<SingleQuery>,
 }
 impl PreparedQueries {
@@ -1116,7 +1116,7 @@ impl PreparedQueries {
             sql_queries.push(SingleQuery::build(query)?);
         }
         Ok(Self {
-            name: String::from(&parser.name),
+            //   name: String::from(&parser.name),
             sql_queries,
         })
     }

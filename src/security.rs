@@ -51,6 +51,8 @@ const KEY_TYPE_ED_2519: u8 = 1;
 ///
 /// import a existing signing key, using the first byte flag to detect the signature scheme
 ///
+///
+#[cfg(test)]
 pub fn import_signing_key(keypair: &[u8]) -> Result<impl SigningKey, Error> {
     if keypair[0] != KEY_TYPE_ED_2519 {
         return Err(Error::InvalidKeyType(KEY_TYPE_ED_2519));
@@ -177,7 +179,7 @@ pub trait VerifyingKey {
     ///
     /// Export the verifying key, adding a flag to detect the encryption scheme
     ///
-    fn export(&self) -> Vec<u8>;
+    //  fn export(&self) -> Vec<u8>;
 
     ///
     /// verify the signature against the provided message
@@ -192,12 +194,12 @@ pub struct Ed2519VerifyingKey {
     pub veriying_key: ed25519_dalek::VerifyingKey,
 }
 impl VerifyingKey for Ed2519VerifyingKey {
-    fn export(&self) -> Vec<u8> {
-        let mut export = vec![KEY_TYPE_ED_2519];
-        let keyp = self.veriying_key.to_bytes();
-        export.extend(keyp);
-        export
-    }
+    // fn export(&self) -> Vec<u8> {
+    //     let mut export = vec![KEY_TYPE_ED_2519];
+    //     let keyp = self.veriying_key.to_bytes();
+    //     export.extend(keyp);
+    //     export
+    // }
 
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), Error> {
         if signature.len() != 64 {

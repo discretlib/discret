@@ -1762,7 +1762,6 @@ mod tests {
         #[derive(Deserialize)]
         struct PeerId {
             pub id: String,
-            pub name: String,
         }
 
         let mut query_result = ResultParser::new(&res).unwrap();
@@ -1780,5 +1779,88 @@ mod tests {
         param.add("id", my_id).unwrap();
         param.add("name", "hello world".to_string()).unwrap();
         app.mutate(mutate, Some(param)).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn result_parser() {
+        init_database_path();
+        let secret = random32();
+
+        let data_model = "{
+            AllFieldType{
+                a_string: String,
+                a_float: Float,
+                a_int: Integer,
+                a_bool: Boolean,
+            }
+        }";
+        #[derive(Deserialize)]
+        struct AllFieldType {
+            a_string: String,
+            a_float: f64,
+            a_int: i64,
+            a_bool: bool,
+        }
+
+        let path: PathBuf = DATA_PATH.into();
+        let (app, _, _) = GraphDatabaseService::start(
+            "app",
+            &data_model,
+            &secret,
+            &random32(),
+            path,
+            &Configuration::default(),
+            EventService::new(),
+            LogService::start(),
+        )
+        .await
+        .unwrap();
+
+        let mutate = r#"mutate {
+            AllFieldType {
+                a_string: $a_string
+                a_float: $a_float
+                a_int: $a_int
+                a_bool: $a_bool
+            }
+          }"#;
+        let a_string = "Some String";
+        let a_float: f64 = 1.2;
+        let a_int: i64 = 45;
+        let a_bool = false;
+        let mut param = Parameters::new();
+        param.add("a_string", a_string.to_string()).unwrap();
+        param.add("a_float", a_float).unwrap();
+        param.add("a_int", a_int).unwrap();
+        param.add("a_bool", a_bool).unwrap();
+
+        let result = app.mutate(mutate, Some(param)).await.unwrap();
+
+        let mut query_result = ResultParser::new(&result).unwrap();
+        let all: AllFieldType = query_result.take_object("AllFieldType").unwrap();
+        assert_eq!(all.a_string, a_string);
+        assert_eq!(all.a_float, a_float);
+        assert_eq!(all.a_int, a_int);
+        assert_eq!(all.a_bool, a_bool);
+
+        let query = r#"query {
+            AllFieldType {
+                a_string
+                a_float
+                a_int
+                a_bool
+            }
+          }"#;
+
+        let result = app.query(query, None).await.unwrap();
+        // println!("{}", result);
+
+        let mut query_result = ResultParser::new(&result).unwrap();
+        let all_list: Vec<AllFieldType> = query_result.take_array("AllFieldType").unwrap();
+        let all = &all_list[0];
+        assert_eq!(all.a_string, a_string);
+        assert_eq!(all.a_float, a_float);
+        assert_eq!(all.a_int, a_int);
+        assert_eq!(all.a_bool, a_bool);
     }
 }

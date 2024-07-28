@@ -35,7 +35,7 @@
 //!
 //!
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
+//#![allow(dead_code)]
 
 mod configuration;
 mod database;
@@ -187,6 +187,10 @@ pub fn database_exists(
     GraphDatabaseService::database_exists(app_key, key_material, data_folder)
 }
 
+///
+/// The main entry point for the Discret Library
+///
+///
 #[derive(Clone)]
 pub struct Discret {
     db: GraphDatabaseService,
@@ -405,15 +409,15 @@ lazy_static::lazy_static! {
     Arc::new(Mutex::new(BlockingRuntime::new()));
 }
 ///
+/// The main entry point for the Discret Library, with a blocking API
 /// Provides a blocking API
-///
 ///
 #[derive(Clone)]
 pub struct DiscretBlocking {
     discret: Discret,
 }
 impl DiscretBlocking {
-    fn new(
+    pub fn new(
         datamodel: &str,
         app_key: &str,
         key_material: &[u8; 32],
@@ -439,11 +443,7 @@ impl DiscretBlocking {
             .block_on(self.discret.delete(d, p))
     }
 
-    pub async fn mutate(
-        &self,
-        m: &str,
-        p: Option<Parameters>,
-    ) -> std::result::Result<String, Error> {
+    pub fn mutate(&self, m: &str, p: Option<Parameters>) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
@@ -451,11 +451,7 @@ impl DiscretBlocking {
             .block_on(self.discret.mutate(m, p))
     }
 
-    pub async fn query(
-        &self,
-        q: &str,
-        p: Option<Parameters>,
-    ) -> std::result::Result<String, Error> {
+    pub fn query(&self, q: &str, p: Option<Parameters>) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
@@ -487,7 +483,7 @@ impl DiscretBlocking {
             .block_on(self.discret.data_model())
     }
 
-    pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
+    pub fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()
@@ -496,7 +492,7 @@ impl DiscretBlocking {
             .block_on(self.discret.subscribe_for_events())
     }
 
-    pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
+    pub fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
         TOKIO_BLOCKING
             .lock()
             .unwrap()

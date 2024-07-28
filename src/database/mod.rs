@@ -27,7 +27,7 @@ pub const VEC_OVERHEAD: u64 = 4;
 pub const MESSAGE_OVERHEAD: usize = 16;
 
 ///
-/// helper structure to parse the query result
+/// Helper structure to parse the JSON results
 ///
 pub struct ResultParser {
     parsed: Value,
@@ -38,7 +38,8 @@ impl ResultParser {
         Ok(Self { parsed })
     }
     ///
-    /// consume the array found for the field and convert it to an array of the generic type T
+    /// consumes the array found for the field and convert it to an array of the generic type T
+    /// used to parse **query** results
     ///
     pub fn take_array<T: DeserializeOwned>(
         &mut self,
@@ -73,7 +74,8 @@ impl ResultParser {
     }
 
     ///
-    /// consume the object found for the field and convert it to an object of the generic type T
+    /// Consumes the object found for the field and convert it to an object of the generic type T
+    /// used to parse **Mutate** query results
     ///
     pub fn take_object<T: DeserializeOwned>(
         &mut self,

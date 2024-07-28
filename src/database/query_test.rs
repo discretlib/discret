@@ -2035,7 +2035,7 @@ mod tests {
         #[derive(Deserialize)]
         struct Person {
             pub name: String,
-            pub comment: String,
+            //  pub comment: String,
         }
 
         let mut query_result = ResultParser::new(&result).unwrap();

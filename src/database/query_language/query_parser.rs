@@ -123,7 +123,7 @@ pub struct ParsedOrderBy{
 pub struct OrderBy {
     pub name: String,
     pub direction: Direction, 
-    pub is_aggregate: bool,
+   // pub is_aggregate: bool,
     pub is_selected: bool,
     pub field: Field
 }
@@ -1109,7 +1109,7 @@ impl QueryParser {
         parsed_order: ParsedOrderBy
     ) -> Result<OrderBy, Error> {
         
-        let mut is_aggregate = false;
+   //     let mut is_aggregate = false;
         let mut is_entity_field = false;
         let mut is_selected = false;
 
@@ -1129,7 +1129,7 @@ impl QueryParser {
                             is_selected = true;
                             match e.field_type {
                                 QueryFieldType::EntityQuery(_, _) | QueryFieldType::EntityArrayQuery(_, _)=> is_entity_field = true,
-                                QueryFieldType::Aggregate(_) => is_aggregate = true,
+                                QueryFieldType::Aggregate(_) =>  {},// is_aggregate = true,
                                 QueryFieldType::Scalar | QueryFieldType::Binary | QueryFieldType::Json=> {},
                             }
                             &e.field
@@ -1146,7 +1146,7 @@ impl QueryParser {
         Ok(OrderBy { 
             name: parsed_order.name,
             direction:parsed_order.direction,
-            is_aggregate,
+         //   is_aggregate,
             is_selected,
             field: field.clone()
         })       

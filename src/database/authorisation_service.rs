@@ -48,7 +48,7 @@ pub enum AuthorisationMessage {
         Sender<Result<()>>,
     ),
     UserForRoom(Uid, Sender<Result<HashSet<Vec<u8>>>>),
-    ValidatePeerNodesRequest(Uid, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
+    // ValidatePeerNodesRequest(Uid, Vec<Vec<u8>>, Sender<Result<Vec<Vec<u8>>>>),
 }
 
 pub struct RoomMutationWriteQuery {
@@ -406,11 +406,9 @@ impl AuthorisationService {
 
             AuthorisationMessage::UserForRoom(room_id, reply) => {
                 let _ = reply.send(auth.user_for_room(room_id));
-            }
-
-            AuthorisationMessage::ValidatePeerNodesRequest(room_id, keys, reply) => {
-                let _ = reply.send(auth.validate_peer_nodes_request(room_id, keys));
-            }
+            } // AuthorisationMessage::ValidatePeerNodesRequest(room_id, keys, reply) => {
+              //     let _ = reply.send(auth.validate_peer_nodes_request(room_id, keys));
+              // }
         }
     }
 

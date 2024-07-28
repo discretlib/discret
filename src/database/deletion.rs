@@ -16,7 +16,7 @@ use super::{
 pub struct NodeDelete {
     pub node: Node,
     pub name: String,
-    pub short_name: String,
+    //   pub short_name: String,
     pub date: i64,
 }
 #[derive(Debug)]
@@ -64,7 +64,7 @@ impl DeletionQuery {
                     deletion_query.nodes.push(NodeDelete {
                         node: *node,
                         name: del.name.clone(),
-                        short_name: del.short_name.clone(),
+                        //  short_name: del.short_name.clone(),
                         date,
                     })
                 } else {

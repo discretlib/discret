@@ -50,7 +50,7 @@ pub struct DiscretEndpoint {
     pub sender: mpsc::Sender<EndpointMessage>,
     pub ipv4_port: u16,
     pub ipv4_cert_hash: [u8; 32],
-    pub ipv6_port: Option<u16>,
+    //  pub ipv6_port: Option<u16>,
     pub ipv6_cert_hash: [u8; 32],
 }
 impl DiscretEndpoint {
@@ -76,7 +76,7 @@ impl DiscretEndpoint {
         let ipv6_cert_hash = hash(cert.cert.der().deref());
         let addr = "[::]:0".parse()?;
         let ipv6_endpoint = build_endpoint(addr, cert, cert_verifier.clone());
-        let (ipv6_endpoint, ipv6_port) = match ipv6_endpoint {
+        let (ipv6_endpoint, _) = match ipv6_endpoint {
             Ok(end) => {
                 let ipv6_port = end.local_addr()?.port();
                 (Some(end), Some(ipv6_port))
@@ -191,7 +191,7 @@ impl DiscretEndpoint {
             sender,
             ipv4_port,
             ipv4_cert_hash,
-            ipv6_port,
+            //    ipv6_port,
             ipv6_cert_hash,
         })
     }

@@ -43,8 +43,6 @@ pub struct Announce {
     pub tokens: Vec<MeetingToken>,
 }
 
-pub const MAX_TOKENS: u8 = 255;
-
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]

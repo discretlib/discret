@@ -8,7 +8,7 @@ use serde_json::Value;
 
 #[derive(Debug)]
 pub struct Variable {
-    name: String,
+    //  name: String,
     var_type: VariableType,
 }
 
@@ -41,7 +41,7 @@ impl Variables {
             self.vars.insert(
                 String::from(name),
                 Variable {
-                    name: String::from(name),
+                    //  name: String::from(name),
                     var_type,
                 },
             );

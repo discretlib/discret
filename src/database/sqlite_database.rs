@@ -315,7 +315,7 @@ impl DatabaseReader {
 }
 
 pub type WriteStmt = Box<dyn Writeable + Send>;
-pub type WriteReplyFn = Box<dyn FnOnce(Result<WriteStmt>) + Send + 'static>;
+//pub type WriteReplyFn = Box<dyn FnOnce(Result<WriteStmt>) + Send + 'static>;
 
 /// Trait use to write content in the database
 ///   returns only rusqlite::Error as it is forbidden to do anything that could fails during the write process

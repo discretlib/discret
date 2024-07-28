@@ -123,7 +123,7 @@ impl PeerConnectionService {
             logs.clone(),
             verify_service.clone(),
             private_room_id,
-            local_verifying_key.clone(),
+            //local_verifying_key.clone(),
             meeting_secret,
         )
         .await?;
