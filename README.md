@@ -8,7 +8,7 @@ Creating an application requires a few steps
 - Create Rooms to manage access rights to the data
 - Add data to the Rooms
 - Create invitation to your rooms and manually send them to who you want via external application like email
-- Once the peer accept the invitaion it will start synchronising data it is allowed to access.
+- Once the peer accept the invitation, it will start synchronizing data it is allowed to access.
 
 More details and tutorials are avalaible in the [documentation site](https://discretlib.github.io/doc/)
 
