@@ -18,12 +18,11 @@ pub const WILDCARD_ENTITY: &str = "*";
 ///
 /// Room is the root of the authorisation model
 ///
-/// Every entity instance are linked to one or more Rooms that defines who can access and modify the data.
+/// Every entity tupples are linked to one Room that defines who can access and modify the data.
 /// During peer to peer synchronisation, Rooms are used to determine which data will be synchronized with whom.
 ///
 /// Room is comprised of a number of authorisation group, each group defines different access rights.
 /// Users can belong to several authorisation group
-///
 ///
 #[derive(Default, Clone, Debug)]
 pub struct Room {

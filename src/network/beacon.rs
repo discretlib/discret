@@ -24,8 +24,14 @@ pub enum BeaconMessage {
     InitiateConnection(AnnounceHeader, SocketAddr, MeetingToken),
 }
 
+///
+/// Provides a Beacon service that allow peers to discover each others on the Internet
+///
 pub struct Beacon {}
 impl Beacon {
+    ///
+    /// starts the service
+    ///
     pub fn start(
         ipv4_port: u16,
         ipv6_port: u16,

@@ -38,7 +38,7 @@ impl ResultParser {
         Ok(Self { parsed })
     }
     ///
-    /// consumes the array found for the field and convert it to an array of the generic type T
+    /// Consumes the array found for the field and convert it to an array of the generic type T
     /// used to parse **query** results
     ///
     pub fn take_array<T: DeserializeOwned>(
@@ -101,6 +101,12 @@ impl ResultParser {
 }
 
 #[derive(Serialize)]
+///
+/// DataModification is the struct sent by the Event::DataChanged event
+/// the room map contains:
+/// - key is the identifier of the *Rooms* that have been modified
+/// - the data contains the modified Entity name and the mutation days (date without hour:minutes:second).
+///
 pub struct DataModification {
     pub rooms: HashMap<String, HashMap<String, Vec<i64>>>,
 }

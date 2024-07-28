@@ -19,14 +19,43 @@ pub enum EventServiceMessage {
     PendingHardware(),
 }
 
+///
+/// The list of events that are sent by Discret
+///
 #[derive(Clone)]
 pub enum Event {
+    ///
+    /// This event is triggered whenever data is modified or inserted. Data is inserted/deleted in batches and this events describes each batch.
+    /// **data_modification** constains a *HashMap*:
+    /// - the key is the identifier of the *Rooms* that have been modified
+    /// - the data contains the modified Entity name and the mutation days (date without hour:minutes:second).
     DataChanged(Arc<DataModification>),
+
+    ///
+    /// This event is triggered when a *Room* is modified.
+    ///
     RoomModified(Arc<Room>),
+
+    /// This event is triggered when a peer has connected successfully to your device.
+    /// - **verifying_key**: the peer verifying key,
+    /// - **date**: the connection date,
+    ///- **connection_id**: the unique identifier of the connection
     PeerConnected(Vec<u8>, i64, String),
+
+    /// This event is triggered when a peer have been disconnected
+    /// - **verifying_key**: the peer verifying key,
+    /// - **date**: the connection date,
+    /// - **connection_id**: the unique identifier of the connection
     PeerDisconnected(Vec<u8>, i64, String),
+
+    /// This event is triggered when a *Room* has been synchronized.
+    /// - **room_id**: the *Room* identifier
     RoomSynchronized(String),
+
+    /// This event is triggered when a new peer is found when synchronising a **Room**.
     PendingPeer(),
+
+    /// This event is triggered when a new device is detected.
     PendingHardware(),
 }
 

@@ -226,10 +226,31 @@ impl Variables {
     }
 }
 
+///
+/// This struct is used to pass parameter to queries
+///
+/// #Example
+/// The query:
+/// ```ignore
+/// {
+///     Person(name: $name){
+///         name
+///         surname
+///     }
+/// }
+/// ```
+/// Requires a parameter $name that will be provided by the following code
+///
+/// ```ignore
+/// let mut param = Parameters::new();
+/// param.add("name", "Alice")?;
+/// ```
 #[derive(Debug)]
 pub struct Parameters {
     pub params: HashMap<String, ParamValue>,
 }
+
+///The traits that allows adding parameters
 pub trait ParametersAdd<T> {
     fn add(&mut self, key: &str, val: T) -> Result<(), Error>;
 }

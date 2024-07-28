@@ -163,7 +163,7 @@ pub struct Configuration {
     /// Enable_memory_security: Prevents memory to be written into swap and zeroise memory after free
     /// When this feature is disabled, locking/unlocking of the memory address only occur for the internal SQLCipher
     /// data structures used to store key material, and cryptographic structures.
-    /// source: https://discuss.zetetic.net/t/what-is-the-purpose-of-pragma-cipher-memory-security/3953
+    /// source: <https://discuss.zetetic.net/t/what-is-the-purpose-of-pragma-cipher-memory-security/3953>
     ///
     /// Disabled by default because of a huge performance impact (about 50%).
     /// Should only be used if you're system requires a "paranoid" level of security.
@@ -191,8 +191,15 @@ impl Default for Configuration {
     }
 }
 
+///
+/// A beacon server
+///
+/// Beacons servers are used to allow peer to discover others on the Internet
+///
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BeaconConfig {
+    /// the server hostname
     pub hostname: String,
+    /// the hash of the Beacon config certificate
     pub cert_hash: String,
 }

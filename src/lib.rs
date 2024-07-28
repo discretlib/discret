@@ -1,38 +1,175 @@
 //! Discret: Create local first, peer to peer application (P2P) using a GraphQL inspired API
 //!
-//!
-//! Creating an application requires a few steps
-//!  - Create a datamodel that contains the entity that will be synchronized
-//!  - Create rooms to manage access rights to the data
-//!  - Add data to the rooms
-//!  - Create invitation to your rooms and manually send them to who you want via external application like email
-//!  - Once the peer accept the invitaion it will start synchronising data it is allowed to access.
-//!
 //! Discret hides the complexity of peer to peer networks and reduces it to a database synchronisation problem.
 //! Compared to traditional application, most of the new complexity resides in the Room rights managements.
 //! Depending on the rights you choose, Rooms can have many different use cases.
 //!
+//! Creating an application requires a few steps
+//! - Create a datamodel that contains the entity that will be synchronized
+//! - Create rooms to manage access rights to the data
+//! - Add data to the rooms
+//! - Create invitation to your rooms and manually send them to who you want via external application like email
+//! - Once the peer accept the invitaion it will start synchronising data it is allowed to access.
+//!
+//! More details and tutorials are avalaible in the [documentation site](https://discretlib.github.io/doc/)
+//!
+//! # Example
+//! The following example creates a very basic chat application. If you build and run this program on several different folder or local network devices
+//! you should be able to chat with yourself.
+//! ```ignore
+//! use std::{io, path::PathBuf};
+//! use discret::{
+//!     derive_pass_phrase, zero_uid, Configuration, Discret,
+//!     Parameters, ParametersAdd, ResultParser,
+//! };
+//! use serde::Deserialize;
+//!
+//! //the application unique identifier
+//! const APPLICATION_KEY: &str = "github.com/discretlib/rust_example_simple_chat";
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     //define a datamodel
+//!     let model = "chat {
+//!         Message{
+//!             content:String
+//!         }
+//!     }";
+//!     //this struct is used to parse the query result
+//!     #[derive(Deserialize)]
+//!     struct Chat {
+//!         pub id: String,
+//!         pub mdate: i64,
+//!         pub content: String,
+//!     }
+//!
+//!     let path: PathBuf = "test_data".into(); //where data is stored
+//!
+//!     //used to derives all necessary secrets
+//!     let key_material: [u8; 32] = derive_pass_phrase("my login", "my password");
+//!
+//!     //start the discret application
+//!     let app: Discret = Discret::new(
+//!         model,
+//!         APPLICATION_KEY,
+//!         &key_material,
+//!         path,
+//!         Configuration::default(),
+//!     )
+//!     .await
+//!     .unwrap();
+//!
+//!     //listen for events
+//!     let mut events = app.subscribe_for_events().await;
+//!     let event_app: Discret = app.clone();
+//!     tokio::spawn(async move {
+//!         let mut last_date = 0;
+//!         let mut last_id = zero_uid();
+//!
+//!         let private_room: String = event_app.private_room();
+//!         while let Ok(event) = events.recv().await {
+//!             match event {
+//!                 //triggered when data is modified
+//!                 discret::Event::DataChanged(_) => {
+//!                     let mut param = Parameters::new();
+//!                     param.add("mdate", last_date).unwrap();
+//!                     param.add("id", last_id.clone()).unwrap();
+//!                     param.add("room_id", private_room.clone()).unwrap();
+//!
+//!                     //get the latest data, the result is in the JSON format
+//!                     let result: String = event_app
+//!                         .query(
+//!                             "query {
+//!                                 res: chat.Message(
+//!                                     order_by(mdate asc, id asc),
+//!                                     after($mdate, $id),
+//!                                     room_id = $room_id
+//!                                 ) {
+//!                                         id
+//!                                         mdate
+//!                                         content
+//!                                 }
+//!                             }",
+//!                             Some(param),
+//!                         )
+//!                         .await
+//!                         .unwrap();
+//!                     let mut query_result = ResultParser::new(&result).unwrap();
+//!                     let res: Vec<Chat> = query_result.take_array("res").unwrap();
+//!                     for msg in res {
+//!                         last_date = msg.mdate;
+//!                         last_id = msg.id;
+//!                         println!("you said: {}", msg.content);
+//!                     }
+//!                 }
+//!                 _ => {} //ignores other events
+//!             }
+//!         }
+//!     });
+//!
+//!     //data is inserted in your private room
+//!     let private_room: String = app.private_room();
+//!     let stdin = io::stdin();
+//!     let mut line = String::new();
+//!     println!("{}", "Write Something!");
+//!     loop {
+//!         stdin.read_line(&mut line).unwrap();
+//!         if line.starts_with("/q") {
+//!             break;
+//!         }
+//!         line.pop();
+//!         let mut params = Parameters::new();
+//!         params.add("message", line.clone()).unwrap();
+//!         params.add("room_id", private_room.clone()).unwrap();
+//!         app.mutate(
+//!             "mutate {
+//!                 chat.Message {
+//!                     room_id:$room_id
+//!                     content: $message
+//!                 }
+//!             }",
+//!             Some(params),
+//!         )
+//!         .await
+//!         .unwrap();
+//!         line.clear();
+//!     }
+//! }
+//! ```
+//!
+//! # Features
+//! *Discret* provides a blocking (DiscretBlocking) and a non blocking (Discret) API.  
+//!
+//! On local network, peer connection happens without requiring any server.
+//! For peer to peer connection over the Internet, a discovery server is needed to allow peers to discover each others.
+//! The discret lib provides an implementation of the discovery server named Beacon.
+//!
+//! The library provides strong security features out of the box:
+//! - data is encrypted at rest by using the SQLCipher database
+//! - encrypted communication using the QUIC protocol
+//! - data integrity: each rows is signed with the peer signing key, making it very hard to synchronise bad data
+//! - access control via Rooms
+//!
+//! # Limitations
 //! As data lives on your devices, Discret should only be used for applications with data generated by "real person", with hundreds of peers at most.
 //! It is not suited for large scale application and communities with thousands of peoples.
 //! It currenlty only support text data but support for external file synchronisation is planned.
 //!
-//! On local network, peer connection happens without requiring any server.
-//! For peer to peer connection over the Internet, a discovery server is needed to allow peers to discover each others. The discret lib provides an implementation of the discovery server named Beacon.
 //! Connection over the internet is not 100% guaranted to work, because certain types of enterprise firewalls will block the connection attempts.
 //! The library support both IPv6 and IPv4
 //!
-//! The library provides strong security features out of the box:
-//!     - data is encrypted at rest by using the SQLCipher database
-//!     - encrypted communication using the QUIC protocol
-//!     - data integrity: each rows is signed with the peer signing key, making it very hard to synchronise bad data
-//!     - access control via Rooms
-//!
 //! Please, be warned that P2P connections leaks your IP adress and should only be used with trusted peer.
 //! This leak exposes you to the following threats:
-//!     - Distributed denial of service (DDOS)
-//!     - Leak of your "Real World" location via geolocation services.
-//!     - State sponsored surveillance: A state watching the network could determine which peer connect to which, giving a lot of knowledge about your social network.
+//! - Distributed denial of service (DDOS)
+//! - Leak of your "Real World" location via geolocation services.
+//! - State sponsored surveillance: A state watching the network could determine which peer connect to which, giving a lot of knowledge about your social network.
 //!
+//! # Platform Support
+//! - Linux: Tested and supported
+//! - Android: Tested and supported
+//! - Windows: Tested and supported
+//! - macOS: not tested, should work
+//! - iOS: not tested, should work
 //!
 #![forbid(unsafe_code)]
 //#![allow(dead_code)]
@@ -73,15 +210,17 @@ pub use crate::{
         DataModification, ResultParser,
     },
     event_service::Event,
+    log_service::Log,
     log_service::LogService,
-    log_service::{Log, LogMessage},
     network::beacon::Beacon,
-    security::{base64_decode, base64_encode, derive_pass_phrase, generate_x509_certificate, hash},
+    security::{
+        base64_decode, base64_encode, derive_pass_phrase, generate_x509_certificate, hash,
+        random_domain_name,
+    },
 };
 
 ///
-/// Defines every errors that can be by the discret lib
-///
+/// Defines every errors that can be triggered by the discret lib
 ///
 #[derive(Error, Debug)]
 pub enum Error {
@@ -173,11 +312,13 @@ pub enum Error {
 ///
 /// return the zero filled uid in base bas64
 ///
+/// uid are the unique identifiers used by the Discret internal database
+///
 pub fn zero_uid() -> String {
     uid_encode(&default_uid())
 }
 ///
-/// Verify that the Discret database defined by the parameters exists.
+/// Verify that the Discret database defined by the parameters exists in the folder
 ///
 pub fn database_exists(
     app_key: &str,
@@ -190,7 +331,6 @@ pub fn database_exists(
 ///
 /// The main entry point for the Discret Library
 ///
-///
 #[derive(Clone)]
 pub struct Discret {
     db: GraphDatabaseService,
@@ -201,6 +341,12 @@ pub struct Discret {
     private_room_id: Uid,
 }
 impl Discret {
+    /// Starts the Discret engine with the following parameters:
+    ///- datamodel: define the data types that can be used by discret,
+    ///- app_key: a unique identifier for the application that **cannot not** change once the application is in produciton
+    ///- key_material: a master secret that will be used wit the app_key to derive all the secret required by discret
+    ///- data_folder: where data is stored
+    ///- configuration: the configuration stucture
     pub async fn new(
         datamodel: &str,
         app_key: &str,
@@ -255,7 +401,7 @@ impl Discret {
     }
 
     ///
-    /// Deletion query
+    /// Performs a Deletion query
     ///
     pub async fn delete(&self, d: &str, p: Option<Parameters>) -> std::result::Result<(), Error> {
         match self.db.delete(d, p).await {
@@ -265,7 +411,7 @@ impl Discret {
     }
 
     ///
-    /// mutate
+    /// Performs a mutation query and returns the inserted tuple in a JSON String
     ///
     pub async fn mutate(
         &self,
@@ -276,9 +422,11 @@ impl Discret {
     }
 
     ///
-    /// Allow to send a stream of mutation. Usefull for batch insertion as you do have to wait for the mutation to finished before sending another.
+    /// Allow to send a stream of mutation.
     ///
-    /// The receiver retrieve an internal representation of the mutation query to avoid the JSON result creation, wich is probably unecessary when doing batch insert.
+    /// Usefull for batch insertion as you do have to wait for the mutation to finished before sending another.
+    ///
+    /// The receiver retrieve an internal representation of the mutation query to avoid the performance cost of creating the JSON result, wich is probably unecessary when doing batch insert.
     /// To get the JSON, call the  MutationQuery.result() method
     ///
     pub fn mutation_stream(
@@ -288,11 +436,11 @@ impl Discret {
         mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>,
     ) {
         self.db.mutation_stream()
-        // Ok(self.db.mutate(m, p).await?)
     }
 
     ///
-    /// GraphQL query
+    /// Perform a query to retrieve results from the database.
+    /// returns the result in a JSON object
     ///
     pub async fn query(
         &self,
@@ -304,7 +452,10 @@ impl Discret {
 
     ///
     /// Create an invitation
-    ///   
+    /// - default_room: once the inviation is accepted, the new Peer will be granted access to this room.
+    ///
+    /// The returned byte array have to be sent manually to another peer.
+    ///
     pub async fn invite(&self, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
         let (reply, receive) = oneshot::channel::<Result<Vec<u8>>>();
         let _ = self
@@ -317,6 +468,7 @@ impl Discret {
 
     ///
     /// Accept an invitation
+    /// Once an invitation is accepted, the two peers will be able to discover themselves and start exchanging data
     ///   
     pub async fn accept_invite(&self, invitation: Vec<u8>) -> std::result::Result<(), Error> {
         let _ = self
@@ -331,7 +483,7 @@ impl Discret {
     ///
     /// This is is your Public identity.
     ///
-    /// It is derived from the provided key_material.
+    /// It is derived from the provided key_material and app_key.
     ///
     /// Every data you create will be signed using the associated signing_key, and  
     /// other peers will use this verifying key to ensure the integrity of the data
@@ -363,11 +515,11 @@ impl Discret {
     }
 
     ///
-    /// Update the existing data model definition with a new one  
+    /// Update the existing data model definition with a new one.  
     ///
-    /// returns the JSON representation of the updated datamodel
+    /// returns the JSON representation of the updated datamodel.
     ///
-    /// can be usefull to create a data model editor
+    /// Can be usefull to create a data model editor.
     ///
     pub async fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {
         Ok(self.db.update_data_model(datamodel).await?)
@@ -376,9 +528,9 @@ impl Discret {
     ///
     /// Provide a JSON representation of the datamodel  
     ///
-    /// the JSON contains the model plain text along with the internal datamodel representation
+    /// The JSON contains the model plain text along with the internal datamodel representation.
     ///
-    /// Can be usefull to create a data model editor
+    /// Can be usefull to create a data model editor.
     ///
     pub async fn data_model(&self) -> std::result::Result<String, Error> {
         Ok(self.db.datamodel().await?)
@@ -417,6 +569,12 @@ pub struct DiscretBlocking {
     discret: Discret,
 }
 impl DiscretBlocking {
+    /// Starts the Discret engine with the following parameters:
+    ///- datamodel: define the data types that can be used by discret,
+    ///- app_key: a unique identifier for the application that **cannot not** change once the application is in produciton
+    ///- key_material: a master secret that will be used wit the app_key to derive all the secret required by discret
+    ///- data_folder: where data is stored
+    ///- configuration: the configuration stucture
     pub fn new(
         datamodel: &str,
         app_key: &str,
@@ -435,6 +593,9 @@ impl DiscretBlocking {
         Ok(Self { discret })
     }
 
+    ///
+    /// Performs a Deletion query
+    ///
     pub fn delete(&self, d: &str, p: Option<Parameters>) -> std::result::Result<(), Error> {
         TOKIO_BLOCKING
             .lock()
@@ -443,6 +604,9 @@ impl DiscretBlocking {
             .block_on(self.discret.delete(d, p))
     }
 
+    ///
+    /// Performs a mutation query and returns the inserted tuple in a JSON String
+    ///
     pub fn mutate(&self, m: &str, p: Option<Parameters>) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
@@ -451,6 +615,27 @@ impl DiscretBlocking {
             .block_on(self.discret.mutate(m, p))
     }
 
+    ///
+    /// Allow to send a stream of mutation.
+    ///
+    /// Usefull for batch insertion as you do have to wait for the mutation to finished before sending another.
+    ///
+    /// The receiver retrieve an internal representation of the mutation query to avoid the performance cost of creating the JSON result, wich is probably unecessary when doing batch insert.
+    /// To get the JSON, call the  MutationQuery.result() method
+    ///
+    pub fn mutation_stream(
+        &self,
+    ) -> (
+        mpsc::Sender<(String, Option<Parameters>)>,
+        mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>,
+    ) {
+        self.discret.mutation_stream()
+    }
+
+    ///
+    /// Perform a query to retrieve results from the database.
+    /// returns the result in a JSON object
+    ///
     pub fn query(&self, q: &str, p: Option<Parameters>) -> std::result::Result<String, Error> {
         TOKIO_BLOCKING
             .lock()
@@ -459,30 +644,54 @@ impl DiscretBlocking {
             .block_on(self.discret.query(q, p))
     }
 
+    ///
+    /// Create an invitation
+    /// - default_room: once the inviation is accepted, the new Peer will be granted access to this room.
+    ///
+    /// The returned byte array have to be sent manually to another peer.
+    ///
+    pub async fn invite(&self, default_room: Option<DefaultRoom>) -> Result<Vec<u8>> {
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.invite(default_room))
+    }
+
+    ///
+    /// Accept an invitation
+    /// Once an invitation is accepted, the two peers will be able to discover themselves and start exchanging data
+    ///   
+    pub async fn accept_invite(&self, invitation: Vec<u8>) -> std::result::Result<(), Error> {
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.accept_invite(invitation))
+    }
+
+    ///
+    /// This is is your Public identity.
+    ///
+    /// It is derived from the provided key_material and app_key.
+    ///
+    /// Every data you create will be signed using the associated signing_key, and  
+    /// other peers will use this verifying key to ensure the integrity of the data
+    ///
     pub fn verifying_key(&self) -> String {
         self.discret.verifying_key()
     }
-
+    ///
+    /// This special room is used internally to store system data.
+    /// you are allowed to used it to store any kind of private data that will only be synchronized with your devices.
+    ///
     pub fn private_room(&self) -> String {
         self.discret.private_room()
     }
 
-    pub fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {
-        TOKIO_BLOCKING
-            .lock()
-            .unwrap()
-            .rt()?
-            .block_on(self.discret.update_data_model(datamodel))
-    }
-
-    pub fn data_model(&self) -> std::result::Result<String, Error> {
-        TOKIO_BLOCKING
-            .lock()
-            .unwrap()
-            .rt()?
-            .block_on(self.discret.data_model())
-    }
-
+    ///
+    /// Subscribe for the event queue
+    ///
     pub fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
         TOKIO_BLOCKING
             .lock()
@@ -492,6 +701,9 @@ impl DiscretBlocking {
             .block_on(self.discret.subscribe_for_events())
     }
 
+    ///
+    /// Subscribe for the log event queue
+    ///
     pub fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
         TOKIO_BLOCKING
             .lock()
@@ -499,5 +711,35 @@ impl DiscretBlocking {
             .rt()
             .unwrap()
             .block_on(self.discret.subscribe_for_logs())
+    }
+
+    ///
+    /// Update the existing data model definition with a new one.  
+    ///
+    /// returns the JSON representation of the updated datamodel.
+    ///
+    /// Can be usefull to create a data model editor.
+    ///
+    pub fn update_data_model(&self, datamodel: &str) -> std::result::Result<String, Error> {
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.update_data_model(datamodel))
+    }
+
+    ///
+    /// Provide a JSON representation of the datamodel  
+    ///
+    /// The JSON contains the model plain text along with the internal datamodel representation.
+    ///
+    /// Can be usefull to create a data model editor.
+    ///
+    pub fn data_model(&self) -> std::result::Result<String, Error> {
+        TOKIO_BLOCKING
+            .lock()
+            .unwrap()
+            .rt()?
+            .block_on(self.discret.data_model())
     }
 }

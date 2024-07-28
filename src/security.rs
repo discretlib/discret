@@ -215,7 +215,9 @@ impl VerifyingKey for Ed2519VerifyingKey {
         Ok(())
     }
 }
-
+///
+/// generates a self signed certificate
+///
 pub fn generate_x509_certificate(name: &str) -> rcgen::CertifiedKey {
     let mut params: CertificateParams = Default::default();
 
@@ -228,10 +230,13 @@ pub fn generate_x509_certificate(name: &str) -> rcgen::CertifiedKey {
 
 ///
 /// The quick connection initiate connection with a domain name used during TLS negociations to avoid man in the middle attack.
-/// As we are using p2p and self signed certificates, we don't have a domain name to connect to so we need to create a random name.
+/// As we are using p2p and self signed certificates, we don't have a domain name to connect to we have to generate one.
+///
 /// This name is transmitted in clear text over the network as part of the QUIC handshake.
-/// If the name is too weird (like a base64 encoded value), it is easy to detect that the connection is a Discret connection, and not a standard HTTP3 one.
-/// Let's be a little bit sneaky by creating a plausible domain names.
+/// If the name is too weird (like a base64 encoded value), it could be easy to detect that the connection is a Discret connection, and not a standard HTTP3 one.
+/// So we try to be a little bit sneaky by creating a plausible domain names.
+///
+/// This functiion is public because it is used by the discret_beacon projet
 ///
 pub fn random_domain_name() -> String {
     let min_value = 5;
@@ -351,7 +356,7 @@ impl MeetingSecret {
 
 ///
 /// Derive a password using argon2id
-///  using parameters slighly greater than the minimum recommended by OSWAP https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+///  using parameters slighly greater than the minimum recommended by OSWAP <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
 /// - 20480 KB of memory
 /// - an iteration count of 2
 /// - parallelism count of 2

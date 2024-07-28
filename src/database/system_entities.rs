@@ -1122,10 +1122,13 @@ impl Invite {
 
 ///
 /// When creating an invitation, you may specify a default room and authorisation.
-/// New peers joining using this invitation will be inserted in this room.
+/// A new peer using this invitation will be provided access to this room.
 ///
 pub struct DefaultRoom {
+    // The room identifier
     pub room: String,
+
+    // An authorisation identifier that belongs to the room
     pub authorisation: String,
 }
 
