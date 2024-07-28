@@ -824,7 +824,7 @@ mod tests {
         let qs = rows.next().unwrap().expect("oupssie");
 
         let val: String = qs.get(0).unwrap();
-        assert_eq!("3.39.4", val);
+        assert_eq!("3.45.3", val);
     }
 
     #[tokio::test(flavor = "multi_thread")]
