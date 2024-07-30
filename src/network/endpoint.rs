@@ -59,7 +59,7 @@ impl DiscretEndpoint {
         log: LogService,
         num_buffers: usize,
         buffer_size: usize,
-        local_verifying_key: &Vec<u8>,
+        local_verifying_key: &[u8],
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
         let endpoint_id = new_uid();
@@ -92,7 +92,7 @@ impl DiscretEndpoint {
         let output_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
         let i_buff = input_buffers.clone();
         let o_buff = output_buffers.clone();
-        let local_verifying_key = local_verifying_key.clone();
+        let local_verifying_key = local_verifying_key.to_owned();
         tokio::spawn(async move {
             while let Some(msg) = connection_receiver.recv().await {
                 match msg {
@@ -325,7 +325,7 @@ impl DiscretEndpoint {
     async fn start_connection(
         conn: Connection,
         peer_service: &PeerConnectionService,
-        local_verifying_key: &Vec<u8>,
+        local_verifying_key: &[u8],
         info: ConnectionInfo,
         input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
         output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
@@ -341,7 +341,7 @@ impl DiscretEndpoint {
         event_send.write_u8(EVENT_STREAM).await?;
 
         let mut remote_con_msg = info.clone();
-        remote_con_msg.peer_verifying_key = local_verifying_key.clone();
+        remote_con_msg.peer_verifying_key = local_verifying_key.to_owned();
 
         let conn_info = bincode::serialize(&remote_con_msg)?;
         event_send

@@ -282,8 +282,8 @@ impl MeetingPoint {
         for token in tokens {
             if let Some(entry) = self.meeting.get_mut(*token) {
                 let mut index = -1;
-                for i in 0..entry.len() {
-                    let peer = entry[i].lock().await;
+                for (i, peer) in entry.iter().enumerate() {
+                    let peer = peer.lock().await;
                     if peer.conn.stable_id() == id {
                         index = i as i32;
                         break;
