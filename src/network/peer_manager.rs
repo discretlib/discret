@@ -488,7 +488,7 @@ impl PeerManager {
     }
 
     pub fn circuit_id(endpoint_id: Uid, remote_id: Uid) -> [u8; 32] {
-        let mut v = vec![endpoint_id, remote_id];
+        let mut v = [endpoint_id, remote_id];
         v.sort();
         let mut hasher = blake3::Hasher::new();
         hasher.update(&v[0]);

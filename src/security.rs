@@ -245,12 +245,12 @@ pub fn random_domain_name() -> String {
     let offset: usize = OsRng.next_u32().try_into().unwrap();
     let num = offset % divider;
 
-    let alphabet = vec![
+    let alphabet = [
         'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
         'v', 'w', 'x', 'z',
     ];
-    let vowels = vec!['a', 'e', 'i', 'o', 'u', 'y'];
-    let extension = vec![
+    let vowels = ['a', 'e', 'i', 'o', 'u', 'y'];
+    let extension = [
         ".com", ".org", ".net", ".us", ".co", ".biz", ".info", ".fr", ".uk", ".me", ".cn", ".de",
         ".ly", ".in", ".eu", ".ca", ".coop", ".asia", ".cat", ".pro", ".ac", ".ad", ".ae", ".af",
         ".ai", ".am",
@@ -520,13 +520,14 @@ impl HardwareFingerprint {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path)?;
 
         let mut content: [u8; 32] = [0; 32];
         let len = file.read(&mut content)?;
         if len == 0 {
             content = random32();
-            file.write(&content)?;
+            file.write_all(&content)?;
         }
         Ok(content)
     }

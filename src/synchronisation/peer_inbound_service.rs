@@ -175,7 +175,7 @@ impl LocalPeerService {
                 if local_key.eq(&proof.peer.verifying_key) {
                     ready = false;
                     conn_ready.store(false, Ordering::Relaxed);
-                    let res = Self::send_event(&event_sender, RemoteEvent::ReadyFingerprint)
+                    let res = Self::send_event(event_sender, RemoteEvent::ReadyFingerprint)
                         .await
                         .map_err(|_| crate::Error::TimeOut("ReadyFingerprint".to_string()));
                     if res.is_err() {
@@ -211,7 +211,7 @@ impl LocalPeerService {
         };
 
         if ready {
-            let res = Self::send_event(&event_sender, RemoteEvent::Ready)
+            let res = Self::send_event(event_sender, RemoteEvent::Ready)
                 .await
                 .map_err(|_| crate::Error::TimeOut("Ready".to_string()));
             if res.is_err() {
@@ -910,7 +910,7 @@ impl LocalPeerService {
             if node_list.len() == batch_size {
                 let mut result_recv: Receiver<Result<Vec<Node>, Error>> =
                     LocalPeerService::query_multiple(
-                        &query_service,
+                        query_service,
                         Query::Nodes(room_id, node_list.clone()),
                     )
                     .await;
@@ -935,7 +935,7 @@ impl LocalPeerService {
                 }
                 let mut result_recv: Receiver<Result<Vec<Edge>, Error>> =
                     LocalPeerService::query_multiple(
-                        &query_service,
+                        query_service,
                         Query::Edges(room_id, edge_list.clone()),
                     )
                     .await;
@@ -958,7 +958,7 @@ impl LocalPeerService {
 
         if !node_list.is_empty() {
             let mut result_recv: Receiver<Result<Vec<Node>, Error>> =
-                LocalPeerService::query_multiple(&query_service, Query::Nodes(room_id, node_list))
+                LocalPeerService::query_multiple(query_service, Query::Nodes(room_id, node_list))
                     .await;
             while let Some(nodes) = result_recv.recv().await {
                 let nodes = nodes?;
@@ -982,7 +982,7 @@ impl LocalPeerService {
 
             let mut result_recv: Receiver<Result<Vec<Edge>, Error>> =
                 LocalPeerService::query_multiple(
-                    &query_service,
+                    query_service,
                     Query::Edges(room_id, edge_list.clone()),
                 )
                 .await;
@@ -1038,12 +1038,10 @@ impl LocalPeerService {
         query_service.send(QueryFn::Once(query, answer)).await;
         match timeout(Duration::from_secs(NETWORK_TIMEOUT_SEC), recieve).await {
             Ok(r) => match r {
-                Ok(result) => return result,
-                Err(_) => {
-                    return Err(Error::Technical);
-                }
+                Ok(result) => result,
+                Err(_) => Err(Error::Technical),
             },
-            Err(_) => return Err(Error::TimeOut),
+            Err(_) => Err(Error::TimeOut),
         }
     }
 

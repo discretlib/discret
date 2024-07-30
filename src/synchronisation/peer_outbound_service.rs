@@ -50,7 +50,7 @@ impl InboundQueryService {
                         match msg{
                             Some(msg) => {
                                 if let Err(e)  = Self::process_inbound(msg, &mut peer, &log_service, &verifying_key, &conn_ready,  &fingerprint).await{
-                                    log_service.error("RemoteQueryService Channel Send".to_string(), e.into());
+                                    log_service.error("RemoteQueryService Channel Send".to_string(), e);
                                 }
                             },
                             None => break,
