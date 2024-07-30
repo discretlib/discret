@@ -38,7 +38,7 @@ impl RoomLockService {
                         if let Some(lock_request) = peer_lock_request.get_mut(&circuit) {
                             lock_request.reply = reply;
                             for room in rooms {
-                                if lock_request.rooms.iter().find(|e| room.eq(*e)).is_none() {
+                                if !lock_request.rooms.iter().any(|e| room.eq(e)) {
                                     lock_request.rooms.push_back(room); //"hot" rooms are updated first
                                 }
                             }

@@ -616,13 +616,7 @@ impl LocalPeerService {
         verify_service: &SignatureVerificationService,
     ) -> Result<(), crate::Error> {
         let load_room = match local_room_def {
-            Some(local_room) => {
-                if local_room.room_def_date < remote_room.room_def_date {
-                    true
-                } else {
-                    false
-                }
-            }
+            Some(local_room) => local_room.room_def_date < remote_room.room_def_date,
             None => true,
         };
 
@@ -655,14 +649,9 @@ impl LocalPeerService {
     ) -> Result<bool, crate::Error> {
         let sync_history = match local_room_def {
             Some(local_room) => {
-                if remote_room.history_hash.is_some()
+                !(remote_room.history_hash.is_some()
                     && local_room.history_hash.eq(&remote_room.history_hash)
-                    && local_room.last_data_date.eq(&remote_room.last_data_date)
-                {
-                    false
-                } else {
-                    true
-                }
+                    && local_room.last_data_date.eq(&remote_room.last_data_date))
             }
             None => true,
         };
@@ -793,14 +782,9 @@ impl LocalPeerService {
     ) -> Result<bool, crate::Error> {
         let sync_day = match local_room_def {
             Some(local_room) => {
-                if local_room.daily_hash.is_some()
+                !(local_room.daily_hash.is_some()
                     && local_room.last_data_date.is_some()
-                    && local_room.daily_hash.eq(&remote_room.daily_hash)
-                {
-                    false
-                } else {
-                    true
-                }
+                    && local_room.daily_hash.eq(&remote_room.daily_hash))
             }
             None => true,
         };
