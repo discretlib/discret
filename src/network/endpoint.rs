@@ -723,7 +723,6 @@ impl DiscretEndpoint {
                                     e.to_string(),
                                 ))
                                 .await;
-                            return;
                         }
                     }
                     Err(e) => {
@@ -914,10 +913,7 @@ impl ServerCertVerifier {
     pub fn get(&self, name: &str) -> Option<[u8; 32]> {
         let v = self.valid_certificates.lock().unwrap();
         let g = v.get(name);
-        match g {
-            Some(cert) => Some(*cert),
-            None => None,
-        }
+        g.copied()
     }
     pub fn remove_valid_certificate(&self, name: &str) {
         let mut v = self.valid_certificates.lock().unwrap();
