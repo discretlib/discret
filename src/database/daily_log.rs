@@ -189,7 +189,7 @@ impl DailyLogsUpdate {
                         let mut hasher = blake3::Hasher::new();
                         hasher.update(previous);
                         if let Some(daily) = &previous_hash {
-                            hasher.update(&daily);
+                            hasher.update(daily);
                         }
                         let hash = hasher.finalize().as_bytes().to_vec();
                         // update
@@ -228,9 +228,9 @@ impl DailyLogsUpdate {
                 let history_hash = if previous_room.eq(&room) {
                     if let Some(previous) = &previous_history {
                         let mut hasher = blake3::Hasher::new();
-                        hasher.update(&previous);
+                        hasher.update(previous);
                         if let Some(daily) = &previous_hash {
-                            hasher.update(&daily);
+                            hasher.update(daily);
                         }
                         let hash = hasher.finalize().as_bytes().to_vec();
                         Some(hash)
@@ -252,7 +252,7 @@ impl DailyLogsUpdate {
                 ))?;
 
                 self.add_log(DailyLog {
-                    room_id: room.clone(),
+                    room_id: room,
                     entity: entity.clone(),
                     date,
                     entry_number,
@@ -616,7 +616,7 @@ impl RoomDefinitionLog {
             ) as dl ON rcl.room_id=dl.room_id
             WHERE rcl.room_id = ?
             ";
-        let mut stmt = conn.prepare(&query)?;
+        let mut stmt = conn.prepare(query)?;
         let mut rows = stmt.query([&room_id])?;
         let res = if let Some(row) = rows.next()? {
             Some(RoomDefinitionLog {

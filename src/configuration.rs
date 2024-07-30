@@ -65,6 +65,7 @@ pub struct Configuration {
     /// If auto_allow_new_peers is set to 'true',
     /// - a sys.AllowedPeer object is created in the private room, with the status set to 'pending'
     /// - a PendingPeer event is triggered
+    ///
     /// It is up to the developer to intercept the event and decides what to do by updating the status to 'enabled' or 'disabled'
     ///
     ///

@@ -171,7 +171,7 @@ impl Peer {
             PEER_PUB_KEY_SHORT, meeting_pub_key, PEER_NAME_SHORT
         );
 
-        let node = Node {
+        Node {
             id,
             room_id: None,
             cdate: 0,
@@ -179,9 +179,7 @@ impl Peer {
             _entity: PEER_ENT_SHORT.to_string(),
             _json: Some(json),
             ..Default::default()
-        };
-
-        node
+        }
     }
 
     pub fn validate(peer: &Node) -> Result<(), Error> {

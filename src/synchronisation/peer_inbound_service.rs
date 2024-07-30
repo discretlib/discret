@@ -421,7 +421,7 @@ impl LocalPeerService {
             }
 
             RemoteEvent::RoomDefinitionChanged(room) => {
-                remote_rooms.insert(room.clone());
+                remote_rooms.insert(room);
                 let mut q = VecDeque::new();
                 q.push_back(room);
                 lock_service.request_locks(circuit_id, q, lock_reply).await;

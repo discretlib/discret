@@ -385,10 +385,10 @@ impl EdgeDeletionEntry {
         let signature = Self::sign(&room_id, edge, deletion_date, &verifying_key, signing_key);
         Self {
             room_id,
-            src: edge.src.clone(),
+            src: edge.src,
             src_entity: edge.src_entity.clone(),
             label: edge.label.clone(),
-            dest: edge.dest.clone(),
+            dest: edge.dest,
             cdate: edge.cdate,
             deletion_date,
             verifying_key,

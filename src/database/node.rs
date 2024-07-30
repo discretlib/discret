@@ -619,7 +619,7 @@ impl Node {
                 }
             }
             let node = Node {
-                id: id,
+                id,
                 room_id: db_room_id,
                 cdate: row.get(2)?,
                 mdate: row.get(3)?,
@@ -760,10 +760,10 @@ impl NodeToInsert {
         if let Some(room_id) = &node.room_id {
             if let Some(old_id) = &self.old_room_id {
                 if !room_id.eq(old_id) {
-                    daily_log.set_need_update(old_id.clone(), &node._entity, self.old_mdate);
+                    daily_log.set_need_update(*old_id, &node._entity, self.old_mdate);
                 }
             }
-            daily_log.set_need_update(room_id.clone(), &node._entity, node.mdate);
+            daily_log.set_need_update(*room_id, &node._entity, node.mdate);
         }
     }
 }

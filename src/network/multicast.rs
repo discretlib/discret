@@ -111,7 +111,7 @@ fn new_sender(multicast_ipv4_interface: &Ipv4Addr) -> io::Result<UdpSocket> {
     let socket = new_socket()?;
     socket.set_multicast_if_v4(multicast_ipv4_interface)?;
     socket.bind(&SockAddr::from(SocketAddr::new(
-        multicast_ipv4_interface.clone().into(),
+        (*multicast_ipv4_interface).into(),
         0,
     )))?;
     let socket: std::net::UdpSocket = socket.into();

@@ -348,13 +348,13 @@ impl MutationQuery {
                             old_node.room_id
                         };
                         let mut new_node = *old_node.clone();
-                        new_node.room_id = node_room.clone();
+                        new_node.room_id = node_room;
                         new_node.mdate = date;
 
                         NodeToMutate {
                             id: old_node.id,
                             date,
-                            room_id: node_room.clone(),
+                            room_id: node_room,
                             node: Some(new_node),
                             old_node: Some(*old_node),
                             ..Default::default()
@@ -374,7 +374,7 @@ impl MutationQuery {
             }
             None => {
                 let node = Node {
-                    room_id: room_id,
+                    room_id,
                     _entity: String::from(entity_short),
                     ..Default::default()
                 };
@@ -485,12 +485,12 @@ impl InsertEntity {
 
         if let Some(room_id) = &self.node_to_mutate.room_id {
             if let Some(node) = &self.node_to_mutate.node {
-                daily_log.set_need_update(room_id.clone(), &node._entity, self.node_to_mutate.date);
+                daily_log.set_need_update(*room_id, &node._entity, self.node_to_mutate.date);
             }
 
             if let Some(node) = &self.node_to_mutate.old_node {
                 if let Some(room_id) = &node.room_id {
-                    daily_log.set_need_update(room_id.clone(), &node._entity, node.mdate);
+                    daily_log.set_need_update(*room_id, &node._entity, node.mdate);
                 }
             }
         }

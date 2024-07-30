@@ -914,7 +914,7 @@ impl ServerCertVerifier {
         let v = self.valid_certificates.lock().unwrap();
         let g = v.get(name);
         match g {
-            Some(cert) => Some(cert.clone()),
+            Some(cert) => Some(*cert),
             None => None,
         }
     }

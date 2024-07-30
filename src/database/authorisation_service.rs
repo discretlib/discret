@@ -981,8 +981,8 @@ impl RoomAuthorisations {
     pub fn rooms_for_peer(&self, verifying_key: &Vec<u8>, date: i64) -> HashSet<Uid> {
         let mut result = HashSet::new();
         for room in &self.rooms {
-            if room.1.is_user_valid_at(&verifying_key, date) {
-                result.insert(room.0.clone());
+            if room.1.is_user_valid_at(verifying_key, date) {
+                result.insert(*room.0);
             }
         }
         result

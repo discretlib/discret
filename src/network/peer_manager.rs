@@ -194,8 +194,8 @@ impl PeerManager {
             self.beacons.insert(
                 address,
                 BeaconInfo {
-                    cert_hash: cert_hash.clone(),
-                    header: header,
+                    cert_hash: cert_hash,
+                    header,
                     retry: 0,
                 },
             );
@@ -204,8 +204,7 @@ impl PeerManager {
                 .endpoint
                 .sender
                 .send(EndpointMessage::InitiateBeaconConnection(
-                    address,
-                    cert_hash.clone(),
+                    address, cert_hash,
                 ))
                 .await;
         }
@@ -458,7 +457,7 @@ impl PeerManager {
             if conn_id.eq(uid) {
                 conn.close(VarInt::from(error_code), message.as_bytes());
                 let token = token.clone();
-                let circuit = circuit_id.clone();
+                let circuit = circuit_id;
                 self.connected.remove(&circuit);
                 disconnected = true;
                 let mut remove_entry = false;
