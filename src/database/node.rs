@@ -780,6 +780,8 @@ impl Writeable for NodeToInsert {
     }
 }
 
+pub type DeletionEntriesWithAuthors = HashMap<Uid, (NodeDeletionEntry, Option<Vec<u8>>)>;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeDeletionEntry {
     pub room_id: Uid,
@@ -911,7 +913,7 @@ impl NodeDeletionEntry {
     pub fn with_previous_authors(
         nodes: Vec<Self>,
         conn: &Connection,
-    ) -> Result<HashMap<Uid, (Self, Option<Vec<u8>>)>> {
+    ) -> Result<DeletionEntriesWithAuthors> {
         let mut map = HashMap::new();
         let mut nodes_id: Vec<Uid> = Vec::with_capacity(nodes.len());
         let it = &mut nodes.into_iter().peekable();

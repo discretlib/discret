@@ -245,7 +245,6 @@ impl AuthorisationService {
                     },
                     Err(e) => {
                         let _ = reply.send(Err(e)).await;
-                        return;
                     }
                 }
             }
@@ -297,7 +296,7 @@ impl AuthorisationService {
             AuthorisationMessage::RoomNodeAdd(old_room_node, mut room_node, reply) => {
                 match auth.prepare_room_node(old_room_node, &mut room_node) {
                     Ok(insert) => {
-                        let _ = match insert {
+                        match insert {
                             true => {
                                 let query = WriteMessage::RoomNode(
                                     RoomNodeWriteQuery {

@@ -55,6 +55,10 @@ pub enum DbMessage {
     ComputeDailyLog(),
     DailyLogComputed(Result<DailyLogsUpdate>),
 }
+
+pub type MutateReceiver =
+    mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>;
+
 ///
 /// Entry Point for all databases interaction
 ///
@@ -318,12 +322,7 @@ impl GraphDatabaseService {
     /// The receiver retrieve an internal representation of the mutation query to avoid the JSON result creation, wich is probably unecessary when doing batch insert.
     /// To get the JSON, call the  MutationQuery.result() method
     ///
-    pub fn mutation_stream(
-        &self,
-    ) -> (
-        mpsc::Sender<(String, Option<Parameters>)>,
-        mpsc::Receiver<Result<MutationQuery>>,
-    ) {
+    pub fn mutation_stream(&self) -> (mpsc::Sender<(String, Option<Parameters>)>, MutateReceiver) {
         let (send, mut recv) = mpsc::channel::<(String, Option<Parameters>)>(2);
         let (send_res, recv_res) = mpsc::channel::<Result<MutationQuery>>(2);
         let dbsender = self.sender.clone();
@@ -894,6 +893,7 @@ struct GraphDatabase {
     verifying_key: Vec<u8>,
 }
 impl GraphDatabase {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         private_room_id: Uid,
         public_key: &[u8; 32],

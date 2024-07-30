@@ -184,8 +184,7 @@ mod security;
 mod signature_verification_service;
 mod synchronisation;
 
-use database::graph_database::GraphDatabaseService;
-use database::mutation_query::MutationQuery;
+use database::graph_database::{GraphDatabaseService, MutateReceiver};
 use event_service::EventService;
 
 use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
@@ -327,8 +326,6 @@ pub fn database_exists(
     GraphDatabaseService::database_exists(app_key, key_material, data_folder)
 }
 
-pub type MutateReceiver =
-    mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>;
 ///
 /// The main entry point for the Discret Library
 ///

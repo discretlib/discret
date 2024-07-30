@@ -379,11 +379,7 @@ impl DataModel {
     }
 
     pub fn name_for(&self, short_name: &str) -> Option<String> {
-        match self.entities_short.get(short_name) {
-            Some(v) => Some(v.1.to_string()),
-
-            None => None,
-        }
+        self.entities_short.get(short_name).map(|v| v.1.to_string())
     }
 
     fn parse_internal(model: &str, decal: usize) -> Result<DataModel, Error> {
