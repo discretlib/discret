@@ -777,11 +777,10 @@ impl RoomAuthorisations {
                     return Err(Error::ForbiddenRoomId("sys.Room".to_string()));
                 }
 
-                let room = Room {
+                Room {
                     id: node_insert.id,
                     ..Default::default()
-                };
-                room
+                }
             }
         };
 

@@ -511,7 +511,7 @@ impl Node {
                 mdate: node.mdate,
                 signature: node._signature,
             };
-
+            #[allow(clippy::if_same_then_else)]
             if let Some(new) = node_ids.get(&existing) {
                 //remove the incoming node if it is older to that the existing one
                 if new.mdate < existing.mdate {

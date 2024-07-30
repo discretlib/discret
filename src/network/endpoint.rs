@@ -769,7 +769,7 @@ impl DiscretEndpoint {
         tokio::spawn(async move {
             while let Some(announce) = beacon_recv.recv().await {
                 let bin = bincode::serialize(&announce);
-                if let Err(_) = bin {
+                if bin.is_err() {
                     break;
                 }
                 let bin = bin.unwrap();

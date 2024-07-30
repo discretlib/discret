@@ -46,7 +46,7 @@ impl RoomLockService {
                             peer_lock_request.insert(circuit, PeerLockRequest { reply, rooms });
                             peer_queue.push_front(circuit);
                         }
-                        for _ in 0..avalaible.clone() {
+                        for _ in 0..avalaible {
                             Self::acquire_lock(
                                 &mut peer_lock_request,
                                 &mut peer_queue,
@@ -57,7 +57,7 @@ impl RoomLockService {
                         }
                     }
                     SyncLockMessage::Unlock(room) => {
-                        if locked.remove(&room) == true {
+                        if locked.remove(&room) {
                             avalaible += 1;
                             Self::acquire_lock(
                                 &mut peer_lock_request,
@@ -80,16 +80,16 @@ impl RoomLockService {
         locked: &mut HashSet<Uid>,
         avalaible: &mut usize,
     ) {
-        for _ in 0..peer_queue.len().clone() {
+        for _ in 0..peer_queue.len() {
             if let Some(peer) = peer_queue.pop_back() {
                 if let Some(mut lock_request) = peer_lock_request.remove(&peer) {
                     let mut lock_aquired = false;
-                    for _ in 0..lock_request.rooms.len().clone() {
+                    for _ in 0..lock_request.rooms.len() {
                         if let Some(room) = lock_request.rooms.pop_back() {
                             if locked.contains(&room) {
                                 lock_request.rooms.push_front(room);
                             } else {
-                                if let Ok(_) = lock_request.reply.send(room) {
+                                if lock_request.reply.send(room).is_ok() {
                                     locked.insert(room);
                                     *avalaible -= 1;
                                     lock_aquired = true;

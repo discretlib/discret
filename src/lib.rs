@@ -171,8 +171,8 @@
 //! - iOS: not tested, should work
 //!
 #![forbid(unsafe_code)]
+#[allow(clippy::too_many_arguments)]
 //#![allow(dead_code)]
-
 mod configuration;
 mod database;
 mod date_utils;

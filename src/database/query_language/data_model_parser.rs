@@ -401,7 +401,7 @@ impl DataModel {
 
         match parse.as_rule() {
             Rule::datamodel => {
-                for pair in parse.into_inner().into_iter() {
+                for pair in parse.into_inner() {
                     let namespace_pairs = pair.into_inner();
                     let mut name_space = String::from("");
                     for pair in namespace_pairs.into_iter() {
