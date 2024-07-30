@@ -530,7 +530,7 @@ pub fn prepare_room_with_history(
 
     //ensure that existing admin edges exists in the room_node
     for old_edge in &old_room_node.admin_edges {
-        let admin_edge = &room_node.admin_edges.iter().find(|edge| edge.eq(&old_edge));
+        let admin_edge = &room_node.admin_edges.iter().find(|edge| edge.eq(old_edge));
         if admin_edge.is_none() {
             room_node.admin_edges.push(old_edge.clone());
         }
@@ -588,7 +588,7 @@ pub fn prepare_room_with_history(
 
     //check authorisation
     for old_edge in &old_room_node.auth_edges {
-        let auth_edge = &room_node.auth_edges.iter().find(|edge| edge.eq(&old_edge));
+        let auth_edge = &room_node.auth_edges.iter().find(|edge| edge.eq(old_edge));
         if auth_edge.is_none() {
             room_node.auth_edges.push(old_edge.clone());
         }
@@ -724,7 +724,7 @@ fn prepare_auth_with_history(
         let user_admin_edge = &new_auth
             .user_admin_edges
             .iter()
-            .find(|edge| edge.eq(&old_edge));
+            .find(|edge| edge.eq(old_edge));
         if user_admin_edge.is_none() {
             new_auth.user_admin_edges.push(old_edge.clone());
         }
@@ -788,7 +788,7 @@ fn prepare_auth_with_history(
 
     //ensure that existing user edges and nodes are included in the new Authorisation
     for old_edge in &old_auth.user_edges {
-        let user_edge = &new_auth.user_edges.iter().find(|edge| edge.eq(&old_edge));
+        let user_edge = &new_auth.user_edges.iter().find(|edge| edge.eq(old_edge));
         if user_edge.is_none() {
             new_auth.user_edges.push(old_edge.clone());
         }
@@ -849,7 +849,7 @@ fn prepare_auth_with_history(
 
     //ensure that existing Right edges and nodes are included in the new Authorisation
     for old_edge in &old_auth.right_edges {
-        let right_edge = &new_auth.right_edges.iter().find(|edge| edge.eq(&old_edge));
+        let right_edge = &new_auth.right_edges.iter().find(|edge| edge.eq(old_edge));
         if right_edge.is_none() {
             new_auth.right_edges.push(old_edge.clone());
         }

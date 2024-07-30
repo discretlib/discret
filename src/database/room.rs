@@ -232,7 +232,7 @@ impl Authorisation {
             false
         };
 
-        return user_valid || admin_valid;
+        user_valid || admin_valid
     }
 
     pub fn can(&self, entity: &str, date: i64, right: &RightType) -> bool {

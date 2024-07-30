@@ -331,23 +331,21 @@ impl PeerConnectionService {
                     connection_id,
                     peer_manager::REASON_UNKNOWN,
                     "",
-                ) {}
-                let _ = event_service
-                    .sender
-                    .send(EventServiceMessage::PeerDisconnected(
-                        verifying_key,
-                        now(),
-                        connection_id,
-                    ))
-                    .await;
+                ) {
+                    let _ = event_service
+                        .sender
+                        .send(EventServiceMessage::PeerDisconnected(
+                            verifying_key,
+                            now(),
+                            connection_id,
+                        ))
+                        .await;
+                }
             }
 
             PeerConnectionMessage::InviteAccepted(token, peer) => {
                 if let Err(e) = peer_manager.invite_accepted(token, peer).await {
-                    log_service.error(
-                        "PeerConnectionMessage::InviteAccepted".to_string(),
-                        crate::Error::from(e),
-                    );
+                    log_service.error("PeerConnectionMessage::InviteAccepted".to_string(), e);
                 }
             }
 
@@ -365,10 +363,7 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::SendAnnounce() => {
                 if let Err(e) = peer_manager.send_annouces().await {
-                    log_service.error(
-                        "PeerConnectionMessage::SendAnnounce".to_string(),
-                        crate::Error::from(e),
-                    );
+                    log_service.error("PeerConnectionMessage::SendAnnounce".to_string(), e);
                 }
             }
             PeerConnectionMessage::MulticastMessage(message, address) => match message {

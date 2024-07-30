@@ -530,7 +530,7 @@ impl GraphDatabaseService {
                 }
             }
             Err(e) => {
-                let _ = reply.send(Err(Error::ChannelSend(e.to_string())));
+                let _ = reply.send(Err(Error::ChannelSend(e.to_string()))).await;
             }
         }
 
@@ -861,7 +861,7 @@ impl GraphDatabaseService {
                         .await;
                 }
                 Err(e) => {
-                    let _ = reply.send(Err(Error::from(e))).await;
+                    let _ = reply.send(Err(e)).await;
                 }
             },
             Err(e) => {
@@ -879,12 +879,7 @@ impl GraphDatabaseService {
         &self,
         room_id: Uid,
     ) -> std::result::Result<Vec<AllowedPeer>, crate::Error> {
-        AllowedPeer::get(
-            uid_encode(&room_id),
-            system_entities::Status::Enabled,
-            &self,
-        )
-        .await
+        AllowedPeer::get(uid_encode(&room_id), system_entities::Status::Enabled, self).await
     }
 }
 

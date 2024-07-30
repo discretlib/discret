@@ -262,17 +262,17 @@ pub fn random_domain_name() -> String {
     for _ in 0..size {
         let mut index: usize = OsRng.next_u32().try_into().unwrap();
         if vowel {
-            index = index % vowels.len();
+            index %= vowels.len();
             domain.push(vowels[index]);
             vowel = false;
         } else {
-            index = index % alphabet.len();
+            index %= alphabet.len();
             domain.push(alphabet[index]);
             vowel = true;
         }
     }
     let mut index: usize = OsRng.next_u32().try_into().unwrap();
-    index = index % extension.len();
+    index %= extension.len();
     domain.push_str(extension[index]);
 
     domain

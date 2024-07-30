@@ -427,7 +427,7 @@ impl Node {
                 _entity = ? AND
                 mdate >= ? AND mdate < ? 
             ORDER BY mdate DESC";
-        let mut stmt = conn.prepare_cached(&query)?;
+        let mut stmt = conn.prepare_cached(query)?;
 
         let mut rows = stmt.query((room_id, entity, date(day), date_next_day(day)))?;
         let mut res = HashSet::new();
@@ -947,7 +947,7 @@ impl NodeDeletionEntry {
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
         let query = "DELETE FROM _node WHERE room_id=? AND id=?";
-        let mut stmt = conn.prepare_cached(&query)?;
+        let mut stmt = conn.prepare_cached(query)?;
         for node in nodes {
             stmt.execute((node.room_id, node.id))?;
             node.write(conn)?;

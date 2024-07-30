@@ -155,10 +155,7 @@ impl DiscretEndpoint {
                         Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
                             .await;
                     if let Err(e) = new_conn {
-                        logs.error(
-                            "ipv4 - start_accepted".to_string(),
-                            crate::Error::from(Error::from(e)),
-                        );
+                        logs.error("ipv4 - start_accepted".to_string(), crate::Error::from(e));
                     }
                 });
             }
@@ -176,10 +173,7 @@ impl DiscretEndpoint {
                             Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
                                 .await;
                         if let Err(e) = new_conn {
-                            logs.error(
-                                "ipv6 - start_accepted".to_string(),
-                                crate::Error::from(Error::from(e)),
-                            );
+                            logs.error("ipv6 - start_accepted".to_string(), crate::Error::from(e));
                         };
                     });
                 }
@@ -323,7 +317,7 @@ impl DiscretEndpoint {
                     }
                 };
 
-                let wait = 1 * (1 + i);
+                let wait = 1 + i;
                 tokio::time::sleep(Duration::from_secs(wait.try_into().unwrap())).await;
             }
         });
@@ -788,7 +782,7 @@ impl DiscretEndpoint {
                     break;
                 }
             }
-            con.close(VarInt::from(1 as u8), "".as_bytes());
+            con.close(VarInt::from(1_u8), "".as_bytes());
             let _ = &peer_s
                 .sender
                 .send(PeerConnectionMessage::BeaconDisconnected(
@@ -835,7 +829,7 @@ impl DiscretEndpoint {
                 }
             }
 
-            con.close(VarInt::from(1 as u8), "".as_bytes());
+            con.close(VarInt::from(1_u8), "".as_bytes());
             let _ = &peer_s
                 .sender
                 .send(PeerConnectionMessage::BeaconDisconnected(

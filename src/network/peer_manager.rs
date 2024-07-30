@@ -213,8 +213,7 @@ impl PeerManager {
     }
 
     pub async fn send_annouces(&self) -> Result<(), crate::Error> {
-        let total_peer =
-            &self.allowed_peers.len() + &self.invites.len() + &self.owned_invites.len();
+        let total_peer = self.allowed_peers.len() + self.invites.len() + self.owned_invites.len();
         if total_peer >= MAX_ANNOUNCE_TOKENS {
             return Err(crate::Error::Unsupported(format!(
                 "Soon to be fixed, but for now, the total of allowed peers, invites and owned invites is limited to {}",
@@ -602,7 +601,7 @@ impl PeerManager {
     }
 
     pub async fn accept_invite(&mut self, invite: &Vec<u8>) -> Result<(), crate::Error> {
-        let inv: Invite = bincode::deserialize(&invite)?;
+        let inv: Invite = bincode::deserialize(invite)?;
         if !inv.application.eq(&self.app_name) {
             return Err(Error::InvalidInvite(format!(
                 "this invite is for app {} and not for {}",
@@ -830,8 +829,7 @@ impl PeerManager {
                     ))
                     .await;
             } else {
-                self.logs
-                    .info(format!("Beacon disconnected: {}", address.to_string()));
+                self.logs.info(format!("Beacon disconnected: {}", address));
             }
         }
         self.connected_beacons.remove(&address);

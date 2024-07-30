@@ -1,6 +1,6 @@
 use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
 
-use std::{path::PathBuf, thread, time, usize};
+use std::{path::PathBuf, thread, time};
 use tokio::sync::{
     mpsc,
     oneshot::{self, Sender},
@@ -150,7 +150,7 @@ pub fn prepare_connection(conn: &Connection) -> Result<()> {
         conn.execute("BEGIN TRANSACTION", [])?;
         Node::create_tables(conn)?;
         Edge::create_tables(conn)?;
-        DailyLog::create_tables(&conn)?;
+        DailyLog::create_tables(conn)?;
         system_entities::create_table(conn)?;
         conn.execute("COMMIT", [])?;
     }

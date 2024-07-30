@@ -114,7 +114,7 @@ impl fmt::Display for FieldType {
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    JSON(#[from] serde_json::Error),
+    Json(#[from] serde_json::Error),
 
     #[error(transparent)]
     BoolParsing(#[from] std::str::ParseBoolError),
@@ -123,7 +123,7 @@ pub enum Error {
     IntParsing(#[from] std::num::ParseIntError),
 
     #[error(transparent)]
-    TryfromIntError(#[from] std::num::TryFromIntError),
+    TryfromInt(#[from] std::num::TryFromIntError),
 
     #[error("{0}")]
     Parser(String),
