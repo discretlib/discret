@@ -129,7 +129,7 @@ impl InboundQueryService {
                             Ok(room_list) => {
                                 if init_rooms {
                                     for room in &room_list {
-                                        peer.allowed_room.insert(room.clone());
+                                        peer.allowed_room.insert(*room);
                                     }
                                 }
                                 peer.send(msg.id, true, false, room_list).await?;

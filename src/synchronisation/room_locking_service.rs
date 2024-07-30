@@ -43,8 +43,7 @@ impl RoomLockService {
                                 }
                             }
                         } else {
-                            peer_lock_request
-                                .insert(circuit.clone(), PeerLockRequest { reply, rooms });
+                            peer_lock_request.insert(circuit, PeerLockRequest { reply, rooms });
                             peer_queue.push_front(circuit);
                         }
                         for _ in 0..avalaible.clone() {
@@ -90,7 +89,7 @@ impl RoomLockService {
                             if locked.contains(&room) {
                                 lock_request.rooms.push_front(room);
                             } else {
-                                if let Ok(_) = lock_request.reply.send(room.clone()) {
+                                if let Ok(_) = lock_request.reply.send(room) {
                                     locked.insert(room);
                                     *avalaible -= 1;
                                     lock_aquired = true;
@@ -100,7 +99,7 @@ impl RoomLockService {
                         }
                     }
                     if !lock_request.rooms.is_empty() {
-                        peer_lock_request.insert(peer.clone(), lock_request);
+                        peer_lock_request.insert(peer, lock_request);
                         peer_queue.push_front(peer);
                     }
                     if lock_aquired {

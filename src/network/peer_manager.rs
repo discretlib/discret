@@ -600,7 +600,7 @@ impl PeerManager {
         Ok(bincode::serialize(&invite)?)
     }
 
-    pub async fn accept_invite(&mut self, invite: &Vec<u8>) -> Result<(), crate::Error> {
+    pub async fn accept_invite(&mut self, invite: &[u8]) -> Result<(), crate::Error> {
         let inv: Invite = bincode::deserialize(invite)?;
         if !inv.application.eq(&self.app_name) {
             return Err(Error::InvalidInvite(format!(
@@ -774,7 +774,7 @@ impl PeerManager {
                     .sender
                     .send(EndpointMessage::InitiateBeaconConnection(
                         address,
-                        beacon.cert_hash.clone(),
+                        beacon.cert_hash,
                     ))
                     .await;
             } else {
@@ -825,7 +825,7 @@ impl PeerManager {
                     .sender
                     .send(EndpointMessage::InitiateBeaconConnection(
                         address,
-                        beacon.cert_hash.clone(),
+                        beacon.cert_hash,
                     ))
                     .await;
             } else {

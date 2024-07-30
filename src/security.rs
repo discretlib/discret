@@ -422,7 +422,7 @@ pub fn new_uid() -> Uid {
     let time = now();
     let time = &time.to_be_bytes()[TIME_BYTES..];
 
-    let mut uid = DEFAULT_UID.clone();
+    let mut uid = DEFAULT_UID;
     let (one, two) = uid.split_at_mut(time.len());
 
     one.copy_from_slice(time);
@@ -451,7 +451,7 @@ pub fn uid_from_hash(hash: &[u8; 32]) -> Uid {
 }
 
 pub fn default_uid() -> Uid {
-    DEFAULT_UID.clone()
+    DEFAULT_UID
 }
 
 pub fn uid_decode(base64: &str) -> Result<Uid, Error> {

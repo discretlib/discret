@@ -351,7 +351,7 @@ impl LocalPeerService {
             let acquere = acquired_lock.lock().await;
             let mut rooms: Vec<Uid> = Vec::new();
             for room in acquere.iter() {
-                rooms.push(room.clone());
+                rooms.push(*room);
             }
             Self::cleanup(&lock_service, rooms).await;
             let key = remote_verifying_key.lock().await;
@@ -381,7 +381,7 @@ impl LocalPeerService {
                 while let Some(rooms) = rooms_rcv.recv().await {
                     let rooms = rooms?;
                     for room in &rooms {
-                        remote_rooms.insert(room.clone());
+                        remote_rooms.insert(*room);
                     }
                     lock_service
                         .request_locks(circuit_id, rooms, lock_reply.clone())
@@ -408,7 +408,7 @@ impl LocalPeerService {
                 if validated {
                     conn_ready.store(true, Ordering::Relaxed);
 
-                    Self::send_event(&event_sender, RemoteEvent::Ready)
+                    Self::send_event(event_sender, RemoteEvent::Ready)
                         .await
                         .map_err(|_| crate::Error::TimeOut("Ready".to_string()))?;
 
@@ -449,7 +449,7 @@ impl LocalPeerService {
             LocalEvent::RoomDefinitionChanged(room) => {
                 let key = remote_key.lock().await;
                 if room.has_user(&key) {
-                    inbound_query_service.add_allowed_room(room.id.clone());
+                    inbound_query_service.add_allowed_room(room.id);
                     Self::send_event(event_sender, RemoteEvent::RoomDefinitionChanged(room.id))
                         .await
                         .map_err(|_| crate::Error::TimeOut("RoomDefinitionChanged".to_string()))?;
@@ -483,10 +483,10 @@ impl LocalPeerService {
     ) -> Result<(), crate::Error> {
         tokio::spawn(async move {
             {
-                acquired_lock.lock().await.insert(room.clone());
+                acquired_lock.lock().await.insert(room);
             }
             match Self::synchronise_room(
-                room.clone(),
+                room,
                 &db,
                 &query_service,
                 &verify_service,
@@ -497,7 +497,7 @@ impl LocalPeerService {
             {
                 Ok(_) => {
                     event_service
-                        .notify(EventServiceMessage::RoomSynchronized(room.clone()))
+                        .notify(EventServiceMessage::RoomSynchronized(room))
                         .await;
                 }
                 Err(e) => {
@@ -507,7 +507,7 @@ impl LocalPeerService {
                 }
             };
 
-            lock_service.unlock(room.clone()).await;
+            lock_service.unlock(room).await;
             acquired_lock.lock().await.remove(&room);
         });
 
