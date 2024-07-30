@@ -47,7 +47,7 @@ impl EntityMutation {
         }
     }
     pub fn add_field(&mut self, field: MutationField) -> Result<(), Error> {
-        if self.fields.get(&field.name).is_some() {
+        if self.fields.contains_key(&field.name) {
             Err(Error::DuplicatedField(field.name.clone()))
         } else {
             self.fields.insert(field.name.clone(), field);
@@ -212,7 +212,7 @@ impl MutationParser {
                 match &mut field.field_value {
                     MutationFieldValue::Array(inners) => {
                         for inner in inners {
-                            if inner.fields.get(ROOM_ID_FIELD).is_none() {
+                            if !inner.fields.contains_key(ROOM_ID_FIELD) {
                                 if let Some(room_field) = room_field.clone() {
                                     inner.add_field(room_field)?;
                                 }
@@ -221,7 +221,7 @@ impl MutationParser {
                         }
                     }
                     MutationFieldValue::Entity(inner) => {
-                        if inner.fields.get(ROOM_ID_FIELD).is_none() {
+                        if !inner.fields.contains_key(ROOM_ID_FIELD) {
                             if let Some(room_field) = room_field.clone() {
                                 inner.add_field(room_field)?;
                             }

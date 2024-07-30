@@ -462,8 +462,7 @@ impl DailyLog {
             query_list.push(current_query);
         }
 
-        for i in 0..query_list.len() {
-            let current_query = &query_list[i];
+        for current_query in &query_list {
             let ids = &current_query.ids;
             let in_clause = &current_query.in_clause;
 

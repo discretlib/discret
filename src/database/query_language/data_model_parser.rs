@@ -277,7 +277,7 @@ impl DataModel {
             .get_mut(entity)
             .ok_or(Error::EntityNotFound(entity.to_string()))?;
 
-        if ent.indexes.get(&index.name()).is_some() {
+        if ent.indexes.contains_key(&index.name()) {
             return Err(Error::IndexAllreadyExists(
                 index.name(),
                 name_space.to_string(),

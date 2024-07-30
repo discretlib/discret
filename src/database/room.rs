@@ -34,7 +34,7 @@ pub struct Room {
 
 impl Room {
     pub fn add_auth(&mut self, auth: Authorisation) -> Result<()> {
-        if self.authorisations.get(&auth.id).is_some() {
+        if self.authorisations.contains_key(&auth.id) {
             return Err(Error::AuthorisationExists());
         }
         self.authorisations.insert(auth.id, auth);
