@@ -34,7 +34,7 @@ pub enum AuthorisationMessage {
     MutationStream(MutationQuery, mpsc::Sender<super::Result<MutationQuery>>),
     RoomMutationWrite(Result<()>, RoomMutationWriteQuery),
     RoomMutationStreamWrite(Result<()>, RoomMutationStreamWriteQuery),
-    RoomNodeAdd(Option<RoomNode>, RoomNode, Sender<super::Result<()>>),
+    RoomNodeAdd(Option<RoomNode>, Box<RoomNode>, Sender<super::Result<()>>),
     RoomNodeWrite(Result<()>, RoomNodeWriteQuery),
     RoomsForPeer(Vec<u8>, i64, Sender<HashSet<Uid>>),
     AddNodes(Vec<NodeToInsert>, Vec<Uid>, Sender<Result<Vec<Uid>>>),
@@ -214,7 +214,6 @@ impl AuthorisationService {
                     },
                     Err(e) => {
                         let _ = reply.send(Err(e));
-                        return;
                     }
                 };
             }
@@ -300,7 +299,7 @@ impl AuthorisationService {
                             true => {
                                 let query = WriteMessage::RoomNode(
                                     RoomNodeWriteQuery {
-                                        room: room_node,
+                                        room: *room_node,
                                         reply,
                                     },
                                     self_sender.clone(),
@@ -828,13 +827,11 @@ impl RoomAuthorisations {
             }
         }
         //check if user can mutate the room
-        if need_room_admin {
-            if !room.is_admin(verifying_key, insert_entity.node_to_mutate.date) {
-                return Err(Error::AuthorisationRejected(
-                    node_insert.entity.clone(),
-                    base64_encode(&room.id),
-                ));
-            }
+        if need_room_admin && !room.is_admin(verifying_key, insert_entity.node_to_mutate.date) {
+            return Err(Error::AuthorisationRejected(
+                node_insert.entity.clone(),
+                base64_encode(&room.id),
+            ));
         }
 
         Ok(Some(room))
@@ -968,11 +965,12 @@ impl RoomAuthorisations {
                 _ => unreachable!(),
             }
         }
-        if need_user_admin {
-            if !authorisation.can_admin_users(verifying_key, insert_entity.node_to_mutate.date) {
-                need_room_admin = true;
-            }
+        if need_user_admin
+            && !authorisation.can_admin_users(verifying_key, insert_entity.node_to_mutate.date)
+        {
+            need_room_admin = true;
         }
+
         Ok(need_room_admin)
     }
 

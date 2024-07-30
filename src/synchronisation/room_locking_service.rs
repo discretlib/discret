@@ -89,13 +89,11 @@ impl RoomLockService {
                         if let Some(room) = lock_request.rooms.pop_back() {
                             if locked.contains(&room) {
                                 lock_request.rooms.push_front(room);
-                            } else {
-                                if lock_request.reply.send(room).is_ok() {
-                                    locked.insert(room);
-                                    *avalaible -= 1;
-                                    lock_aquired = true;
-                                    break;
-                                };
+                            } else if lock_request.reply.send(room).is_ok() {
+                                locked.insert(room);
+                                *avalaible -= 1;
+                                lock_aquired = true;
+                                break;
                             }
                         }
                     }

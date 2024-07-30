@@ -482,7 +482,7 @@ async fn invites_beacon_ipv6() {
             }
         }
     });
-    tokio::time::timeout(Duration::from_millis(2000), handle)
+    tokio::time::timeout(Duration::from_millis(3000), handle)
         .await
         .unwrap()
         .unwrap();

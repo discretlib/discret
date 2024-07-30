@@ -720,8 +720,8 @@ impl LocalPeerService {
 
                     match local_entity_log {
                         Some(local_log) => {
-                            if !local_log.daily_hash.eq(&remote.daily_hash) {
-                                if Self::synchronise_day(
+                            if !local_log.daily_hash.eq(&remote.daily_hash)
+                                && Self::synchronise_day(
                                     room_id,
                                     remote.entity.clone(),
                                     remote.date,
@@ -731,9 +731,8 @@ impl LocalPeerService {
                                     log_service,
                                 )
                                 .await?
-                                {
-                                    modified = true;
-                                }
+                            {
+                                modified = true;
                             }
                         }
                         None => {

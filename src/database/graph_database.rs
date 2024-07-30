@@ -475,7 +475,8 @@ impl GraphDatabaseService {
                 let room_node_res = RoomNode::read(conn, room_id).map_err(Error::from);
                 match room_node_res {
                     Ok(old_room_node) => {
-                        let msg = AuthorisationMessage::RoomNodeAdd(old_room_node, room, reply);
+                        let msg =
+                            AuthorisationMessage::RoomNodeAdd(old_room_node, Box::new(room), reply);
                         let _ = auth_service.send_blocking(msg);
                     }
                     Err(err) => {
