@@ -46,7 +46,8 @@ impl RoomLockService {
                             peer_lock_request.insert(circuit, PeerLockRequest { reply, rooms });
                             peer_queue.push_front(circuit);
                         }
-                        for _ in 0..avalaible {
+                        let avail_iter = avalaible;
+                        for _ in 0..avail_iter {
                             Self::acquire_lock(
                                 &mut peer_lock_request,
                                 &mut peer_queue,

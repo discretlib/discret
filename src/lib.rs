@@ -327,6 +327,8 @@ pub fn database_exists(
     GraphDatabaseService::database_exists(app_key, key_material, data_folder)
 }
 
+pub type MutateReceiver =
+    mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>;
 ///
 /// The main entry point for the Discret Library
 ///
@@ -428,12 +430,7 @@ impl Discret {
     /// The receiver retrieve an internal representation of the mutation query to avoid the performance cost of creating the JSON result, wich is probably unecessary when doing batch insert.
     /// To get the JSON, call the  MutationQuery.result() method
     ///
-    pub fn mutation_stream(
-        &self,
-    ) -> (
-        mpsc::Sender<(String, Option<Parameters>)>,
-        mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>,
-    ) {
+    pub fn mutation_stream(&self) -> (mpsc::Sender<(String, Option<Parameters>)>, MutateReceiver) {
         self.db.mutation_stream()
     }
 
@@ -622,12 +619,7 @@ impl DiscretBlocking {
     /// The receiver retrieve an internal representation of the mutation query to avoid the performance cost of creating the JSON result, wich is probably unecessary when doing batch insert.
     /// To get the JSON, call the  MutationQuery.result() method
     ///
-    pub fn mutation_stream(
-        &self,
-    ) -> (
-        mpsc::Sender<(String, Option<Parameters>)>,
-        mpsc::Receiver<std::result::Result<MutationQuery, crate::database::Error>>,
-    ) {
+    pub fn mutation_stream(&self) -> (mpsc::Sender<(String, Option<Parameters>)>, MutateReceiver) {
         self.discret.mutation_stream()
     }
 
