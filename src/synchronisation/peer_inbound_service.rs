@@ -141,6 +141,7 @@ impl QueryService {
 
 pub struct LocalPeerService {}
 impl LocalPeerService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn initialise_connection(
         connection_info: &ConnectionInfo,
         local_key: &Vec<u8>,
@@ -224,7 +225,7 @@ impl LocalPeerService {
         }
         Ok(true)
     }
-
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         mut remote_event: Receiver<RemoteEvent>,
         mut local_event: broadcast::Receiver<LocalEvent>,
@@ -360,7 +361,7 @@ impl LocalPeerService {
                 .await;
         });
     }
-
+    #[allow(clippy::too_many_arguments)]
     async fn process_remote_event(
         event: RemoteEvent,
         lock_reply: mpsc::UnboundedSender<Uid>,
@@ -469,7 +470,7 @@ impl LocalPeerService {
         }
         Ok(())
     }
-
+    #[allow(clippy::too_many_arguments)]
     async fn process_acquired_lock(
         room: Uid,
         acquired_lock: Arc<Mutex<HashSet<Uid>>>,

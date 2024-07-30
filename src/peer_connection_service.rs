@@ -70,6 +70,7 @@ pub struct PeerConnectionService {
     pub sender: mpsc::Sender<PeerConnectionMessage>,
 }
 impl PeerConnectionService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         app_name: String,
         local_verifying_key: Vec<u8>,
@@ -229,7 +230,7 @@ impl PeerConnectionService {
             .send(PeerConnectionMessage::InviteAccepted(token, peer))
             .await;
     }
-
+    #[allow(clippy::too_many_arguments)]
     async fn process_peer_message(
         msg: PeerConnectionMessage,
         local_verifying_key: Vec<u8>,

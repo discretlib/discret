@@ -30,6 +30,7 @@ pub struct InboundQueryService {
     room_sender: UnboundedSender<Uid>,
 }
 impl InboundQueryService {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         circuit_id: [u8; 32],
         conn_id: Uid,

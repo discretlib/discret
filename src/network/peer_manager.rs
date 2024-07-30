@@ -87,6 +87,7 @@ pub struct PeerManager {
     verify_service: SignatureVerificationService,
 }
 impl PeerManager {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         app_name: String,
         endpoint: DiscretEndpoint,

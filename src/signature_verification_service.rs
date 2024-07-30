@@ -14,7 +14,7 @@ use crate::{
 use tokio::sync::oneshot::{self};
 
 pub enum VerificationMessage {
-    RoomNode(RoomNode, oneshot::Sender<Result<RoomNode>>),
+    RoomNode(Box<RoomNode>, oneshot::Sender<Result<RoomNode>>),
     Nodes(Vec<Node>, oneshot::Sender<Result<Vec<Node>>>),
     Edges(Vec<Edge>, oneshot::Sender<Result<Vec<Edge>>>),
     EdgeLog(
@@ -44,7 +44,7 @@ impl SignatureVerificationService {
                 while let Ok(msg) = local_receiver.recv() {
                     match msg {
                         VerificationMessage::RoomNode(node, reply) => {
-                            let _ = reply.send(Self::room_check(node));
+                            let _ = reply.send(Self::room_check(*node));
                         }
                         VerificationMessage::Nodes(nodes, reply) => {
                             let _ = reply.send(Self::nodes_check(nodes));
@@ -182,7 +182,7 @@ impl SignatureVerificationService {
         let (reply, receiver) = oneshot::channel::<Result<RoomNode>>();
         let _ = self
             .sender
-            .send_async(VerificationMessage::RoomNode(node, reply))
+            .send_async(VerificationMessage::RoomNode(Box::new(node), reply))
             .await;
         receiver.await.unwrap() //won't fail unless when stopping app
     }

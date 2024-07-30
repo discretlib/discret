@@ -81,7 +81,7 @@ impl GraphDatabaseService {
         let exist = database_path.exists();
         Ok(exist)
     }
-
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         app_key: &str,
         datamodel: &str,

@@ -189,7 +189,7 @@ impl DiscretEndpoint {
             ipv6_cert_hash,
         })
     }
-
+    #[allow(clippy::too_many_arguments)]
     fn initiate_connection(
         cert_verifier: Arc<ServerCertVerifier>,
         endpoint_id: Uid,
@@ -438,6 +438,7 @@ impl DiscretEndpoint {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_channels(
         conn: Connection,
         peer_service: &PeerConnectionService,
