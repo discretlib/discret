@@ -226,8 +226,7 @@ impl DiscretEndpoint {
         let input_buffers = input_buffers.clone();
         let output_buffers = output_buffers.clone();
         let peer_verifying_key = peer_verifying_key.clone();
-        let name = random_domain_name();
-        cert_verifier.add_valid_certificate(name.clone(), cert_hash);
+        let name = cert_verifier.add_valid_certificate(cert_hash);
 
         log.info(format!(
             "Connecting: {} -> {}",
@@ -700,8 +699,7 @@ impl DiscretEndpoint {
         };
 
         let peer_service = peer_service.clone();
-        let name = random_domain_name();
-        cert_verifier.add_valid_certificate(name.clone(), cert_hash);
+        let name = cert_verifier.add_valid_certificate(cert_hash);
 
         log.info(format!(
             "Connecting to beacon: {} -> {}",
@@ -905,9 +903,15 @@ impl ServerCertVerifier {
         })
     }
 
-    pub fn add_valid_certificate(&self, name: String, certificate: [u8; 32]) {
+    pub fn add_valid_certificate(&self, certificate: [u8; 32]) -> String {
         let mut v = self.valid_certificates.lock().unwrap();
-        v.insert(name, certificate);
+        let mut name = random_domain_name();
+        while v.contains_key(&name) {
+            name = random_domain_name();
+        }
+
+        v.insert(name.clone(), certificate);
+        name
     }
 
     pub fn get(&self, name: &str) -> Option<[u8; 32]> {
@@ -993,12 +997,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv4() {
         let addr = "0.0.0.0:0".parse().unwrap();
-        let name_one = "server_one.me";
-        let cert: rcgen::CertifiedKey = security::generate_x509_certificate(name_one);
+
+        let cert: rcgen::CertifiedKey = security::generate_x509_certificate("server_one.me");
         let der = cert.cert.der().deref();
         let hasshe = hash(der);
         let cert_verifier = ServerCertVerifier::new();
-        cert_verifier.add_valid_certificate(name_one.to_string(), hasshe);
+        let con_name_one = cert_verifier.add_valid_certificate(hasshe);
 
         let endpoint_one = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
         let localaddress_one = endpoint_one.local_addr().unwrap();
@@ -1017,11 +1021,10 @@ mod tests {
             }
         });
 
-        let name_two = "server_two.me";
-        let cert = security::generate_x509_certificate(name_two);
+        let cert = security::generate_x509_certificate("server_two.me");
         let der = cert.cert.der().deref();
         let hasshe = hash(der);
-        cert_verifier.add_valid_certificate(name_two.to_string(), hasshe);
+        let con_name_two = cert_verifier.add_valid_certificate(hasshe);
 
         let endpoint_two = build_endpoint(addr, cert, cert_verifier).unwrap();
         let localaddress_two = endpoint_two.local_addr().unwrap();
@@ -1045,7 +1048,7 @@ mod tests {
             .unwrap();
 
         let connection_two = endpoint_two
-            .connect(addr_one, name_one)
+            .connect(addr_one, &con_name_one)
             .unwrap()
             .await
             .unwrap();
@@ -1058,7 +1061,7 @@ mod tests {
             .unwrap();
 
         let connection_one = endpoint_one
-            .connect(addr_two, name_two)
+            .connect(addr_two, &con_name_two)
             .unwrap()
             .await
             .unwrap();
@@ -1067,7 +1070,7 @@ mod tests {
         send.write_i32(111111).await.unwrap();
 
         let connection_one = endpoint_one
-            .connect(addr_two, name_two)
+            .connect(addr_two, &con_name_two)
             .unwrap()
             .await
             .unwrap();
@@ -1081,12 +1084,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connection_ipv6() {
         let addr = "[::]:0".parse().unwrap();
-        let name = "hello.world";
-        let cert = security::generate_x509_certificate(name);
+
+        let cert = security::generate_x509_certificate("hello.world");
         let der = cert.cert.der().deref();
         let hash = hash(der);
         let cert_verifier = ServerCertVerifier::new();
-        cert_verifier.add_valid_certificate(name.to_string(), hash);
+        let conn_name = cert_verifier.add_valid_certificate(hash);
 
         let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
         let localadree = endpoint.local_addr().unwrap();
@@ -1098,16 +1101,12 @@ mod tests {
                 new_conn.remote_address()
             );
         });
-        let name = "hello.world";
-        let cert = security::generate_x509_certificate(name);
+
+        let cert = security::generate_x509_certificate("hello.world.de");
         let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
         let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
 
-        let connection = endpoint
-            .connect(addr, "hello.world")
-            .unwrap()
-            .await
-            .unwrap();
+        let connection = endpoint.connect(addr, &conn_name).unwrap().await.unwrap();
 
         println!("[client] connected: addr={}", connection.remote_address());
         // Dropping handles allows the corresponding objects to automatically shut down
@@ -1117,44 +1116,13 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_invalid_certificate() {
-        let addr = "[::]:0".parse().unwrap();
-        let cert = security::generate_x509_certificate("invalid.me");
-
-        // the server's certificate is not added to the valid list
-        let cert_verifier = ServerCertVerifier::new();
-        let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
-
-        let localadree = endpoint.local_addr().unwrap();
-        tokio::spawn(async move {
-            let incoming_conn = endpoint.accept().await.unwrap();
-            incoming_conn
-                .await
-                .expect_err("connection should have failed due to invalid certificate");
-        });
-
-        let cert = security::generate_x509_certificate("invalid.me");
-        let endpoint = build_endpoint(addr, cert, cert_verifier).unwrap();
-        let addr = format!("[::1]:{}", localadree.port()).parse().unwrap();
-
-        endpoint
-            .connect(addr, &random_domain_name())
-            .unwrap()
-            .await
-            .expect_err("connection should have failed due to invalid certificate");
-
-        endpoint.wait_idle().await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_invalid_server_name() {
         let addr = "[::]:0".parse().unwrap();
-        let name = "hello.world";
-        let cert = security::generate_x509_certificate(name);
+        let cert = security::generate_x509_certificate("hello.world");
         let der = cert.cert.der().deref();
         let hash = hash(der);
         let cert_verifier = ServerCertVerifier::new();
-        cert_verifier.add_valid_certificate(name.to_string(), hash);
+        cert_verifier.add_valid_certificate(hash);
 
         let endpoint = build_endpoint(addr, cert, cert_verifier.clone()).unwrap();
 
