@@ -1,14 +1,13 @@
 # Discret: Create local first, peer to peer application (P2P) using a GraphQL inspired API
 
-Discret hides the complexity of peer to peer networks and reduces it to a database synchronization problem.
-Compared to traditional application, most of the new complexity resides in the rights managements.
+*Discret* hides the complexity of peer to peer networks and reduces it to a data access problem. 
 
-Creating an application requires a few steps
-- Create a datamodel that contains the entity that will be synchronized
-- Create Rooms to manage access rights to the data
-- Add data to the Rooms
-- Create invitation to your rooms and manually send them to who you want via external application like email
-- Once the peer accepts the invitation, it will start synchronizing data it is allowed to access.
+The API allows you to:
+- manage your data using a GraphQL syntax,
+- add access right to your data (in graphQL too),
+- create and accept invites from other peers.
+
+*Discret* will synchronize your data with other peers, depending on the access right you have given to those peers.
 
 More details and tutorials are available in the [documentation site](https://discretlib.github.io/doc/)
 
