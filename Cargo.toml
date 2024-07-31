@@ -1,12 +1,14 @@
 
 [package]
 name = "discret"
+homepage = "https://discretlib.github.io/doc/"
 version = "0.6.0"
-license = "AGPL"
+license-file = "LICENSE"
+description = "A backend to create peer to peer (P2P) applications, using a GraphQL inspired syntax "
 authors = ["Adrien Salais <adrien.salais@proton.me>"]
 keywords = ["p2p, peer to peer, GraphQl, QUIC"]
 edition = "2021"
-
+readme = "README.md"
 
 [dependencies]
 rusqlite = { version = "0.32.1", features = [
