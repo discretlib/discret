@@ -305,14 +305,15 @@ impl DiscretEndpoint {
                                 "InitiateConnection".to_string(),
                                 crate::Error::from(Error::from(e)),
                             );
+
+                            let _ = &peer_service
+                                .sender
+                                .send(PeerConnectionMessage::PeerConnectionFailed(
+                                    endpoint_id,
+                                    remote_id,
+                                ))
+                                .await;
                         }
-                        let _ = &peer_service
-                            .sender
-                            .send(PeerConnectionMessage::PeerConnectionFailed(
-                                endpoint_id,
-                                remote_id,
-                            ))
-                            .await;
                     }
                 };
 
