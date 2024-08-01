@@ -34,7 +34,6 @@ impl Beacon {
     ///
     pub fn start(
         ipv4_port: u16,
-        ipv6_port: u16,
         der: Vec<u8>,
         pks_der: Vec<u8>,
         log_service: LogService,
@@ -50,14 +49,7 @@ impl Beacon {
             input_buffers.clone(),
             MAX_MESSAGE_SIZE,
         );
-        let ipv6_addr: SocketAddr = format!("[::]:{}", ipv6_port).parse()?;
-        let ipv6_endpoint = Self::enpoint(ipv6_addr, der, pks_der)?;
-        Self::start_endpoint(
-            ipv6_endpoint,
-            log_service.clone(),
-            input_buffers,
-            MAX_MESSAGE_SIZE,
-        );
+
         Ok(Self {})
     }
 
