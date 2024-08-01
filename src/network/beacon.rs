@@ -212,56 +212,58 @@ impl MeetingPoint {
                     insert = false;
                 } else {
                     let mut this_peer = conn.lock().await;
-                    let this_msg = BeaconMessage::InitiateConnection(
-                        other_peer.header.clone().unwrap(),
-                        other_peer.conn.remote_address(),
-                        **token,
-                    );
-                    self.buffer.clear();
-                    bincode::serialize_into::<&mut Vec<u8>, _>(&mut self.buffer, &this_msg)
-                        .unwrap();
-
-                    if this_peer
-                        .sender
-                        .write_u32(self.buffer.len() as u32)
-                        .await
-                        .is_err()
+                    if !other_peer
+                        .conn
+                        .remote_address()
+                        .ip()
+                        .eq(&this_peer.conn.remote_address().ip())
                     {
-                        this_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
-                        break;
-                    }
-                    if this_peer.sender.write_all(&self.buffer).await.is_err() {
-                        this_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
-                        break;
-                    }
+                        let this_msg = BeaconMessage::InitiateConnection(
+                            other_peer.header.clone().unwrap(),
+                            other_peer.conn.remote_address(),
+                            **token,
+                        );
 
-                    let other_msg = BeaconMessage::InitiateConnection(
-                        this_peer.header.clone().unwrap(),
-                        this_peer.conn.remote_address(),
-                        **token,
-                    );
-                    self.buffer.clear();
-                    bincode::serialize_into::<&mut Vec<u8>, _>(&mut self.buffer, &other_msg)
-                        .unwrap();
+                        self.buffer.clear();
+                        bincode::serialize_into::<&mut Vec<u8>, _>(&mut self.buffer, &this_msg)
+                            .unwrap();
 
-                    if other_peer
-                        .sender
-                        .write_u32(self.buffer.len() as u32)
-                        .await
-                        .is_err()
-                    {
-                        other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
+                        if this_peer
+                            .sender
+                            .write_u32(self.buffer.len() as u32)
+                            .await
+                            .is_err()
+                        {
+                            this_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
+                            break;
+                        }
+                        if this_peer.sender.write_all(&self.buffer).await.is_err() {
+                            this_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
+                            break;
+                        }
+
+                        let other_msg = BeaconMessage::InitiateConnection(
+                            this_peer.header.clone().unwrap(),
+                            this_peer.conn.remote_address(),
+                            **token,
+                        );
+                        self.buffer.clear();
+                        bincode::serialize_into::<&mut Vec<u8>, _>(&mut self.buffer, &other_msg)
+                            .unwrap();
+
+                        if other_peer
+                            .sender
+                            .write_u32(self.buffer.len() as u32)
+                            .await
+                            .is_err()
+                        {
+                            other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
+                        }
+
+                        if other_peer.sender.write_all(&self.buffer).await.is_err() {
+                            other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
+                        }
                     }
-
-                    if other_peer.sender.write_all(&self.buffer).await.is_err() {
-                        other_peer.conn.close(VarInt::from_u32(1), "".as_bytes());
-                    }
-
-                    // println!(
-                    //     "Beacon connect {} <-> {}",
-                    //     this_peer.conn.remote_address(),
-                    //     other_peer.conn.remote_address()
-                    // );
                 }
             }
             if insert {
