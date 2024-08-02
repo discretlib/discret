@@ -155,7 +155,7 @@ This leak exposes you to the following threats:
   
 # Platform Support
 - Linux: Tested and supported
-- Android: Tested and supported
 - Windows: Tested and supported
 - macOS: not tested, should work
-- iOS: not tested, should work
+- Android: Unstable, some success with arch64. 32bit and x86_64 have issues with sqlite.
+- iOS: not tested
