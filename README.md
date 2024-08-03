@@ -157,5 +157,5 @@ This leak exposes you to the following threats:
 - Linux: Tested 
 - Windows: Tested 
 - macOS: not tested, should work
-- Android: works on arch64 architecture. Architectures i686 and x86_64 have some low level linker issues.
+- Android: works on arch64 architecture. Architectures i686 and x86_64 have some low level linker issues when working with Flutter.
 - iOS: not tested
