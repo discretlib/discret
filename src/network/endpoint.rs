@@ -57,8 +57,7 @@ impl DiscretEndpoint {
     pub async fn start(
         peer_service: PeerConnectionService,
         log: LogService,
-        num_buffers: usize,
-        buffer_size: usize,
+        max_buffer_size: usize,
         local_verifying_key: &[u8],
     ) -> Result<Self, Error> {
         let cert_verifier = ServerCertVerifier::new();
@@ -88,10 +87,9 @@ impl DiscretEndpoint {
         let ipv6 = ipv6_endpoint.clone();
         let logs = log.clone();
         let peer_s = peer_service.clone();
-        let input_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
-        let output_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
-        let i_buff = input_buffers.clone();
-        let o_buff = output_buffers.clone();
+        let data_buffer = Arc::new(SharedBuffers::new());
+        let shared_buffers = data_buffer.clone();
+
         let local_verifying_key = local_verifying_key.to_owned();
         tokio::spawn(async move {
             while let Some(msg) = connection_receiver.recv().await {
@@ -116,9 +114,8 @@ impl DiscretEndpoint {
                             &logs,
                             &ipv4,
                             &ipv6,
-                            &i_buff,
-                            &o_buff,
-                            buffer_size,
+                            &shared_buffers,
+                            max_buffer_size,
                         );
                     }
                     EndpointMessage::InitiateBeaconConnection(address, cert_hash) => {
@@ -141,18 +138,17 @@ impl DiscretEndpoint {
 
         let logs = log.clone();
         let peer_s = peer_service.clone();
-        let i_buff = input_buffers.clone();
-        let o_buff = output_buffers.clone();
+
+        let b_buffer = data_buffer.clone();
 
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
                 let logs = logs.clone();
                 let peer_s = peer_s.clone();
-                let i_buff = i_buff.clone();
-                let o_buff = o_buff.clone();
+                let shared_buffers = b_buffer.clone();
                 tokio::spawn(async move {
                     let new_conn =
-                        Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
+                        Self::start_accepted(&peer_s, incoming, shared_buffers, max_buffer_size)
                             .await;
                     if let Err(e) = new_conn {
                         logs.error("ipv4 - start_accepted".to_string(), crate::Error::from(e));
@@ -166,12 +162,16 @@ impl DiscretEndpoint {
                 while let Some(incoming) = endpoint.accept().await {
                     let logs = log.clone();
                     let peer_s = peer_service.clone();
-                    let i_buff = input_buffers.clone();
-                    let o_buff = output_buffers.clone();
+                    let shared_buffers = data_buffer.clone();
+
                     tokio::spawn(async move {
-                        let new_conn =
-                            Self::start_accepted(&peer_s, incoming, &i_buff, &o_buff, buffer_size)
-                                .await;
+                        let new_conn = Self::start_accepted(
+                            &peer_s,
+                            incoming,
+                            shared_buffers,
+                            max_buffer_size,
+                        )
+                        .await;
                         if let Err(e) = new_conn {
                             logs.error("ipv6 - start_accepted".to_string(), crate::Error::from(e));
                         };
@@ -203,8 +203,7 @@ impl DiscretEndpoint {
         log: &LogService,
         ipv4_endpoint: &Endpoint,
         ipv6_endpoint: &Option<Endpoint>,
-        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        shared_buffers: &Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) {
         let endpoint = if address.is_ipv4() {
@@ -223,8 +222,8 @@ impl DiscretEndpoint {
         };
         let peer_service = peer_service.clone();
         let log = log.clone();
-        let input_buffers = input_buffers.clone();
-        let output_buffers = output_buffers.clone();
+
+        let shared_buffers: Arc<SharedBuffers> = shared_buffers.clone();
         let peer_verifying_key = peer_verifying_key.clone();
         let name = cert_verifier.add_valid_certificate(cert_hash);
 
@@ -257,8 +256,7 @@ impl DiscretEndpoint {
                                     &peer_service,
                                     &local_verifying_key,
                                     info,
-                                    &input_buffers,
-                                    &output_buffers,
+                                    shared_buffers,
                                     max_buffer_size,
                                 )
                                 .await
@@ -327,8 +325,7 @@ impl DiscretEndpoint {
         peer_service: &PeerConnectionService,
         local_verifying_key: &[u8],
         info: ConnectionInfo,
-        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        shared_buffers: Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) -> Result<(), Error> {
         let (mut answer_send, answer_receiv) = conn.open_bi().await?;
@@ -359,8 +356,7 @@ impl DiscretEndpoint {
             query_receiv,
             event_send,
             event_receiv,
-            input_buffers,
-            output_buffers,
+            shared_buffers,
             max_buffer_size,
         )
         .await;
@@ -371,8 +367,7 @@ impl DiscretEndpoint {
     async fn start_accepted(
         peer_service: &PeerConnectionService,
         incoming: Incoming,
-        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        shared_buffers: Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) -> Result<(), Error> {
         let new_conn = incoming.await?;
@@ -429,8 +424,7 @@ impl DiscretEndpoint {
             query_receiv,
             event_send,
             event_receiv,
-            input_buffers,
-            output_buffers,
+            shared_buffers,
             max_buffer_size,
         )
         .await;
@@ -449,13 +443,13 @@ impl DiscretEndpoint {
         mut query_receiv: RecvStream,
         mut event_send: SendStream,
         mut event_receiv: RecvStream,
-        input_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
-        output_buffers: &Arc<tokio::sync::Mutex<SharedBuffers>>,
+        shared_buffers: Arc<SharedBuffers>,
+
         max_buffer_size: usize,
     ) {
         //process Answsers
         let (in_answer_sd, in_answer_rcv) = mpsc::channel::<Answer>(CHANNEL_SIZE);
-        let input_buff = input_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             loop {
                 let len = answer_receiv.read_u32().await;
@@ -467,10 +461,7 @@ impl DiscretEndpoint {
                     break;
                 }
 
-                let mut buf_lock = input_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -478,53 +469,55 @@ impl DiscretEndpoint {
 
                 let answer_bytes = answer_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let answer: Result<Answer, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
-                drop(buffer);
 
                 if answer.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
+
                 let answer = answer.unwrap();
                 let _ = in_answer_sd.send(answer).await;
             }
         });
 
         let (out_answer_sd, mut out_answer_rcv) = mpsc::channel::<Answer>(CHANNEL_SIZE);
-        let output_buff = output_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             while let Some(answer) = out_answer_rcv.recv().await {
-                let mut buf_lock = output_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
                 buffer.clear();
 
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, Answer>(&mut buffer, &answer);
                 if serialised.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let sent = answer_send.write_u32(buffer.len() as u32).await;
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
                 let sent = answer_send.write_all(&buffer).await;
-                drop(buffer);
-                drop(arc_buf);
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
             }
         });
 
         //process Queries
         let (in_query_sd, in_query_rcv) = mpsc::channel::<QueryProtocol>(CHANNEL_SIZE);
-        let input_buff = input_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             loop {
                 let len = query_receiv.read_u32().await;
@@ -536,10 +529,7 @@ impl DiscretEndpoint {
                     break;
                 }
 
-                let mut buf_lock = input_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -547,16 +537,18 @@ impl DiscretEndpoint {
 
                 let answer_bytes = query_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let query: Result<QueryProtocol, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
-                drop(buffer);
 
                 if query.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
 
                 let query = query.unwrap();
                 let _ = in_query_sd.send(query).await;
@@ -564,37 +556,37 @@ impl DiscretEndpoint {
         });
 
         let (out_query_sd, mut out_query_rcv) = mpsc::channel::<QueryProtocol>(CHANNEL_SIZE);
-        let output_buff = output_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             while let Some(query) = out_query_rcv.recv().await {
-                let mut buf_lock = output_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
                 buffer.clear();
 
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, QueryProtocol>(&mut buffer, &query);
                 if serialised.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let sent = query_send.write_u32(buffer.len() as u32).await;
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
                 let sent = query_send.write_all(&buffer).await;
-                drop(buffer);
 
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
             }
         });
 
         //process remote Events
         let (in_event_sd, in_event_rcv) = mpsc::channel::<RemoteEvent>(CHANNEL_SIZE);
-        let input_buff = input_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             loop {
                 let len = event_receiv.read_u32().await;
@@ -606,10 +598,7 @@ impl DiscretEndpoint {
                     break;
                 }
 
-                let mut buf_lock = input_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -617,46 +606,49 @@ impl DiscretEndpoint {
 
                 let answer_bytes = event_receiv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let event: Result<RemoteEvent, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
-                drop(buffer);
 
                 if event.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
                 let event = event.unwrap();
                 let _ = in_event_sd.send(event).await;
             }
         });
 
         let (out_event_sd, mut out_event_rcv) = mpsc::channel::<RemoteEvent>(CHANNEL_SIZE);
-        let output_buff = output_buffers.clone();
+        let shared_b = shared_buffers.clone();
         tokio::spawn(async move {
             while let Some(event) = out_event_rcv.recv().await {
-                let mut buf_lock = output_buff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = shared_b.take();
                 buffer.clear();
 
                 let serialised =
                     bincode::serialize_into::<&mut Vec<u8>, RemoteEvent>(&mut buffer, &event);
                 if serialised.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
 
                 let sent = event_send.write_u32(buffer.len().try_into().unwrap()).await;
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
                 let sent = event_send.write_all(&buffer).await;
-                drop(buffer);
+
                 if sent.is_err() {
+                    shared_b.release(buffer);
                     break;
                 }
+                shared_b.release(buffer);
             }
         });
 

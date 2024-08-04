@@ -37,17 +37,18 @@ impl Beacon {
         der: Vec<u8>,
         pks_der: Vec<u8>,
         log_service: LogService,
-        num_buffers: usize,
+        allow_same_ip: bool,
     ) -> Result<Self, super::Error> {
-        let input_buffers = Arc::new(tokio::sync::Mutex::new(SharedBuffers::new(num_buffers)));
+        let shared_buffers = Arc::new(SharedBuffers::new());
 
         let ipv4_addr: SocketAddr = format!("0.0.0.0:{}", ipv4_port).parse()?;
         let ipv4_endpoint = Self::enpoint(ipv4_addr, der.clone(), pks_der.clone())?;
         Self::start_endpoint(
             ipv4_endpoint,
             log_service.clone(),
-            input_buffers.clone(),
+            shared_buffers.clone(),
             MAX_MESSAGE_SIZE,
+            allow_same_ip,
         );
 
         Ok(Self {})
@@ -73,8 +74,9 @@ impl Beacon {
     fn start_endpoint(
         endpoint: Endpoint,
         logs: LogService,
-        input_buffers: Arc<Mutex<SharedBuffers>>,
+        shared_buffers: Arc<SharedBuffers>,
         max_buffer_size: usize,
+        allow_same_ip: bool,
     ) {
         tokio::spawn(async move {
             let meeting_point: Arc<Mutex<MeetingPoint>> = Arc::new(Mutex::new(MeetingPoint {
@@ -83,15 +85,16 @@ impl Beacon {
             }));
 
             while let Some(incoming) = endpoint.accept().await {
-                let input_buffers = input_buffers.clone();
+                let shared_buff = shared_buffers.clone();
                 let logs = logs.clone();
                 let meeting_point = meeting_point.clone();
                 tokio::spawn(async move {
                     let new_conn = Self::start_accepted(
                         incoming,
-                        input_buffers,
+                        shared_buff,
                         max_buffer_size,
                         meeting_point,
+                        allow_same_ip,
                     )
                     .await;
                     if let Err(e) = new_conn {
@@ -104,16 +107,17 @@ impl Beacon {
 
     async fn start_accepted(
         incoming: Incoming,
-        input_buffers: Arc<Mutex<SharedBuffers>>,
+        shared_buffers: Arc<SharedBuffers>,
         max_buffer_size: usize,
         meeting_point: Arc<Mutex<MeetingPoint>>,
+        allow_same_ip: bool,
     ) -> Result<(), super::Error> {
         let new_conn = incoming.await?;
         let (send, mut recv) = new_conn.accept_bi().await?;
 
         recv.read_u8().await?;
 
-        let ibuff = input_buffers.clone();
+        let sbuff = shared_buffers.clone();
         tokio::spawn(async move {
             let id = new_conn.stable_id();
             let conn_info: Arc<Mutex<ConnectionInfo>> = Arc::new(Mutex::new(ConnectionInfo {
@@ -133,10 +137,7 @@ impl Beacon {
                     break;
                 }
 
-                let mut buf_lock = ibuff.lock().await;
-                let arc_buf = buf_lock.get();
-                drop(buf_lock);
-                let mut buffer = arc_buf.lock().await;
+                let mut buffer = sbuff.take();
 
                 if buffer.len() < len {
                     buffer.resize(len, 0);
@@ -144,11 +145,12 @@ impl Beacon {
 
                 let answer_bytes = recv.read_exact(&mut buffer[0..len]).await;
                 if answer_bytes.is_err() {
+                    sbuff.release(buffer);
                     break;
                 }
                 let announce: Result<Announce, Box<bincode::ErrorKind>> =
                     bincode::deserialize(&buffer[0..len]);
-                drop(buffer);
+                sbuff.release(buffer);
 
                 if announce.is_err() {
                     break;
@@ -176,7 +178,9 @@ impl Beacon {
                 let mut meeting = meeting_point.lock().await;
 
                 meeting.remove_tokens(id, &to_remove).await;
-                meeting.add_tokens(id, &to_add, &conn_info).await;
+                meeting
+                    .add_tokens(id, &to_add, &conn_info, allow_same_ip)
+                    .await;
 
                 last_tokens = new_tokens;
             }
@@ -202,6 +206,7 @@ impl MeetingPoint {
         id: usize,
         tokens: &HashSet<&MeetingToken>,
         conn: &Arc<Mutex<ConnectionInfo>>,
+        allow_same_ip: bool,
     ) {
         for token in tokens {
             let entry = self.meeting.entry(**token).or_default();
@@ -212,11 +217,12 @@ impl MeetingPoint {
                     insert = false;
                 } else {
                     let mut this_peer = conn.lock().await;
-                    if !other_peer
-                        .conn
-                        .remote_address()
-                        .ip()
-                        .eq(&this_peer.conn.remote_address().ip())
+                    if allow_same_ip
+                        || !other_peer
+                            .conn
+                            .remote_address()
+                            .ip()
+                            .eq(&this_peer.conn.remote_address().ip())
                     {
                         let this_msg = BeaconMessage::InitiateConnection(
                             other_peer.header.clone().unwrap(),

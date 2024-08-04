@@ -89,13 +89,12 @@ impl PeerConnectionService {
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
-        let buffer_size = configuration.max_object_size_in_kb * 1024 * 2;
+        let max_buffer_size = configuration.max_object_size_in_kb * 1024 * 2;
 
         let endpoint = DiscretEndpoint::start(
             peer_service.clone(),
             logs.clone(),
-            configuration.parallelism + 1,
-            buffer_size as usize,
+            max_buffer_size as usize,
             &local_verifying_key,
         )
         .await?;
