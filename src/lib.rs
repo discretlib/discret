@@ -187,7 +187,9 @@ use database::graph_database::{GraphDatabaseService, MutateReceiver};
 use event_service::EventService;
 
 use peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
-use security::{default_uid, derive_key, uid_decode, uid_encode, MeetingSecret, Uid};
+use security::{
+    default_uid, derive_key, uid_decode, uid_encode, HardwareFingerprint, MeetingSecret, Uid,
+};
 
 use signature_verification_service::SignatureVerificationService;
 use std::path::PathBuf;
@@ -326,16 +328,28 @@ pub fn database_exists(
 }
 
 ///
+/// All the parameters available after Discret initialisation
+///
+///
+#[derive(Clone)]
+pub struct DiscretParams {
+    app_key: String,
+    verifying_key: Vec<u8>,
+    private_room_id: Uid,
+    hardware_fingerprint: HardwareFingerprint,
+    configuration: Configuration,
+}
+
+///
 /// The main entry point for the Discret Library
 ///
 #[derive(Clone)]
 pub struct Discret {
+    params: DiscretParams,
     db: GraphDatabaseService,
+    event_service: EventService,
+    log_service: LogService,
     peers: PeerConnectionService,
-    events: EventService,
-    logs: LogService,
-    verifying_key: Vec<u8>,
-    private_room_id: Uid,
 }
 impl Discret {
     /// Starts the Discret engine with the following parameters:
@@ -351,6 +365,9 @@ impl Discret {
         data_folder: PathBuf,
         configuration: Configuration,
     ) -> std::result::Result<Self, Error> {
+        let mut hardware_file = data_folder.clone();
+        hardware_file.push("hardware_fingerprint.bin");
+        let hardware_fingerprint = HardwareFingerprint::get(&hardware_file).unwrap();
         let meeting_secret_key =
             derive_key(&format!("{}{}", "MEETING_SECRET", app_key,), key_material);
         let meeting_secret = MeetingSecret::new(meeting_secret_key);
@@ -358,42 +375,46 @@ impl Discret {
         let pub_key = meeting_secret.public_key();
         let public_key = pub_key.as_bytes();
 
-        let events = EventService::new();
-        let logs = LogService::start();
-        let (db, verifying_key, private_room_id) = GraphDatabaseService::start(
+        let event_service = EventService::new();
+        let log_service = LogService::start();
+        let (database_service, verifying_key, private_room_id) = GraphDatabaseService::start(
             app_key,
             datamodel,
             key_material,
             public_key,
             data_folder.clone(),
             &configuration,
-            events.clone(),
-            logs.clone(),
+            event_service.clone(),
+            log_service.clone(),
         )
         .await?;
 
-        let signature_service = SignatureVerificationService::start(configuration.parallelism);
+        let verify_service = SignatureVerificationService::start(configuration.parallelism);
+
+        let params = DiscretParams {
+            app_key: app_key.to_string(),
+            verifying_key,
+            private_room_id,
+            hardware_fingerprint,
+            configuration,
+        };
 
         let peers = PeerConnectionService::start(
-            app_key.to_string(),
-            verifying_key.clone(),
+            &params,
             meeting_secret,
-            private_room_id,
-            db.clone(),
-            events.clone(),
-            logs.clone(),
-            signature_service,
-            configuration,
+            database_service.clone(),
+            event_service.clone(),
+            log_service.clone(),
+            verify_service,
         )
         .await?;
 
         Ok(Self {
-            db,
+            params,
+            db: database_service,
+            event_service,
+            log_service,
             peers,
-            events,
-            logs,
-            verifying_key,
-            private_room_id,
         })
     }
 
@@ -481,7 +502,7 @@ impl Discret {
     /// other peers will use this verifying key to ensure the integrity of the data
     ///
     pub fn verifying_key(&self) -> String {
-        base64_encode(&self.verifying_key)
+        base64_encode(&self.params.verifying_key)
     }
 
     ///
@@ -489,21 +510,21 @@ impl Discret {
     /// you are allowed to used it to store any kind of private data that will only be synchronized with your devices.
     ///
     pub fn private_room(&self) -> String {
-        base64_encode(&self.private_room_id)
+        base64_encode(&self.params.private_room_id)
     }
 
     ///
     /// Subscribe for the event queue
     ///
     pub async fn subscribe_for_events(&self) -> broadcast::Receiver<Event> {
-        self.events.subcribe().await
+        self.event_service.subcribe().await
     }
 
     ///
     /// Subscribe for the log event queue
     ///
     pub async fn subscribe_for_logs(&self) -> broadcast::Receiver<Log> {
-        self.logs.subcribe().await
+        self.log_service.subcribe().await
     }
 
     ///

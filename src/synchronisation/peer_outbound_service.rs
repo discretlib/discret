@@ -32,6 +32,7 @@ pub struct InboundQueryService {
 impl InboundQueryService {
     #[allow(clippy::too_many_arguments)]
     pub fn start(
+        fingerprint: HardwareFingerprint,
         circuit_id: [u8; 32],
         conn_id: Uid,
         mut peer: RemotePeerHandle,
@@ -42,7 +43,6 @@ impl InboundQueryService {
         conn_ready: Arc<AtomicBool>,
     ) -> Self {
         let (room_sender, mut room_receiver) = mpsc::unbounded_channel::<Uid>();
-        let fingerprint = HardwareFingerprint::new().unwrap();
 
         tokio::spawn(async move {
             loop {

@@ -4,7 +4,7 @@ use crate::{
         node::Node,
         system_entities::{Invite, OwnedInvite, Peer, Status},
     },
-    uid_encode, DefaultRoom, Error, Parameters, ParametersAdd,
+    uid_encode, DefaultRoom, DiscretParams, Error, Parameters, ParametersAdd,
 };
 use quinn::{Connection, VarInt};
 use std::{
@@ -61,7 +61,7 @@ pub struct MulticastInfo {
 }
 
 pub struct PeerManager {
-    app_name: String,
+    app_key: String,
     endpoint: DiscretEndpoint,
 
     private_room_id: Uid,
@@ -87,19 +87,16 @@ pub struct PeerManager {
     verify_service: SignatureVerificationService,
 }
 impl PeerManager {
-    #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        app_name: String,
+        params: &DiscretParams,
         endpoint: DiscretEndpoint,
         multicast_discovery: Option<mpsc::Sender<MulticastMessage>>,
         db: GraphDatabaseService,
-        logs: LogService,
+        log_service: LogService,
         verify_service: SignatureVerificationService,
-        private_room_id: Uid,
-        //  verifying_key: Vec<u8>,
         meeting_secret: MeetingSecret,
     ) -> Result<Self, crate::Error> {
-        let allowed_peers = db.get_allowed_peers(private_room_id).await?;
+        let allowed_peers = db.get_allowed_peers(params.private_room_id).await?;
         let mut allowed_token: HashMap<MeetingToken, Vec<TokenType>> = HashMap::new();
 
         for peer in &allowed_peers {
@@ -108,13 +105,14 @@ impl PeerManager {
             entry.push(TokenType::AllowedPeer(peer.clone()));
         }
 
-        let owned_invites = OwnedInvite::list_valid(uid_encode(&private_room_id), &db).await?;
+        let owned_invites =
+            OwnedInvite::list_valid(uid_encode(&params.private_room_id), &db).await?;
         for owned in &owned_invites {
             let token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
             let entry = allowed_token.entry(token).or_default();
             entry.push(TokenType::OwnedInvite(owned.clone()));
         }
-        let invites = Invite::list(uid_encode(&private_room_id), &db).await?;
+        let invites = Invite::list(uid_encode(&params.private_room_id), &db).await?;
         for invite in &invites {
             let uid = &invite.invite_id;
             let token = MeetingSecret::derive_token(DERIVE_STRING, uid);
@@ -144,10 +142,9 @@ impl PeerManager {
         };
 
         Ok(Self {
-            app_name,
+            app_key: params.app_key.clone(),
             endpoint,
-            private_room_id,
-            //   verifying_key,
+            private_room_id: params.private_room_id,
             meeting_secret,
             multicast,
             allowed_peers,
@@ -161,7 +158,7 @@ impl PeerManager {
             beacons: HashMap::new(),
             connected_beacons: HashMap::new(),
             db,
-            logs,
+            logs: log_service,
             verify_service,
         })
     }
@@ -586,7 +583,7 @@ impl PeerManager {
         let (invite, owned) = Invite::create(
             uid_encode(&self.private_room_id),
             default_room,
-            self.app_name.to_string(),
+            self.app_key.to_string(),
             &self.db,
         )
         .await?;
@@ -602,10 +599,10 @@ impl PeerManager {
 
     pub async fn accept_invite(&mut self, invite: &[u8]) -> Result<(), crate::Error> {
         let inv: Invite = bincode::deserialize(invite)?;
-        if !inv.application.eq(&self.app_name) {
+        if !inv.application.eq(&self.app_key) {
             return Err(Error::InvalidInvite(format!(
                 "this invite is for app {} and not for {}",
-                &inv.application, &self.app_name
+                &inv.application, &self.app_key
             )));
         }
         inv.insert(uid_encode(&self.private_room_id), &self.db)

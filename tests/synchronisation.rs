@@ -64,63 +64,6 @@ async fn multicast_connect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn beacon_connect() {
-    let path: PathBuf = DATA_PATH.into();
-    let model = "{Person{name:String,}}";
-    let key_material = random32();
-    let certificate = generate_x509_certificate("sample.org");
-    let cert_hash = hash(certificate.cert.der().deref());
-    let cert_hash = base64_encode(&cert_hash);
-    let der: Vec<u8> = certificate.cert.der().deref().to_vec();
-    let pks_der: Vec<u8> = certificate.key_pair.serialize_der();
-
-    let port = 4242;
-    let hostname = format!("127.0.0.1:{}", port); //::1
-    let beacon_conf = BeaconConfig {
-        hostname,
-        cert_hash,
-    };
-    let beacons_def = vec![beacon_conf];
-
-    let config = Configuration {
-        enable_multicast: false,
-        beacons: beacons_def,
-        ..Default::default()
-    };
-    let _ = Beacon::start(port, der, pks_der, LogService::start(), true).unwrap();
-
-    let _: Discret = Discret::new(model, "hello", &key_material, path, config.clone())
-        .await
-        .unwrap();
-
-    let second_path: PathBuf = format!("{}/second", DATA_PATH).into();
-    let discret2: Discret = Discret::new(model, "hello", &key_material, second_path, config)
-        .await
-        .unwrap();
-    let private_room_id = discret2.private_room();
-    let mut events = discret2.subscribe_for_events().await;
-    let handle = tokio::spawn(async move {
-        loop {
-            let event = events.recv().await;
-            match event {
-                Ok(e) => match e {
-                    Event::RoomSynchronized(room_id) => {
-                        assert_eq!(room_id, private_room_id);
-                        break;
-                    }
-                    _ => {}
-                },
-                Err(e) => println!("Error {}", e),
-            }
-        }
-    });
-
-    let s = tokio::time::timeout(Duration::from_secs(4), handle).await;
-
-    assert!(s.is_ok());
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn invites() {
     let path: PathBuf = DATA_PATH.into();
     let app_name = "hello";

@@ -1357,7 +1357,9 @@ mod tests {
         .await
         .unwrap();
 
-        let hardware = HardwareFingerprint::new().unwrap();
+        let mut finger_path = path.clone();
+        finger_path.push("hardwarefingerprint.bin");
+        let hardware = HardwareFingerprint::get(&finger_path).unwrap();
 
         let status = "allowed";
 

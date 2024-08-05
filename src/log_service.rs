@@ -58,12 +58,12 @@ impl LogService {
 
     ///write a log with the info level
     pub fn info(&self, str: String) {
-        //   println!("{}: {}", now(), str);
+        println!("{}: {}", now(), str);
         let _ = self.sender.send(LogMessage::Info(now(), str));
     }
     ///write a log with the error level
     pub fn error(&self, src: String, err: Error) {
-        // println!("{}: {} - {}", now(), src, err.to_string());
+        println!("{}: {} - {}", now(), src, err.to_string());
         let _ = self.sender.send(LogMessage::Error(now(), src, err));
     }
 }

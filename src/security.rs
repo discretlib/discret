@@ -1,5 +1,5 @@
 use std::{
-    fs::OpenOptions,
+    fs::File,
     io::{Read, Write},
     path::PathBuf,
 };
@@ -11,7 +11,7 @@ use ed25519_dalek::{SignatureError, Signer, Verifier};
 use rand::{rngs::OsRng, RngCore};
 use rcgen::{CertificateParams, KeyPair, SanType};
 use serde::{Deserialize, Serialize};
-use sysinfo::{Networks, System};
+use sysinfo::System;
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -441,15 +441,6 @@ pub fn derive_uid(context: &str, key_material: &[u8]) -> Uid {
     uid
 }
 
-/// derive a ket from a string context and a secret
-/// provided by the Blake3 hash function  
-///
-pub fn uid_from_hash(hash: &[u8; 32]) -> Uid {
-    let mut uid = default_uid();
-    uid.copy_from_slice(&hash[0..UID_SIZE]);
-    uid
-}
-
 pub fn default_uid() -> Uid {
     DEFAULT_UID
 }
@@ -484,52 +475,29 @@ pub struct HardwareFingerprint {
     pub name: String,
 }
 impl HardwareFingerprint {
-    pub fn new() -> Result<Self, Error> {
-        let mut name = "Discret Device".to_string();
-        let id: [u8; 32] = if sysinfo::IS_SUPPORTED_SYSTEM {
-            let mut hasher = blake3::Hasher::new();
-            let mut sys = System::new_all();
-            sys.refresh_all();
-
-            let host_name = System::host_name().unwrap_or_default();
-            name = System::name().unwrap_or_default();
-            name = format!("{} {}", host_name, name);
-            hasher.update(name.as_bytes());
-            let networks = Networks::new_with_refreshed_list();
-            let mut macs = Vec::new();
-            for (_, network) in &networks {
-                macs.push(network.mac_address().to_string());
-            }
-            macs.sort();
-            for mac in macs {
-                hasher.update(mac.as_bytes());
-            }
-            *hasher.finalize().as_bytes()
+    pub fn get(file_path: &PathBuf) -> Result<Self, Error> {
+        let id = if file_path.is_file() {
+            let mut file = File::open(file_path)?;
+            let mut uid = default_uid();
+            file.read(&mut uid)?;
+            uid
         } else {
-            Self::get_file_key("discret_fingerprint.bin".into())?
+            let uid = new_uid();
+            let mut file = File::create(file_path)?;
+            file.write_all(&uid)?;
+            uid
         };
 
-        Ok(Self {
-            id: uid_from_hash(&id),
-            name,
-        })
-    }
+        let mut name = "Unknown Device".to_string();
+        if sysinfo::IS_SUPPORTED_SYSTEM {
+            let host = System::host_name().unwrap_or_default();
+            //let system = System::name().unwrap_or_default();
+            //let networks = Networks::new_with_refreshed_list();
+            let osname = System::long_os_version().unwrap_or_default();
+            name = format!("{osname}, {host}");
+        };
 
-    fn get_file_key(path: PathBuf) -> Result<[u8; 32], Error> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-
-        let mut content: [u8; 32] = [0; 32];
-        let len = file.read(&mut content)?;
-        if len == 0 {
-            content = random32();
-            file.write_all(&content)?;
-        }
-        Ok(content)
+        Ok(Self { id, name })
     }
 }
 
@@ -606,19 +574,13 @@ mod tests {
     }
 
     #[test]
-    pub fn hardware_print() {
-        let info = HardwareFingerprint::new().unwrap();
-        let info2 = HardwareFingerprint::new().unwrap();
-        assert_eq!(info.id, info2.id);
-    }
-    #[test]
-    pub fn hardware_fingerprint_file() {
-        let path = "test_data/fingerprint.bin";
+    pub fn hardware_fingerprint() {
+        let path: PathBuf = "test_data/hardware_fingerprint.bin".into();
         let _ = fs::remove_file(&path);
 
-        let id1 = HardwareFingerprint::get_file_key(path.into()).unwrap();
-        let id2 = HardwareFingerprint::get_file_key(path.into()).unwrap();
-        assert_eq!(id1, id2);
+        let id1 = HardwareFingerprint::get(&path).unwrap();
+        let id2 = HardwareFingerprint::get(&path).unwrap();
+        assert_eq!(id1.id, id2.id);
     }
 
     #[test]

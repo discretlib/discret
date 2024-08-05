@@ -26,7 +26,7 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    uid_decode, Configuration, DefaultRoom, Result,
+    uid_decode, Configuration, DefaultRoom, DiscretParams, Result,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
@@ -70,44 +70,40 @@ pub struct PeerConnectionService {
     pub sender: mpsc::Sender<PeerConnectionMessage>,
 }
 impl PeerConnectionService {
-    #[allow(clippy::too_many_arguments)]
     pub async fn start(
-        app_name: String,
-        local_verifying_key: Vec<u8>,
+        params: &DiscretParams,
         meeting_secret: MeetingSecret,
-        private_room_id: Uid,
-        db: GraphDatabaseService,
-        events: EventService,
-        logs: LogService,
+        database_service: GraphDatabaseService,
+        event_service: EventService,
+        log_service: LogService,
         verify_service: SignatureVerificationService,
-        configuration: Configuration,
     ) -> Result<Self> {
         let (sender, mut connection_receiver) =
             mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
         let (local_event_broadcast, _) = broadcast::channel::<LocalEvent>(16);
-        let lock_service = RoomLockService::start(configuration.parallelism);
+        let lock_service = RoomLockService::start(params.configuration.parallelism);
         let peer_service = Self { sender };
         let ret = peer_service.clone();
 
-        let max_buffer_size = configuration.max_object_size_in_kb * 1024 * 2;
+        let max_buffer_size = params.configuration.max_object_size_in_kb * 1024 * 2;
 
         let endpoint = DiscretEndpoint::start(
             peer_service.clone(),
-            logs.clone(),
+            log_service.clone(),
             max_buffer_size as usize,
-            &local_verifying_key,
+            &params.verifying_key,
         )
         .await?;
 
-        let multicast_discovery = if configuration.enable_multicast {
-            let multicast_adress: SocketAddr = configuration.multicast_ipv4_group.parse()?; // SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
+        let multicast_discovery = if params.configuration.enable_multicast {
+            let multicast_adress: SocketAddr = params.configuration.multicast_ipv4_group.parse()?; // SocketAddr::new(Ipv4Addr::new(224, 0, 0, 224).into(), 22402);
             let multicast_ipv4_interface: Ipv4Addr =
-                configuration.multicast_ipv4_interface.parse()?;
+                params.configuration.multicast_ipv4_interface.parse()?;
             let multicast_discovery = multicast::start_multicast_discovery(
                 multicast_adress,
                 multicast_ipv4_interface,
                 peer_service.clone(),
-                logs.clone(),
+                log_service.clone(),
             )
             .await?;
             Some(multicast_discovery)
@@ -116,22 +112,22 @@ impl PeerConnectionService {
         };
 
         let mut peer_manager = PeerManager::new(
-            app_name,
+            params,
             endpoint,
             multicast_discovery,
-            db.clone(),
-            logs.clone(),
+            database_service.clone(),
+            log_service.clone(),
             verify_service.clone(),
-            private_room_id,
-            //local_verifying_key.clone(),
             meeting_secret,
         )
         .await?;
-        let fingerprint = HardwareFingerprint::new()?;
-        peer_manager.init_hardware(fingerprint).await?;
 
-        if configuration.enable_beacons {
-            for beacon in &configuration.beacons {
+        peer_manager
+            .init_hardware(params.hardware_fingerprint.clone())
+            .await?;
+
+        if params.configuration.enable_beacons {
+            for beacon in &params.configuration.beacons {
                 peer_manager
                     .add_beacon(&beacon.hostname, &beacon.cert_hash)
                     .await?;
@@ -139,7 +135,7 @@ impl PeerConnectionService {
         }
 
         let service = peer_service.clone();
-        let frequency = configuration.announce_frequency_in_ms;
+        let frequency = params.configuration.announce_frequency_in_ms;
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_millis(frequency));
@@ -153,8 +149,11 @@ impl PeerConnectionService {
             }
         });
 
+        let conf = params.configuration.clone();
+        let local_verifying_key = params.verifying_key.clone();
+        let fingerprint = params.hardware_fingerprint.clone();
         tokio::spawn(async move {
-            let mut event_receiver = events.subcribe().await;
+            let mut event_receiver = event_service.subcribe().await;
             loop {
                 tokio::select! {
                     msg = connection_receiver.recv() =>{
@@ -164,17 +163,18 @@ impl PeerConnectionService {
                                     msg,
                                     local_verifying_key.clone(),
                                     &mut peer_manager,
-                                    &db,
-                                    &events,
-                                    &logs,
+                                    &database_service,
+                                    &event_service,
+                                    &log_service,
                                     &peer_service,
                                     &lock_service,
                                     &verify_service,
                                     local_event_broadcast.subscribe(),
-                                    &configuration,
+                                    &conf,
+                                    fingerprint.clone()
                                 ).await;
                                 if let Err(e) = err{
-                                    logs.error("process_peer_message".to_string(), e);
+                                    log_service.error("process_peer_message".to_string(), e);
                                 }
                             },
                             None => break,
@@ -242,6 +242,7 @@ impl PeerConnectionService {
         verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
         configuration: &Configuration,
+        fingerprint: HardwareFingerprint,
     ) -> Result<()> {
         match msg {
             PeerConnectionMessage::NewConnection(
@@ -275,6 +276,7 @@ impl PeerConnectionService {
                 let conn_ready = Arc::new(AtomicBool::new(true));
 
                 let inbound_query_service = InboundQueryService::start(
+                    fingerprint,
                     circuit_id,
                     connection_info.conn_id,
                     RemotePeerHandle {
