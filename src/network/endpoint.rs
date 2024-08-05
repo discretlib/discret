@@ -50,8 +50,6 @@ pub struct DiscretEndpoint {
     pub sender: mpsc::Sender<EndpointMessage>,
     pub ipv4_port: u16,
     pub ipv4_cert_hash: [u8; 32],
-    //  pub ipv6_port: Option<u16>,
-    pub ipv6_cert_hash: [u8; 32],
 }
 impl DiscretEndpoint {
     pub async fn start(
@@ -71,20 +69,7 @@ impl DiscretEndpoint {
         let ipv4_endpoint = build_endpoint(addr, cert, cert_verifier.clone())?;
         let ipv4_port = ipv4_endpoint.local_addr()?.port();
 
-        let cert: rcgen::CertifiedKey = security::generate_x509_certificate(&random_domain_name());
-        let ipv6_cert_hash = hash(cert.cert.der().deref());
-        let addr = "[::]:0".parse()?;
-        let ipv6_endpoint = build_endpoint(addr, cert, cert_verifier.clone());
-        let (ipv6_endpoint, _) = match ipv6_endpoint {
-            Ok(end) => {
-                let ipv6_port = end.local_addr()?.port();
-                (Some(end), Some(ipv6_port))
-            }
-            Err(_) => (None, None),
-        };
-
         let ipv4 = ipv4_endpoint.clone();
-        let ipv6 = ipv6_endpoint.clone();
         let logs = log.clone();
         let peer_s = peer_service.clone();
         let data_buffer = Arc::new(SharedBuffers::new());
@@ -113,7 +98,6 @@ impl DiscretEndpoint {
                             &peer_s,
                             &logs,
                             &ipv4,
-                            &ipv6,
                             &shared_buffers,
                             max_buffer_size,
                         );
@@ -126,7 +110,6 @@ impl DiscretEndpoint {
                             &peer_s,
                             &logs,
                             &ipv4,
-                            &ipv6,
                         )
                         .await;
                     }
@@ -157,36 +140,11 @@ impl DiscretEndpoint {
             }
         });
 
-        if let Some(endpoint) = ipv6_endpoint {
-            tokio::spawn(async move {
-                while let Some(incoming) = endpoint.accept().await {
-                    let logs = log.clone();
-                    let peer_s = peer_service.clone();
-                    let shared_buffers = data_buffer.clone();
-
-                    tokio::spawn(async move {
-                        let new_conn = Self::start_accepted(
-                            &peer_s,
-                            incoming,
-                            shared_buffers,
-                            max_buffer_size,
-                        )
-                        .await;
-                        if let Err(e) = new_conn {
-                            logs.error("ipv6 - start_accepted".to_string(), crate::Error::from(e));
-                        };
-                    });
-                }
-            });
-        }
-
         Ok(Self {
             id: endpoint_id,
             sender,
             ipv4_port,
             ipv4_cert_hash,
-            //    ipv6_port,
-            ipv6_cert_hash,
         })
     }
     #[allow(clippy::too_many_arguments)]
@@ -202,24 +160,10 @@ impl DiscretEndpoint {
         peer_service: &PeerConnectionService,
         log: &LogService,
         ipv4_endpoint: &Endpoint,
-        ipv6_endpoint: &Option<Endpoint>,
         shared_buffers: &Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) {
-        let endpoint = if address.is_ipv4() {
-            ipv4_endpoint.clone()
-        } else {
-            match ipv6_endpoint {
-                Some(endpoint) => endpoint.clone(),
-                None => {
-                    log.error(
-                        "IPV6 not supported".to_string(),
-                        crate::Error::from(Error::IPV6NotSuported()),
-                    );
-                    return;
-                }
-            }
-        };
+        let endpoint = ipv4_endpoint.clone();
         let peer_service = peer_service.clone();
         let log = log.clone();
 
@@ -674,32 +618,16 @@ impl DiscretEndpoint {
         peer_service: &PeerConnectionService,
         log: &LogService,
         ipv4_endpoint: &Endpoint,
-        ipv6_endpoint: &Option<Endpoint>,
     ) {
-        let endpoint = if address.is_ipv4() {
-            ipv4_endpoint.clone()
-        } else {
-            match ipv6_endpoint {
-                Some(endpoint) => endpoint.clone(),
-                None => {
-                    log.error(
-                        "IPV6 not supported".to_string(),
-                        crate::Error::from(Error::IPV6NotSuported()),
-                    );
-                    return;
-                }
-            }
-        };
-
         let peer_service = peer_service.clone();
         let name = cert_verifier.add_valid_certificate(cert_hash);
 
         log.info(format!(
             "Connecting to beacon: {} -> {}",
-            &endpoint.local_addr().unwrap(),
+            ipv4_endpoint.local_addr().unwrap(),
             address
         ));
-
+        let endpoint = ipv4_endpoint.clone();
         tokio::spawn(async move {
             let conn_result: Result<quinn::Connecting, quinn::ConnectError> =
                 endpoint.connect(address, &name);

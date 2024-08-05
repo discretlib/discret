@@ -172,7 +172,8 @@ impl PeerManager {
             let local_cert_has = if address.is_ipv4() {
                 self.endpoint.ipv4_cert_hash
             } else {
-                self.endpoint.ipv6_cert_hash
+                //ipv6 is not supported because it is not well supported
+                continue;
             };
 
             let mut header = AnnounceHeader {
