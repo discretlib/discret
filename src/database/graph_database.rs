@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::error;
+
 use lru::LruCache;
 use rusqlite::OptionalExtension;
 use std::collections::{HashSet, VecDeque};
@@ -30,7 +33,6 @@ use super::{
 use super::{DataModification, MESSAGE_OVERHEAD};
 
 use crate::event_service::EventServiceMessage;
-use crate::log_service::LogService;
 use crate::security::{uid_encode, MeetingSecret, MeetingToken};
 use crate::{
     configuration::Configuration,
@@ -85,7 +87,7 @@ impl GraphDatabaseService {
         let exist = database_path.exists();
         Ok(exist)
     }
-    #[allow(clippy::too_many_arguments)]
+
     pub async fn start(
         app_key: &str,
         datamodel: &str,
@@ -94,7 +96,6 @@ impl GraphDatabaseService {
         data_folder: PathBuf,
         configuration: &Configuration,
         event_service: EventService,
-        log_service: LogService,
     ) -> Result<(Self, Vec<u8>, Uid)> {
         let (peer_sender, mut peer_receiver) =
             mpsc::channel::<DbMessage>(configuration.parallelism);
@@ -236,9 +237,9 @@ impl GraphDatabaseService {
                                 .send(EventServiceMessage::DataChanged(data_mod))
                                 .await;
                         }
-                        Err(e) => {
-                            log_service
-                                .error("ComputedDailyLog".to_string(), crate::Error::from(e));
+                        Err(_e) => {
+                            #[cfg(feature = "log")]
+                            error!("ComputedDailyLog {}", _e);
                         }
                     },
                 }
@@ -1400,7 +1401,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1448,7 +1448,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1510,7 +1509,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1533,7 +1531,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .is_err();
@@ -1557,7 +1554,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1586,7 +1582,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1610,7 +1605,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1635,7 +1629,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1661,7 +1654,6 @@ mod tests {
                 path,
                 &Configuration::default(),
                 EventService::new(),
-                LogService::start(),
             )
             .await
             .unwrap();
@@ -1693,7 +1685,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1733,7 +1724,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1807,7 +1797,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();

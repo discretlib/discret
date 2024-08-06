@@ -2,7 +2,7 @@ use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use discret::{
     base64_encode, generate_x509_certificate, hash, Beacon, BeaconConfig, Configuration,
-    DefaultRoom, Discret, Event, LogService, Parameters, ParametersAdd, ResultParser,
+    DefaultRoom, Discret, Event, Parameters, ParametersAdd, ResultParser,
 };
 use rand::{rngs::OsRng, RngCore};
 
@@ -272,7 +272,7 @@ async fn invites_beacon() {
         beacons: beacons_def,
         ..Default::default()
     };
-    let _ = Beacon::start(port, der, pks_der, LogService::start(), true).unwrap();
+    let _ = Beacon::start(port, der, pks_der, true).unwrap();
 
     let discret1: Discret =
         Discret::new(model, app_name, &key_material, path.clone(), config.clone())

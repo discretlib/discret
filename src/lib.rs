@@ -177,7 +177,6 @@ mod database;
 mod date_utils;
 mod discret;
 mod event_service;
-mod log_service;
 mod network;
 mod peer_connection_service;
 mod security;
@@ -198,8 +197,6 @@ pub use crate::{
     },
     discret::{database_exists, zero_uid, Discret, DiscretBlocking},
     event_service::Event,
-    log_service::Log,
-    log_service::LogService,
     network::beacon::Beacon,
     security::{
         base64_decode, base64_encode, derive_pass_phrase, generate_x509_certificate, hash,

@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::{error, info};
+
 use quinn::{Connection, VarInt};
 use std::{
     collections::{HashMap, HashSet},
@@ -13,7 +16,6 @@ use crate::{
         system_entities::{AllowedHardware, AllowedPeer, Invite, OwnedInvite, Peer, Status},
     },
     discret::{DiscretParams, DiscretServices},
-    log_service::LogService,
     network::endpoint::EndpointMessage,
     security::{uid_encode, HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
     DefaultRoom, Error, Parameters, ParametersAdd,
@@ -73,9 +75,7 @@ pub struct PeerManager {
     local_circuit: HashSet<[u8; 32]>,
     beacons: HashMap<SocketAddr, BeaconInfo>,
     connected_beacons: HashMap<SocketAddr, mpsc::Sender<Announce>>,
-
     services: DiscretServices,
-    logs: LogService,
 }
 impl PeerManager {
     pub async fn new(
@@ -83,7 +83,6 @@ impl PeerManager {
         services: &DiscretServices,
         endpoint: DiscretEndpoint,
         multicast_discovery: Option<mpsc::Sender<MulticastMessage>>,
-        log_service: LogService,
         meeting_secret: MeetingSecret,
     ) -> Result<Self, crate::Error> {
         let allowed_peers = services
@@ -151,7 +150,6 @@ impl PeerManager {
             local_circuit: HashSet::new(),
             beacons: HashMap::new(),
             connected_beacons: HashMap::new(),
-            logs: log_service,
             services: services.clone(),
         })
     }
@@ -767,7 +765,7 @@ impl PeerManager {
         Ok(pending)
     }
 
-    pub async fn beacon_connection_failed(&mut self, address: SocketAddr, error: String) {
+    pub async fn beacon_connection_failed(&mut self, address: SocketAddr, _error: String) {
         if let Some(beacon) = self.beacons.get_mut(&address) {
             beacon.retry += 1;
             if beacon.retry <= 3 {
@@ -780,9 +778,10 @@ impl PeerManager {
                     ))
                     .await;
             } else {
-                self.logs.error(
-                    "beacon_connection_failed".to_string(),
-                    crate::Error::BeaconConnectionFailed(address.to_string(), error),
+                #[cfg(feature = "log")]
+                error!(
+                    "beacon_connection_failed, error: {}",
+                    crate::Error::BeaconConnectionFailed(address.to_string(), _error),
                 );
             }
         }
@@ -814,6 +813,8 @@ impl PeerManager {
             };
             let _ = sender.send(announce).await;
             self.connected_beacons.insert(address, sender);
+            #[cfg(feature = "log")]
+            info!("Beacon connected: {address}");
         }
         Ok(())
     }
@@ -831,7 +832,8 @@ impl PeerManager {
                     ))
                     .await;
             } else {
-                self.logs.info(format!("Beacon disconnected: {}", address));
+                #[cfg(feature = "log")]
+                info!("Beacon disconnected: {address}");
             }
         }
         self.connected_beacons.remove(&address);

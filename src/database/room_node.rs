@@ -938,7 +938,6 @@ mod tests {
         },
         date_utils::now,
         event_service::EventService,
-        log_service::LogService,
         security::{base64_encode, new_uid, random32, Ed25519SigningKey},
     };
 
@@ -971,7 +970,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1062,7 +1060,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1129,7 +1126,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1265,7 +1261,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1281,7 +1276,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1509,7 +1503,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1525,7 +1518,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1681,7 +1673,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();
@@ -1697,7 +1688,6 @@ mod tests {
             path,
             &Configuration::default(),
             EventService::new(),
-            LogService::start(),
         )
         .await
         .unwrap();

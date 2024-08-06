@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::{error, info};
+
 use quinn::{
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
     ClientConfig, Connection, Endpoint, IdleTimeout, Incoming, RecvStream, SendStream,
@@ -11,14 +14,12 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
 };
 
 use crate::{
-    log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{self, hash, new_uid, random_domain_name, MeetingToken, Uid},
     synchronisation::{Answer, QueryProtocol, RemoteEvent},
@@ -28,9 +29,6 @@ use super::{
     beacon::BeaconMessage, shared_buffers::SharedBuffers, Announce, ConnectionInfo, Error,
     ALPN_QUIC_HTTP,
 };
-
-#[cfg(feature = "logs")]
-use log::{info, warn};
 
 static MAX_CONNECTION_RETRY: usize = 4;
 
@@ -57,7 +55,6 @@ pub struct DiscretEndpoint {
 impl DiscretEndpoint {
     pub async fn start(
         peer_service: PeerConnectionService,
-        log: LogService,
         max_buffer_size: usize,
         local_verifying_key: &[u8],
     ) -> Result<Self, Error> {
@@ -73,7 +70,6 @@ impl DiscretEndpoint {
         let ipv4_port = ipv4_endpoint.local_addr()?.port();
 
         let ipv4 = ipv4_endpoint.clone();
-        let logs = log.clone();
         let peer_s = peer_service.clone();
         let data_buffer = Arc::new(SharedBuffers::new());
         let shared_buffers = data_buffer.clone();
@@ -99,7 +95,6 @@ impl DiscretEndpoint {
                             peer_verifying_key,
                             local_verifying_key.clone(),
                             &peer_s,
-                            &logs,
                             &ipv4,
                             &shared_buffers,
                             max_buffer_size,
@@ -111,7 +106,6 @@ impl DiscretEndpoint {
                             cert_hash,
                             cert_verifier.clone(),
                             &peer_s,
-                            &logs,
                             &ipv4,
                         )
                         .await;
@@ -122,22 +116,21 @@ impl DiscretEndpoint {
 
         //ipv4 server
 
-        let logs = log.clone();
         let peer_s = peer_service.clone();
 
         let b_buffer = data_buffer.clone();
 
         tokio::spawn(async move {
             while let Some(incoming) = ipv4_endpoint.accept().await {
-                let logs = logs.clone();
                 let peer_s = peer_s.clone();
                 let shared_buffers = b_buffer.clone();
                 tokio::spawn(async move {
                     let new_conn =
                         Self::start_accepted(&peer_s, incoming, shared_buffers, max_buffer_size)
                             .await;
-                    if let Err(e) = new_conn {
-                        logs.error("ipv4 - start_accepted".to_string(), crate::Error::from(e));
+                    if let Err(_e) = new_conn {
+                        #[cfg(feature = "log")]
+                        error!("ipv4 - start_accepted, error: {}", _e);
                     }
                 });
             }
@@ -161,27 +154,23 @@ impl DiscretEndpoint {
         peer_verifying_key: Vec<u8>,
         local_verifying_key: Vec<u8>,
         peer_service: &PeerConnectionService,
-        log_service: &LogService,
         ipv4_endpoint: &Endpoint,
         shared_buffers: &Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) {
         let endpoint = ipv4_endpoint.clone();
         let peer_service = peer_service.clone();
-        let log_ser = log_service.clone();
 
         let shared_buffers: Arc<SharedBuffers> = shared_buffers.clone();
         let peer_verifying_key = peer_verifying_key.clone();
         let name = cert_verifier.add_valid_certificate(cert_hash);
 
-        #[cfg(feature = "logs")]
-        info!("Razor located: {razor}");
-
-        log_ser.info(format!(
+        #[cfg(feature = "log")]
+        info!(
             "Connecting: {} -> {}",
             &endpoint.local_addr().unwrap(),
             address
-        ));
+        );
 
         tokio::spawn(async move {
             for i in 0..MAX_CONNECTION_RETRY {
@@ -201,7 +190,7 @@ impl DiscretEndpoint {
                                     peer_verifying_key,
                                 };
 
-                                if let Err(e) = Self::start_connection(
+                                if let Err(_e) = Self::start_connection(
                                     conn,
                                     &peer_service,
                                     &local_verifying_key,
@@ -211,10 +200,12 @@ impl DiscretEndpoint {
                                 )
                                 .await
                                 {
-                                    log_ser.error(
-                                        "InitiateConnection.start_connection".to_string(),
-                                        crate::Error::from(e),
+                                    #[cfg(feature = "log")]
+                                    error!(
+                                        "InitiateConnection.start_connection error: {}",
+                                        crate::Error::from(_e),
                                     );
+
                                     let _ = &peer_service
                                         .sender
                                         .send(PeerConnectionMessage::PeerConnectionFailed(
@@ -226,15 +217,16 @@ impl DiscretEndpoint {
                                 }
                                 break;
                             }
-                            Err(e) => {
+                            Err(_e) => {
                                 if i == MAX_CONNECTION_RETRY - 1 {
-                                    log_ser.error(
-                                        "InitiateConnection".to_string(),
-                                        crate::Error::from(Error::ConnectionFailed(
+                                    #[cfg(feature = "log")]
+                                    error!(
+                                        "InitiateConnection error: {}",
+                                        Error::ConnectionFailed(
                                             address.to_string(),
                                             MAX_CONNECTION_RETRY,
-                                            e.to_string(),
-                                        )),
+                                            _e.to_string(),
+                                        ),
                                     );
                                     let _ = &peer_service
                                         .sender
@@ -247,11 +239,12 @@ impl DiscretEndpoint {
                             }
                         };
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         if i == MAX_CONNECTION_RETRY - 1 {
-                            log_ser.error(
-                                "InitiateConnection".to_string(),
-                                crate::Error::from(Error::from(e)),
+                            #[cfg(feature = "log")]
+                            error!(
+                                "InitiateConnection error: {}",
+                                crate::Error::from(Error::from(_e)),
                             );
 
                             let _ = &peer_service
@@ -622,17 +615,18 @@ impl DiscretEndpoint {
         cert_hash: [u8; 32],
         cert_verifier: Arc<ServerCertVerifier>,
         peer_service: &PeerConnectionService,
-        log: &LogService,
         ipv4_endpoint: &Endpoint,
     ) {
         let peer_service = peer_service.clone();
         let name = cert_verifier.add_valid_certificate(cert_hash);
 
-        log.info(format!(
+        #[cfg(feature = "log")]
+        info!(
             "Connecting to beacon: {} -> {}",
             ipv4_endpoint.local_addr().unwrap(),
             address
-        ));
+        );
+
         let endpoint = ipv4_endpoint.clone();
         tokio::spawn(async move {
             let conn_result: Result<quinn::Connecting, quinn::ConnectError> =

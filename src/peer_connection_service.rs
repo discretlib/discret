@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::error;
+
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, SocketAddr},
@@ -8,11 +11,10 @@ use std::{
 use quinn::Connection;
 
 use crate::{
-    database::{graph_database::GraphDatabaseService, node::Node},
+    database::node::Node,
     date_utils::now,
     discret::{DiscretParams, DiscretServices},
-    event_service::{Event, EventService, EventServiceMessage},
-    log_service::LogService,
+    event_service::{Event, EventServiceMessage},
     network::{
         endpoint::DiscretEndpoint,
         multicast::{self, MulticastMessage},
@@ -20,14 +22,13 @@ use crate::{
         Announce, AnnounceHeader, ConnectionInfo,
     },
     security::{uid_decode, HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
-    signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
         peer_outbound_service::{InboundQueryService, RemotePeerHandle},
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    Configuration, DefaultRoom, Result,
+    DefaultRoom, Result,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
@@ -75,7 +76,6 @@ impl PeerConnectionService {
         params: &DiscretParams,
         services: &DiscretServices,
         meeting_secret: MeetingSecret,
-        log_service: LogService,
     ) -> Result<Self> {
         let (sender, mut connection_receiver) =
             mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
@@ -88,7 +88,6 @@ impl PeerConnectionService {
 
         let endpoint = DiscretEndpoint::start(
             peer_service.clone(),
-            log_service.clone(),
             max_buffer_size as usize,
             &params.verifying_key,
         )
@@ -102,7 +101,6 @@ impl PeerConnectionService {
                 multicast_adress,
                 multicast_ipv4_interface,
                 peer_service.clone(),
-                log_service.clone(),
             )
             .await?;
             Some(multicast_discovery)
@@ -115,7 +113,6 @@ impl PeerConnectionService {
             services,
             endpoint,
             multicast_discovery,
-            log_service.clone(),
             meeting_secret,
         )
         .await?;
@@ -164,10 +161,11 @@ impl PeerConnectionService {
                                     &peer_service,
                                     &lock_service,
                                     local_event_broadcast.subscribe(),
-                                    &log_service,
                                 ).await;
-                                if let Err(e) = err{
-                                    log_service.error("process_peer_message".to_string(), e);
+                                if let Err(_e) = err{
+                                    #[cfg(feature = "log")]
+                                    error!("Process_peer_message error: {_e}");
+
                                 }
                             },
                             None => break,
@@ -222,7 +220,7 @@ impl PeerConnectionService {
             .send(PeerConnectionMessage::InviteAccepted(token, peer))
             .await;
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn process_peer_message(
         msg: PeerConnectionMessage,
         peer_manager: &mut PeerManager,
@@ -231,7 +229,6 @@ impl PeerConnectionService {
         peer_service: &PeerConnectionService,
         lock_service: &RoomLockService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
-        log_service: &LogService,
     ) -> Result<()> {
         match msg {
             PeerConnectionMessage::NewConnection(
@@ -275,14 +272,12 @@ impl PeerConnectionService {
                         reply: answer_sender,
                     },
                     query_receiver,
-                    log_service.clone(),
                     peer_service.clone(),
                     remote_verifying_key.clone(),
                     conn_ready.clone(),
                 );
 
-                let query_service =
-                    QueryService::start(query_sender, answer_receiver, log_service.clone());
+                let query_service = QueryService::start(query_sender, answer_receiver);
 
                 LocalPeerService::start(
                     event_receiver,
@@ -299,7 +294,6 @@ impl PeerConnectionService {
                     peer_service.clone(),
                     inbound_query_service,
                     &discret_services,
-                    log_service.clone(),
                 );
             }
 
@@ -335,8 +329,9 @@ impl PeerConnectionService {
             }
 
             PeerConnectionMessage::InviteAccepted(token, peer) => {
-                if let Err(e) = peer_manager.invite_accepted(token, peer).await {
-                    log_service.error("PeerConnectionMessage::InviteAccepted".to_string(), e);
+                if let Err(_e) = peer_manager.invite_accepted(token, peer).await {
+                    #[cfg(feature = "log")]
+                    error!("PeerConnectionMessage::InviteAccepted error: {_e}");
                 }
             }
 
@@ -354,8 +349,9 @@ impl PeerConnectionService {
             }
 
             PeerConnectionMessage::SendAnnounce() => {
-                if let Err(e) = peer_manager.send_annouces().await {
-                    log_service.error("PeerConnectionMessage::SendAnnounce".to_string(), e);
+                if let Err(_e) = peer_manager.send_annouces().await {
+                    #[cfg(feature = "log")]
+                    error!("PeerConnectionMessage::SendAnnounce, error: {_e} ");
                 }
             }
             PeerConnectionMessage::MulticastMessage(message, address) => match message {

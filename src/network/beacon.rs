@@ -1,3 +1,5 @@
+#[cfg(feature = "log")]
+use log::error;
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
@@ -12,7 +14,7 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::{log_service::LogService, security::MeetingToken};
+use crate::security::MeetingToken;
 
 use super::{
     peer_manager::MAX_MESSAGE_SIZE, shared_buffers::SharedBuffers, Announce, AnnounceHeader,
@@ -36,7 +38,6 @@ impl Beacon {
         ipv4_port: u16,
         der: Vec<u8>,
         pks_der: Vec<u8>,
-        log_service: LogService,
         allow_same_ip: bool,
     ) -> Result<Self, super::Error> {
         let shared_buffers = Arc::new(SharedBuffers::new());
@@ -45,7 +46,6 @@ impl Beacon {
         let ipv4_endpoint = Self::enpoint(ipv4_addr, der.clone(), pks_der.clone())?;
         Self::start_endpoint(
             ipv4_endpoint,
-            log_service.clone(),
             shared_buffers.clone(),
             MAX_MESSAGE_SIZE,
             allow_same_ip,
@@ -73,7 +73,6 @@ impl Beacon {
 
     fn start_endpoint(
         endpoint: Endpoint,
-        logs: LogService,
         shared_buffers: Arc<SharedBuffers>,
         max_buffer_size: usize,
         allow_same_ip: bool,
@@ -86,7 +85,6 @@ impl Beacon {
 
             while let Some(incoming) = endpoint.accept().await {
                 let shared_buff = shared_buffers.clone();
-                let logs = logs.clone();
                 let meeting_point = meeting_point.clone();
                 tokio::spawn(async move {
                     let new_conn = Self::start_accepted(
@@ -97,8 +95,9 @@ impl Beacon {
                         allow_same_ip,
                     )
                     .await;
-                    if let Err(e) = new_conn {
-                        logs.error("ipv4 - start_accepted".to_string(), crate::Error::from(e));
+                    if let Err(_e) = new_conn {
+                        #[cfg(feature = "log")]
+                        error!("Beacon - start_accepted, Error: {_e}");
                     }
                 });
             }

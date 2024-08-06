@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::error;
+
 use std::{
     collections::HashSet,
     sync::{
@@ -15,7 +18,6 @@ use tokio::sync::{
 use crate::{
     base64_encode,
     database::graph_database::GraphDatabaseService,
-    log_service::LogService,
     peer_connection_service::PeerConnectionService,
     security::{HardwareFingerprint, Uid},
 };
@@ -37,7 +39,6 @@ impl InboundQueryService {
         conn_id: Uid,
         mut peer: RemotePeerHandle,
         mut receiver: mpsc::Receiver<QueryProtocol>,
-        log_service: LogService,
         peer_service: PeerConnectionService,
         verifying_key: Arc<Mutex<Vec<u8>>>,
         conn_ready: Arc<AtomicBool>,
@@ -50,8 +51,9 @@ impl InboundQueryService {
                     msg = receiver.recv() =>{
                         match msg{
                             Some(msg) => {
-                                if let Err(e)  = Self::process_inbound(msg, &mut peer, &log_service, &verifying_key, &conn_ready,  &fingerprint).await{
-                                    log_service.error("RemoteQueryService Channel Send".to_string(), e);
+                                if let Err(_e)  = Self::process_inbound(msg, &mut peer, &verifying_key, &conn_ready,  &fingerprint).await{
+                                    #[cfg(feature = "log")]
+                                    error!("RemoteQueryService Channel Send, Error: {_e}");
                                 }
                             },
                             None => break,
@@ -78,7 +80,6 @@ impl InboundQueryService {
     pub async fn process_inbound(
         msg: QueryProtocol,
         peer: &mut RemotePeerHandle,
-        logs: &LogService,
         verifying_key: &Arc<Mutex<Vec<u8>>>,
         conn_ready: &Arc<AtomicBool>,
         fingerprint: &HardwareFingerprint,
@@ -135,8 +136,9 @@ impl InboundQueryService {
                                 }
                                 peer.send(msg.id, true, false, room_list).await?;
                             }
-                            Err(e) => {
-                                logs.error("Query::RoomList".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::RoomList, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -157,8 +159,9 @@ impl InboundQueryService {
                     let res = peer.db.get_room_definition(room_id).await;
                     match res {
                         Ok(definition) => peer.send(msg.id, true, true, definition).await?,
-                        Err(e) => {
-                            logs.error("Query::RoomDefinition".to_string(), e.into());
+                        Err(_e) => {
+                            #[cfg(feature = "log")]
+                            error!("Query::RoomDefinition, Error: {_e}");
                             peer.send(
                                 msg.id,
                                 false,
@@ -185,8 +188,9 @@ impl InboundQueryService {
                     let res = peer.db.get_room_node(room_id).await;
                     match res {
                         Ok(definition) => peer.send(msg.id, true, true, definition).await?,
-                        Err(e) => {
-                            logs.error("Query::RoomNode".to_string(), e.into());
+                        Err(_e) => {
+                            #[cfg(feature = "log")]
+                            error!("Query::RoomNode, Error: {_e}");
                             peer.send(
                                 msg.id,
                                 false,
@@ -215,8 +219,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::RoomLog".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::RoomLog, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -246,8 +251,9 @@ impl InboundQueryService {
                     let res = peer.db.get_room_log_at(room_id, date).await;
                     match res {
                         Ok(log) => peer.send(msg.id, true, true, log).await?,
-                        Err(e) => {
-                            logs.error("Query::RoomLog".to_string(), e.into());
+                        Err(_e) => {
+                            #[cfg(feature = "log")]
+                            error!("Query::RoomLog, Error: {_e}");
                             peer.send(
                                 msg.id,
                                 false,
@@ -276,8 +282,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::RoomDailyNodes".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::RoomDailyNodes, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -307,8 +314,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::Nodes".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::Nodes, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -338,8 +346,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::Edges".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::Edges, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -373,8 +382,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::EdgeDeletionLog".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::EdgeDeletionLog, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     true,
@@ -406,8 +416,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::NodeDeletionLog".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::NodeDeletionLog, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,
@@ -438,8 +449,9 @@ impl InboundQueryService {
                     while let Some(res) = res_reply.recv().await {
                         match res {
                             Ok(log) => peer.send(msg.id, true, false, log).await?,
-                            Err(e) => {
-                                logs.error("Query::PeerNodes".to_string(), e.into());
+                            Err(_e) => {
+                                #[cfg(feature = "log")]
+                                error!("Query::PeerNodes, Error: {_e}");
                                 peer.send(
                                     msg.id,
                                     false,

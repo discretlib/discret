@@ -186,7 +186,6 @@ use crate::{
     },
     event_service::Event,
     event_service::EventService,
-    log_service::LogService,
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
     security::{
         base64_encode, default_uid, derive_key, uid_encode, HardwareFingerprint, MeetingSecret, Uid,
@@ -270,7 +269,6 @@ impl Discret {
         let public_key = pub_key.as_bytes();
 
         let event_service: EventService = EventService::new();
-        let log_service = LogService::start();
         let (database_service, verifying_key, private_room_id) = GraphDatabaseService::start(
             app_key,
             datamodel,
@@ -279,7 +277,6 @@ impl Discret {
             data_folder.clone(),
             &configuration,
             event_service.clone(),
-            log_service.clone(),
         )
         .await?;
 
@@ -299,9 +296,7 @@ impl Discret {
             signature_verification: verify_service,
         };
 
-        let peers =
-            PeerConnectionService::start(&params, &services, meeting_secret, log_service.clone())
-                .await?;
+        let peers = PeerConnectionService::start(&params, &services, meeting_secret).await?;
 
         Ok(Self {
             params,

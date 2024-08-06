@@ -1,3 +1,6 @@
+#[cfg(feature = "log")]
+use log::error;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     pin::Pin,
@@ -30,10 +33,9 @@ use crate::{
     },
     discret::DiscretServices,
     event_service::EventServiceMessage,
-    log_service::LogService,
     network::{peer_manager::TokenType, ConnectionInfo},
     peer_connection_service::{PeerConnectionMessage, PeerConnectionService},
-    security::{self, base64_encode, random32, uid_encode, HardwareFingerprint, Uid},
+    security::{self, base64_encode, random32, HardwareFingerprint, Uid},
 };
 
 use super::{
@@ -62,7 +64,6 @@ impl QueryService {
     pub fn start(
         remote_sender: mpsc::Sender<QueryProtocol>,
         mut remote_receiver: mpsc::Receiver<Answer>,
-        log_service: LogService,
     ) -> Self {
         let (sender, mut local_receiver) = mpsc::channel::<QueryFn>(QUERY_SEND_BUFFER);
 
@@ -79,8 +80,9 @@ impl QueryService {
                                     QueryFn::Once(query, fun) => {
                                         let id = next_message_id;
                                         let query_prot = QueryProtocol { id, query };
-                                        if let Err(e)  = remote_sender.send(query_prot).await {
-                                            log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
+                                        if let Err(_e)  = remote_sender.send(query_prot).await {
+                                            #[cfg(feature = "log")]
+                                            error!("QueryService QueryFn::Once, Error: {_e}");
                                             break;
                                         }
                                         sent_query.insert(id, fun);
@@ -89,8 +91,9 @@ impl QueryService {
                                     QueryFn::Multiple(query, fun) => {
                                         let id = next_message_id;
                                         let query_prot = QueryProtocol { id, query };
-                                        if let Err(e)  = remote_sender.send(query_prot).await {
-                                            log_service.error("QueryService".to_string(), crate::Error::SendError(e.to_string()));
+                                        if let Err(_e)  = remote_sender.send(query_prot).await {
+                                            #[cfg(feature = "log")]
+                                            error!("QueryService QueryFn::Multiple, Error: {_e}");
                                             break;
                                         }
                                         sent_query_multiple.insert(id, fun);
@@ -239,7 +242,6 @@ impl LocalPeerService {
         peer_service: PeerConnectionService,
         inbound_query_service: InboundQueryService,
         discret_services: &DiscretServices,
-        log_service: LogService,
     ) {
         let (lock_reply, mut lock_receiver) = mpsc::unbounded_channel::<Uid>();
         let discret_services = discret_services.clone();
@@ -267,8 +269,9 @@ impl LocalPeerService {
                         return;
                     }
                 }
-                Err(e) => {
-                    log_service.error("LocalPeerServiceInit".to_string(), e);
+                Err(_e) => {
+                    #[cfg(feature = "log")]
+                    error!("LocalPeerServiceInit, Error: {_e}");
                     let key = remote_verifying_key.lock().await;
                     let verif_key = key.clone();
                     drop(key);
@@ -290,7 +293,7 @@ impl LocalPeerService {
                                 let verif_key = key.clone();
                                 drop(key);
 
-                                if let Err(e) = Self::process_remote_event(
+                                if let Err(_e) = Self::process_remote_event(
                                     msg,
                                     lock_reply.clone(),
                                     &lock_service,
@@ -304,7 +307,8 @@ impl LocalPeerService {
                                     connection_info.conn_id
                                  )
                                     .await{
-                                        log_service.error("LocalPeerService remote event".to_string(),e);
+                                        #[cfg(feature = "log")]
+                                        error!("LocalPeerService Remote Event, Error: {_e}");
                                         break;
                                 }
                             }
@@ -314,8 +318,9 @@ impl LocalPeerService {
 
                     msg = local_event.recv() =>{
                         if let Ok(msg) = msg{
-                            if let Err(e) = Self::process_local_event(msg, &remote_verifying_key, &event_sender, &remote_rooms, &inbound_query_service).await{
-                                log_service.error("LocalPeerService Local event".to_string(),e);
+                            if let Err(_e) = Self::process_local_event(msg, &remote_verifying_key, &event_sender, &remote_rooms, &inbound_query_service).await{
+                                #[cfg(feature = "log")]
+                                error!("LocalPeerService Local Event, Error: {_e}");
                                 break;
                             }
                         }
@@ -324,17 +329,18 @@ impl LocalPeerService {
                     msg = lock_receiver.recv() =>{
                         match msg{
                             Some(room) => {
-                                if let Err(e) =Self::process_acquired_lock(
+                                if let Err(_e) =Self::process_acquired_room(
                                     room,
                                     acquired_lock.clone(),
                                     query_service.clone(),
                                     lock_service.clone(),
                                     peer_service.clone(),
                                     &discret_services,
-                                    log_service.clone(),
                                 )
                                     .await {
-                                        log_service.error("LocalPeerService Lock".to_string(),e);
+                                        #[cfg(feature = "log")]
+                                        error!("LocalPeerService Lock, Error: {_e}");
+
                                         break;
                                 }
                             }
@@ -465,28 +471,21 @@ impl LocalPeerService {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
-    async fn process_acquired_lock(
+    async fn process_acquired_room(
         room: Uid,
         acquired_lock: Arc<Mutex<HashSet<Uid>>>,
         query_service: QueryService,
         lock_service: RoomLockService,
         peer_service: PeerConnectionService,
         discret_services: &DiscretServices,
-        log_service: LogService,
     ) -> Result<(), crate::Error> {
         let discret_services = discret_services.clone();
         tokio::spawn(async move {
             {
                 acquired_lock.lock().await.insert(room);
             }
-            match Self::synchronise_room(
-                room,
-                &query_service,
-                peer_service,
-                &discret_services,
-                &log_service,
-            )
-            .await
+            match Self::synchronise_room(room, &query_service, peer_service, &discret_services)
+                .await
             {
                 Ok(_) => {
                     discret_services
@@ -494,10 +493,9 @@ impl LocalPeerService {
                         .notify(EventServiceMessage::RoomSynchronized(room))
                         .await;
                 }
-                Err(e) => {
-                    log_service.error("synchronise_room".to_string(), e);
-
-                    //TODO should stop the peer???
+                Err(_e) => {
+                    #[cfg(feature = "log")]
+                    error!("process_acquired_room, Error: {_e}");
                 }
             };
 
@@ -513,7 +511,6 @@ impl LocalPeerService {
         query_service: &QueryService,
         peer_service: PeerConnectionService,
         discret_services: &DiscretServices,
-        log_service: &LogService,
     ) -> Result<(), crate::Error> {
         //
         // update room definition
@@ -599,7 +596,6 @@ impl LocalPeerService {
             &local_room_def,
             query_service,
             discret_services,
-            log_service,
         )
         .await?
         {
@@ -646,7 +642,6 @@ impl LocalPeerService {
         local_room_def: &Option<RoomDefinitionLog>,
         query_service: &QueryService,
         discret_services: &DiscretServices,
-        log_service: &LogService,
     ) -> Result<bool, crate::Error> {
         let sync_history = match local_room_def {
             Some(local_room) => {
@@ -657,22 +652,10 @@ impl LocalPeerService {
             None => true,
         };
         if sync_history {
-            Self::synchronise_history(
-                remote_room.room_id,
-                query_service,
-                discret_services,
-                log_service,
-            )
-            .await
+            Self::synchronise_history(remote_room.room_id, query_service, discret_services).await
         } else {
-            Self::synchronise_last_day(
-                remote_room,
-                local_room_def,
-                query_service,
-                discret_services,
-                log_service,
-            )
-            .await
+            Self::synchronise_last_day(remote_room, local_room_def, query_service, discret_services)
+                .await
         }
     }
 
@@ -680,7 +663,6 @@ impl LocalPeerService {
         room_id: Uid,
         query_service: &QueryService,
         discret_services: &DiscretServices,
-        log_service: &LogService,
     ) -> Result<bool, crate::Error> {
         let mut remote_log_receiver: Receiver<Result<Vec<DailyLog>, Error>> =
             Self::query_multiple(query_service, Query::RoomLog(room_id)).await;
@@ -724,7 +706,6 @@ impl LocalPeerService {
                                     remote.date,
                                     query_service,
                                     discret_services,
-                                    log_service,
                                 )
                                 .await?
                             {
@@ -738,7 +719,6 @@ impl LocalPeerService {
                                 remote.date,
                                 query_service,
                                 discret_services,
-                                log_service,
                             )
                             .await?
                             {
@@ -754,7 +734,6 @@ impl LocalPeerService {
                         remote.date,
                         query_service,
                         discret_services,
-                        log_service,
                     )
                     .await?
                     {
@@ -771,7 +750,6 @@ impl LocalPeerService {
         local_room_def: &Option<RoomDefinitionLog>,
         query_service: &QueryService,
         discret_services: &DiscretServices,
-        log_service: &LogService,
     ) -> Result<bool, crate::Error> {
         let sync_day = match local_room_def {
             Some(local_room) => {
@@ -796,7 +774,6 @@ impl LocalPeerService {
                     remote_room.last_data_date.unwrap(), //checked by sync_day
                     query_service,
                     discret_services,
-                    log_service,
                 )
                 .await?;
             }
@@ -812,7 +789,6 @@ impl LocalPeerService {
         date: i64,
         query_service: &QueryService,
         discret_services: &DiscretServices,
-        log: &LogService,
     ) -> Result<bool, crate::Error> {
         let mut has_changes = false;
 
@@ -923,10 +899,15 @@ impl LocalPeerService {
                         .add_nodes(room_id, nodes_to_insert)
                         .await?;
                     if !res.is_empty() {
-                        log.error(
-                            "synchronise_day".to_string(),
-                            crate::Error::NodeRejected(res.len(), uid_encode(&room_id), date),
-                        )
+                        #[cfg(feature = "log")]
+                        error!(
+                            "synchronise_day, Error: {}",
+                            crate::Error::NodeRejected(
+                                res.len(),
+                                security::uid_encode(&room_id),
+                                date
+                            ),
+                        );
                     }
                 }
                 let mut result_recv: Receiver<Result<Vec<Edge>, Error>> =
@@ -944,10 +925,15 @@ impl LocalPeerService {
                         .await?;
                     let res = discret_services.database.add_edges(room_id, edges).await?;
                     if !res.is_empty() {
-                        log.error(
-                            "synchronise_day".to_string(),
-                            crate::Error::EdgeRejected(res.len(), uid_encode(&room_id), date),
-                        )
+                        #[cfg(feature = "log")]
+                        error!(
+                            "synchronise_day, Error: {}",
+                            crate::Error::EdgeRejected(
+                                res.len(),
+                                security::uid_encode(&room_id),
+                                date
+                            ),
+                        );
                     }
                 }
                 node_list.clear();
@@ -978,10 +964,11 @@ impl LocalPeerService {
                     .add_nodes(room_id, nodes_to_insert)
                     .await?;
                 if !res.is_empty() {
-                    log.error(
-                        "synchronise_day".to_string(),
-                        crate::Error::NodeRejected(res.len(), uid_encode(&room_id), date),
-                    )
+                    #[cfg(feature = "log")]
+                    error!(
+                        "synchronise_day, Error: {}",
+                        crate::Error::NodeRejected(res.len(), security::uid_encode(&room_id), date),
+                    );
                 }
             }
 
@@ -1000,10 +987,11 @@ impl LocalPeerService {
                     .await?;
                 let res = discret_services.database.add_edges(room_id, edges).await?;
                 if !res.is_empty() {
-                    log.error(
-                        "synchronise_day".to_string(),
-                        crate::Error::EdgeRejected(res.len(), uid_encode(&room_id), date),
-                    )
+                    #[cfg(feature = "log")]
+                    error!(
+                        "synchronise_day, Error: {}",
+                        crate::Error::EdgeRejected(res.len(), security::uid_encode(&room_id), date),
+                    );
                 }
             }
         }

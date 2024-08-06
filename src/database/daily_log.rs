@@ -648,7 +648,6 @@ mod tests {
         },
         date_utils::{date, now},
         event_service::EventService,
-        log_service::LogService,
         security::{base64_encode, default_uid, new_uid, random32},
     };
 
@@ -688,7 +687,6 @@ mod tests {
             path,
             &Configuration::default(),
             event_service,
-            LogService::start(),
         )
         .await
         .unwrap();

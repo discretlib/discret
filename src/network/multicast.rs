@@ -1,10 +1,10 @@
-use bincode;
-
-use crate::log_service::LogService;
-use crate::security::MeetingToken;
+#[cfg(feature = "log")]
+use log::error;
 
 use super::{Announce, AnnounceHeader, Error};
 use crate::peer_connection_service::{PeerConnectionMessage, PeerConnectionService};
+use crate::security::MeetingToken;
+use bincode;
 
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -28,13 +28,11 @@ pub async fn start_multicast_discovery(
     multicast_adress: SocketAddr,
     multicast_ipv4_interface: Ipv4Addr,
     peer_service: PeerConnectionService,
-    log: LogService,
 ) -> Result<Sender<MulticastMessage>, Error> {
     let socket_sender = new_sender(&multicast_ipv4_interface)?;
     let socket_listener = new_listener(multicast_adress, &multicast_ipv4_interface)?;
     let (sender, mut receiv) = mpsc::channel::<MulticastMessage>(1);
 
-    let logs = log.clone();
     tokio::spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
         while let Some(msg) = receiv.recv().await {
@@ -43,11 +41,15 @@ pub async fn start_multicast_discovery(
             match b {
                 Ok(_) => {
                     let error = socket_sender.send_to(&buffer, multicast_adress).await;
-                    if let Err(e) = error {
-                        logs.error("multicast send".to_string(), crate::Error::from(e));
+                    if let Err(_e) = error {
+                        #[cfg(feature = "log")]
+                        error!("multicast send, error: {}", _e);
                     }
                 }
-                Err(e) => logs.error("multicast send".to_string(), crate::Error::from(e)),
+                Err(_e) => {
+                    #[cfg(feature = "log")]
+                    error!("multicast send, error: {}", _e)
+                }
             }
         }
     });
@@ -64,8 +66,9 @@ pub async fn start_multicast_discovery(
                         .send(PeerConnectionMessage::MulticastMessage(msg, adress))
                         .await;
                 }
-                Err(e) => {
-                    log.error("multicast receiv".to_string(), crate::Error::from(e));
+                Err(_e) => {
+                    #[cfg(feature = "log")]
+                    error!("multicast receive: {}", _e);
                 }
             }
         }
