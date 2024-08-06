@@ -2,7 +2,7 @@
 [package]
 name = "discret"
 homepage = "https://discretlib.github.io/doc/"
-version = "0.6.1"
+version = "0.6.2"
 license-file = "LICENCE"
 description = "A backend to create peer to peer (P2P) applications, using a GraphQL inspired syntax "
 authors = ["Adrien Salais <adrien.salais@proton.me>"]
