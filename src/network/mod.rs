@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use thiserror::Error;
 
-use crate::{security::MeetingToken, Uid};
+use crate::security::{MeetingToken, Uid};
 
 //Application-Layer Protocol Negotiation (ALPN). Use the tag used for HTTP/3 over QUIC v1
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];

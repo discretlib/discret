@@ -29,6 +29,9 @@ use super::{
     ALPN_QUIC_HTTP,
 };
 
+#[cfg(feature = "logs")]
+use log::{info, warn};
+
 static MAX_CONNECTION_RETRY: usize = 4;
 
 static CHANNEL_SIZE: usize = 1;
@@ -158,20 +161,23 @@ impl DiscretEndpoint {
         peer_verifying_key: Vec<u8>,
         local_verifying_key: Vec<u8>,
         peer_service: &PeerConnectionService,
-        log: &LogService,
+        log_service: &LogService,
         ipv4_endpoint: &Endpoint,
         shared_buffers: &Arc<SharedBuffers>,
         max_buffer_size: usize,
     ) {
         let endpoint = ipv4_endpoint.clone();
         let peer_service = peer_service.clone();
-        let log = log.clone();
+        let log_ser = log_service.clone();
 
         let shared_buffers: Arc<SharedBuffers> = shared_buffers.clone();
         let peer_verifying_key = peer_verifying_key.clone();
         let name = cert_verifier.add_valid_certificate(cert_hash);
 
-        log.info(format!(
+        #[cfg(feature = "logs")]
+        info!("Razor located: {razor}");
+
+        log_ser.info(format!(
             "Connecting: {} -> {}",
             &endpoint.local_addr().unwrap(),
             address
@@ -205,7 +211,7 @@ impl DiscretEndpoint {
                                 )
                                 .await
                                 {
-                                    log.error(
+                                    log_ser.error(
                                         "InitiateConnection.start_connection".to_string(),
                                         crate::Error::from(e),
                                     );
@@ -222,7 +228,7 @@ impl DiscretEndpoint {
                             }
                             Err(e) => {
                                 if i == MAX_CONNECTION_RETRY - 1 {
-                                    log.error(
+                                    log_ser.error(
                                         "InitiateConnection".to_string(),
                                         crate::Error::from(Error::ConnectionFailed(
                                             address.to_string(),
@@ -243,7 +249,7 @@ impl DiscretEndpoint {
                     }
                     Err(e) => {
                         if i == MAX_CONNECTION_RETRY - 1 {
-                            log.error(
+                            log_ser.error(
                                 "InitiateConnection".to_string(),
                                 crate::Error::from(Error::from(e)),
                             );

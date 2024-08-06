@@ -1,11 +1,3 @@
-use crate::{
-    base64_encode,
-    database::{
-        node::Node,
-        system_entities::{Invite, OwnedInvite, Peer, Status},
-    },
-    uid_encode, DefaultRoom, DiscretParams, Error, Parameters, ParametersAdd,
-};
 use quinn::{Connection, VarInt};
 use std::{
     collections::{HashMap, HashSet},
@@ -15,16 +7,16 @@ use tokio::sync::mpsc;
 use x25519_dalek::PublicKey;
 
 use crate::{
-    base64_decode,
+    base64_decode, base64_encode,
     database::{
-        graph_database::GraphDatabaseService,
-        system_entities::{AllowedHardware, AllowedPeer},
+        node::Node,
+        system_entities::{AllowedHardware, AllowedPeer, Invite, OwnedInvite, Peer, Status},
     },
+    discret::{DiscretParams, DiscretServices},
     log_service::LogService,
     network::endpoint::EndpointMessage,
-    security::{HardwareFingerprint, MeetingSecret, MeetingToken},
-    signature_verification_service::SignatureVerificationService,
-    Uid,
+    security::{uid_encode, HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
+    DefaultRoom, Error, Parameters, ParametersAdd,
 };
 
 use super::{endpoint::DiscretEndpoint, multicast::MulticastMessage, Announce, AnnounceHeader};
@@ -82,21 +74,22 @@ pub struct PeerManager {
     beacons: HashMap<SocketAddr, BeaconInfo>,
     connected_beacons: HashMap<SocketAddr, mpsc::Sender<Announce>>,
 
-    db: GraphDatabaseService,
+    services: DiscretServices,
     logs: LogService,
-    verify_service: SignatureVerificationService,
 }
 impl PeerManager {
     pub async fn new(
         params: &DiscretParams,
+        services: &DiscretServices,
         endpoint: DiscretEndpoint,
         multicast_discovery: Option<mpsc::Sender<MulticastMessage>>,
-        db: GraphDatabaseService,
         log_service: LogService,
-        verify_service: SignatureVerificationService,
         meeting_secret: MeetingSecret,
     ) -> Result<Self, crate::Error> {
-        let allowed_peers = db.get_allowed_peers(params.private_room_id).await?;
+        let allowed_peers = services
+            .database
+            .get_allowed_peers(params.private_room_id)
+            .await?;
         let mut allowed_token: HashMap<MeetingToken, Vec<TokenType>> = HashMap::new();
 
         for peer in &allowed_peers {
@@ -106,13 +99,14 @@ impl PeerManager {
         }
 
         let owned_invites =
-            OwnedInvite::list_valid(uid_encode(&params.private_room_id), &db).await?;
+            OwnedInvite::list_valid(uid_encode(&params.private_room_id), &services.database)
+                .await?;
         for owned in &owned_invites {
             let token = MeetingSecret::derive_token(DERIVE_STRING, &owned.id);
             let entry = allowed_token.entry(token).or_default();
             entry.push(TokenType::OwnedInvite(owned.clone()));
         }
-        let invites = Invite::list(uid_encode(&params.private_room_id), &db).await?;
+        let invites = Invite::list(uid_encode(&params.private_room_id), &services.database).await?;
         for invite in &invites {
             let uid = &invite.invite_id;
             let token = MeetingSecret::derive_token(DERIVE_STRING, uid);
@@ -128,7 +122,7 @@ impl PeerManager {
                 certificate_hash: endpoint.ipv4_cert_hash,
                 signature: Vec::new(),
             };
-            let (_verifying, signature) = db.sign(header.hash().to_vec()).await;
+            let (_verifying, signature) = services.database.sign(header.hash().to_vec()).await;
             header.signature = signature;
 
             Some(MulticastInfo {
@@ -157,9 +151,8 @@ impl PeerManager {
             local_circuit: HashSet::new(),
             beacons: HashMap::new(),
             connected_beacons: HashMap::new(),
-            db,
             logs: log_service,
-            verify_service,
+            services: services.clone(),
         })
     }
 
@@ -181,7 +174,7 @@ impl PeerManager {
                 certificate_hash: local_cert_has,
                 signature: Vec::new(),
             };
-            let (_verifying, signature) = self.db.sign(header.hash().to_vec()).await;
+            let (_verifying, signature) = self.services.database.sign(header.hash().to_vec()).await;
             header.signature = signature;
 
             let deserialized = base64_decode(cert_hash.as_bytes())?;
@@ -296,7 +289,8 @@ impl PeerManager {
                         TokenType::AllowedPeer(peer) => {
                             let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
                             let validated = self
-                                .verify_service
+                                .services
+                                .signature_verification
                                 .verify_hash(signature, hash_to_verify, verifying_key.clone())
                                 .await;
 
@@ -373,7 +367,8 @@ impl PeerManager {
                         TokenType::AllowedPeer(peer) => {
                             let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
                             let validated = self
-                                .verify_service
+                                .services
+                                .signature_verification
                                 .verify_hash(signature, hash_to_verify, verifying_key.clone())
                                 .await;
 
@@ -501,7 +496,7 @@ impl PeerManager {
             self.private_room_id,
             &hardware.name,
             allowed_status,
-            &self.db,
+            &self.services.database,
         )
         .await?;
         Ok(())
@@ -516,35 +511,39 @@ impl PeerManager {
         let allowed_status = "allowed";
         let pending_status = "pending";
         let is_local = self.is_local_circuit(circuit_id);
-        let valid =
-            match AllowedHardware::get(hardware.id, self.private_room_id, allowed_status, &self.db)
-                .await?
-            {
-                Some(_) => true,
-                None => {
-                    if auto_allow_local && is_local {
-                        AllowedHardware::put(
-                            hardware.id,
-                            self.private_room_id,
-                            &hardware.name,
-                            allowed_status,
-                            &self.db,
-                        )
-                        .await?;
-                        true
-                    } else {
-                        AllowedHardware::put(
-                            hardware.id,
-                            self.private_room_id,
-                            &hardware.name,
-                            pending_status,
-                            &self.db,
-                        )
-                        .await?;
-                        false
-                    }
+        let valid = match AllowedHardware::get(
+            hardware.id,
+            self.private_room_id,
+            allowed_status,
+            &self.services.database,
+        )
+        .await?
+        {
+            Some(_) => true,
+            None => {
+                if auto_allow_local && is_local {
+                    AllowedHardware::put(
+                        hardware.id,
+                        self.private_room_id,
+                        &hardware.name,
+                        allowed_status,
+                        &self.services.database,
+                    )
+                    .await?;
+                    true
+                } else {
+                    AllowedHardware::put(
+                        hardware.id,
+                        self.private_room_id,
+                        &hardware.name,
+                        pending_status,
+                        &self.services.database,
+                    )
+                    .await?;
+                    false
                 }
-            };
+            }
+        };
 
         Ok(valid)
     }
@@ -585,7 +584,7 @@ impl PeerManager {
             uid_encode(&self.private_room_id),
             default_room,
             self.app_key.to_string(),
-            &self.db,
+            &self.services.database,
         )
         .await?;
 
@@ -606,7 +605,7 @@ impl PeerManager {
                 &inv.application, &self.app_key
             )));
         }
-        inv.insert(uid_encode(&self.private_room_id), &self.db)
+        inv.insert(uid_encode(&self.private_room_id), &self.services.database)
             .await?;
         let token = MeetingSecret::derive_token(DERIVE_STRING, &inv.invite_id);
         let entry = self.allowed_token.entry(token).or_default();
@@ -621,7 +620,10 @@ impl PeerManager {
         token_type: TokenType,
         peer: Node,
     ) -> Result<(), crate::Error> {
-        self.db.add_peer_nodes(vec![peer.clone()]).await?;
+        self.services
+            .database
+            .add_peer_nodes(vec![peer.clone()])
+            .await?;
 
         let verifying_key = base64_encode(&peer.verifying_key);
         let pub_key = Peer::pub_key(&peer)?;
@@ -634,7 +636,7 @@ impl PeerManager {
             &verifying_key,
             &base64_encode(&token),
             Status::Enabled,
-            &self.db,
+            &self.services.database,
         )
         .await?;
 
@@ -644,7 +646,7 @@ impl PeerManager {
 
         match token_type {
             TokenType::OwnedInvite(owned) => {
-                OwnedInvite::delete(owned.id, &self.db).await?;
+                OwnedInvite::delete(owned.id, &self.services.database).await?;
 
                 if let Some(room) = owned.room {
                     if let Some(auth) = owned.authorisation {
@@ -656,7 +658,8 @@ impl PeerManager {
                         param.add("id", room)?;
                         param.add("auth", auth)?;
                         param.add("verif_key", verif_key)?;
-                        self.db
+                        self.services
+                            .database
                             .mutate(
                                 r#"mutate {
                                 sys.Room{
@@ -690,7 +693,8 @@ impl PeerManager {
                         tokens.remove(index);
                     }
                 }
-                self.owned_invites = OwnedInvite::list_valid(room_id.clone(), &self.db).await?;
+                self.owned_invites =
+                    OwnedInvite::list_valid(room_id.clone(), &self.services.database).await?;
             }
             TokenType::Invite(invite) => {
                 let o = self.allowed_token.get_mut(&token);
@@ -706,8 +710,8 @@ impl PeerManager {
                         tokens.remove(index);
                     }
                 }
-                Invite::delete(room_id.clone(), invite.invite_id, &self.db).await?;
-                self.invites = Invite::list(room_id.clone(), &self.db).await?;
+                Invite::delete(room_id.clone(), invite.invite_id, &self.services.database).await?;
+                self.invites = Invite::list(room_id.clone(), &self.services.database).await?;
             }
             _ => unreachable!(),
         }
@@ -737,7 +741,7 @@ impl PeerManager {
                     &verifying_key,
                     &base64_encode(&token),
                     Status::Enabled,
-                    &self.db,
+                    &self.services.database,
                 )
                 .await?;
 
@@ -751,7 +755,7 @@ impl PeerManager {
                     &verifying_key,
                     &base64_encode(&token),
                     Status::Pending,
-                    &self.db,
+                    &self.services.database,
                 )
                 .await?;
                 pending = true;
@@ -863,7 +867,8 @@ impl PeerManager {
                         TokenType::AllowedPeer(peer) => {
                             let verifying_key = base64_decode(peer.peer.verifying_key.as_bytes())?;
                             let validated = self
-                                .verify_service
+                                .services
+                                .signature_verification
                                 .verify_hash(signature, hash_to_verify, verifying_key.clone())
                                 .await;
 

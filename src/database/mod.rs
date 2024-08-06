@@ -20,7 +20,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{base64_encode, Uid};
+use crate::security::{base64_encode, Uid};
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub const VEC_OVERHEAD: u64 = 4;

@@ -8,8 +8,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     base64_decode, base64_encode,
     database::VEC_OVERHEAD,
-    security::{uid_decode, uid_encode, Ed25519SigningKey, MeetingToken},
-    Parameters, ParametersAdd, Uid,
+    security::{uid_decode, uid_encode, Ed25519SigningKey, MeetingToken, Uid},
+    Parameters, ParametersAdd,
 };
 
 use super::{

@@ -10,6 +10,7 @@ use quinn::Connection;
 use crate::{
     database::{graph_database::GraphDatabaseService, node::Node},
     date_utils::now,
+    discret::{DiscretParams, DiscretServices},
     event_service::{Event, EventService, EventServiceMessage},
     log_service::LogService,
     network::{
@@ -18,7 +19,7 @@ use crate::{
         peer_manager::{self, PeerManager, TokenType},
         Announce, AnnounceHeader, ConnectionInfo,
     },
-    security::{HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
+    security::{uid_decode, HardwareFingerprint, MeetingSecret, MeetingToken, Uid},
     signature_verification_service::SignatureVerificationService,
     synchronisation::{
         peer_inbound_service::{LocalPeerService, QueryService},
@@ -26,7 +27,7 @@ use crate::{
         room_locking_service::RoomLockService,
         Answer, LocalEvent, QueryProtocol, RemoteEvent,
     },
-    uid_decode, Configuration, DefaultRoom, DiscretParams, Result,
+    Configuration, DefaultRoom, Result,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
@@ -72,11 +73,9 @@ pub struct PeerConnectionService {
 impl PeerConnectionService {
     pub async fn start(
         params: &DiscretParams,
+        services: &DiscretServices,
         meeting_secret: MeetingSecret,
-        database_service: GraphDatabaseService,
-        event_service: EventService,
         log_service: LogService,
-        verify_service: SignatureVerificationService,
     ) -> Result<Self> {
         let (sender, mut connection_receiver) =
             mpsc::channel::<PeerConnectionMessage>(PEER_CHANNEL_SIZE);
@@ -113,11 +112,10 @@ impl PeerConnectionService {
 
         let mut peer_manager = PeerManager::new(
             params,
+            services,
             endpoint,
             multicast_discovery,
-            database_service.clone(),
             log_service.clone(),
-            verify_service.clone(),
             meeting_secret,
         )
         .await?;
@@ -149,11 +147,10 @@ impl PeerConnectionService {
             }
         });
 
-        let conf = params.configuration.clone();
-        let local_verifying_key = params.verifying_key.clone();
-        let fingerprint = params.hardware_fingerprint.clone();
+        let discret_params = params.clone();
+        let discret_service = services.clone();
         tokio::spawn(async move {
-            let mut event_receiver = event_service.subcribe().await;
+            let mut event_receiver = discret_service.events.subcribe().await;
             loop {
                 tokio::select! {
                     msg = connection_receiver.recv() =>{
@@ -161,17 +158,13 @@ impl PeerConnectionService {
                             Some(msg) =>{
                                 let err = Self::process_peer_message(
                                     msg,
-                                    local_verifying_key.clone(),
                                     &mut peer_manager,
-                                    &database_service,
-                                    &event_service,
-                                    &log_service,
+                                    &discret_params,
+                                    &discret_service,
                                     &peer_service,
                                     &lock_service,
-                                    &verify_service,
                                     local_event_broadcast.subscribe(),
-                                    &conf,
-                                    fingerprint.clone()
+                                    &log_service,
                                 ).await;
                                 if let Err(e) = err{
                                     log_service.error("process_peer_message".to_string(), e);
@@ -232,17 +225,13 @@ impl PeerConnectionService {
     #[allow(clippy::too_many_arguments)]
     async fn process_peer_message(
         msg: PeerConnectionMessage,
-        local_verifying_key: Vec<u8>,
         peer_manager: &mut PeerManager,
-        db: &GraphDatabaseService,
-        event_service: &EventService,
-        log_service: &LogService,
+        discret_params: &DiscretParams,
+        discret_services: &DiscretServices,
         peer_service: &PeerConnectionService,
         lock_service: &RoomLockService,
-        verify_service: &SignatureVerificationService,
         local_event_broadcast: broadcast::Receiver<LocalEvent>,
-        configuration: &Configuration,
-        fingerprint: HardwareFingerprint,
+        log_service: &LogService,
     ) -> Result<()> {
         match msg {
             PeerConnectionMessage::NewConnection(
@@ -276,13 +265,13 @@ impl PeerConnectionService {
                 let conn_ready = Arc::new(AtomicBool::new(true));
 
                 let inbound_query_service = InboundQueryService::start(
-                    fingerprint,
+                    discret_params.hardware_fingerprint.clone(),
                     circuit_id,
                     connection_info.conn_id,
                     RemotePeerHandle {
-                        db: db.clone(),
+                        db: discret_services.database.clone(),
                         allowed_room: HashSet::new(),
-                        verifying_key: local_verifying_key.clone(),
+                        verifying_key: discret_params.verifying_key.clone(),
                         reply: answer_sender,
                     },
                     query_receiver,
@@ -300,24 +289,23 @@ impl PeerConnectionService {
                     local_event_broadcast,
                     circuit_id,
                     connection_info.clone(),
-                    local_verifying_key.clone(),
+                    discret_params.verifying_key.clone(),
                     token_type,
                     remote_verifying_key.clone(),
                     conn_ready,
-                    db.clone(),
                     lock_service.clone(),
                     query_service,
                     event_sender.clone(),
-                    log_service.clone(),
                     peer_service.clone(),
-                    event_service.clone(),
                     inbound_query_service,
-                    verify_service.clone(),
+                    &discret_services,
+                    log_service.clone(),
                 );
             }
 
             PeerConnectionMessage::PeerConnected(verifying_key, connection_id) => {
-                let _ = event_service
+                let _ = discret_services
+                    .events
                     .sender
                     .send(EventServiceMessage::PeerConnected(
                         verifying_key,
@@ -334,7 +322,8 @@ impl PeerConnectionService {
                     peer_manager::REASON_UNKNOWN,
                     "",
                 ) {
-                    let _ = event_service
+                    let _ = discret_services
+                        .events
                         .sender
                         .send(EventServiceMessage::PeerDisconnected(
                             verifying_key,
@@ -353,10 +342,11 @@ impl PeerConnectionService {
 
             PeerConnectionMessage::NewPeer(peers) => {
                 if peer_manager
-                    .add_new_peers(peers, configuration.auto_allow_new_peers)
+                    .add_new_peers(peers, discret_params.configuration.auto_allow_new_peers)
                     .await?
                 {
-                    let _ = event_service
+                    let _ = discret_services
+                        .events
                         .sender
                         .send(EventServiceMessage::PendingPeer())
                         .await;
@@ -396,12 +386,13 @@ impl PeerConnectionService {
                     .validate_hardware(
                         &circuit,
                         fingerprint,
-                        configuration.auto_accept_local_device,
+                        discret_params.configuration.auto_accept_local_device,
                     )
                     .await;
                 if let Ok(val) = valid.as_ref() {
                     if !val {
-                        let _ = event_service
+                        let _ = discret_services
+                            .events
                             .sender
                             .send(EventServiceMessage::PendingHardware())
                             .await;
