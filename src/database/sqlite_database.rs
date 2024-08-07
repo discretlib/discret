@@ -1,6 +1,13 @@
+#[cfg(feature = "log")]
+use log::{error, info};
+
 use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
 
-use std::{path::PathBuf, thread, time};
+use std::{
+    path::PathBuf,
+    thread,
+    time::{self, Duration},
+};
 use tokio::sync::{
     mpsc,
     oneshot::{self, Sender},
@@ -340,6 +347,7 @@ pub enum WriteMessage {
     DeleteNodes(Vec<NodeDeletionEntry>, Sender<Result<()>>),
     Write(WriteStmt, Sender<Result<WriteStmt>>),
     ComputeDailyLog(DailyLogsUpdate, mpsc::Sender<DbMessage>),
+    Optimize,
 }
 
 /// Main entry point to insert data in the database
@@ -502,6 +510,9 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::DeleteNodes(_, r) => {
                                     let _ = r.send(Ok(()));
                                 }
+                                WriteMessage::Optimize => {
+                                    //do nothing
+                                }
                             }
                         }
                     }
@@ -561,11 +572,25 @@ impl BufferedDatabaseWriter {
                                 WriteMessage::DeleteNodes(_, r) => {
                                     let _ = r.send(Err(Error::DatabaseWrite(e.to_string())));
                                 }
+                                WriteMessage::Optimize => {
+                                    //do nothing
+                                }
                             }
                         }
                     }
                 }
                 let _s = send_ready.blocking_send(true);
+            }
+        });
+
+        //run the PRAGMA Optimize; command every hours
+        let optimize_sender = send_write.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(3600));
+
+            loop {
+                interval.tick().await;
+                let _ = optimize_sender.send(WriteMessage::Optimize).await;
             }
         });
 
@@ -576,8 +601,10 @@ impl BufferedDatabaseWriter {
         buffer: &mut Vec<WriteMessage>,
         conn: &Connection,
     ) -> std::result::Result<(), rusqlite::Error> {
-        conn.execute("BEGIN TRANSACTION", [])?;
         let mut daily_log = DailyMutations::default();
+        let mut optimize = false; //flag to run the optimize task outside a transaction
+
+        conn.execute("BEGIN TRANSACTION", [])?;
         for query in buffer {
             match query {
                 WriteMessage::Deletion(query, _) => {
@@ -670,11 +697,27 @@ impl BufferedDatabaseWriter {
                         return Err(e);
                     }
                 }
+                WriteMessage::Optimize => optimize = true,
             }
         }
         //at the end of the batch, update the daily log with all room dates that needs to be recomputed
         daily_log.write(conn)?;
         conn.execute("COMMIT", [])?;
+
+        // run the PRAGMA optimize; outside the transaction
+        if optimize {
+            match conn.execute("PRAGMA optimize;", []) {
+                Ok(_) => {
+                    #[cfg(feature = "log")]
+                    info!("Database Optimization Successful ");
+                }
+                Err(_e) => {
+                    #[cfg(feature = "log")]
+                    error!("Error during 'PRAGMA optimize' : {_e}");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -778,6 +821,7 @@ mod tests {
     use super::*;
     use crate::database::Error;
     use crate::security::hash;
+    use crate::test::init_log;
     use std::result::Result;
     use std::{fs, path::Path, time::Instant};
     #[derive(Debug)]
@@ -966,6 +1010,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn read_only_test() {
+        init_log();
         let path: PathBuf = init_database_path("read_only_test.db").unwrap();
         let secret = hash(b"bytes");
         let conn = create_connection(&path, &secret, 1024, false).unwrap();
