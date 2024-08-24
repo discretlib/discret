@@ -12,6 +12,12 @@ It provides the following features:
 While not intended to solve Internet scale problem, it should be useful to quickly create application that don't requires a lot of users.
 
 More details and tutorials are available in the [documentation site](https://discretlib.github.io/doc/)
+# Usage
+*Discret* is published as a cargo crate.
+
+```
+cargo add discret
+```
 
 # Example
 The following example creates a very basic chat application. If you build and run this program on several different folder or local network devices
