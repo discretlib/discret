@@ -2,12 +2,12 @@
 //!
 //! *Discret* hides the complexity of peer to peer networks and reduces it to a data access problem.
 //!
-//! The API allows you to:
-//! - manage your data using a GraphQL syntax,
-//! - add access right to your data (in graphQL too),
-//! - create and accept invites from other peers.
+//! It provides the following features:
+//! - A database layer based on sqlite that is managed using a GraphQL inspired API
+//! - An authentication and authorization layer to define who can access data
+//! - A Peer to Peer layer that allows you to invite Peers
 //!
-//! *Discret* will synchronize your data with other peers, depending on the access right you have given to those peers.
+//! And *Discret* will automatically synchronize your data with other peers, based on the access right you have defined.
 //!
 //! More details and tutorials are available in the [documentation site](https://discretlib.github.io/doc/)
 //!
