@@ -7,7 +7,7 @@ It provides the following features:
 - An authentication and authorization layer to define who can access data,
 - A Peer to Peer layer that allows you to invite Peers.
 
-*Discret* will automatically synchronize your data with other peers, based on the access right you have defined.
+*Discret* will automatically synchronize your data with other peers, based on the access rights you have defined.
 
 While not intended to solve Internet scale problem, it should be useful to quickly create application that don't requires a lot of users.
 
