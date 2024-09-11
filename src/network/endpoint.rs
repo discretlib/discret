@@ -840,10 +840,10 @@ impl ServerCertVerifier {
         let g = v.get(name);
         g.copied()
     }
-    pub fn remove_valid_certificate(&self, name: &str) {
-        let mut v = self.valid_certificates.lock().unwrap();
-        v.remove(name);
-    }
+    // pub fn remove_valid_certificate(&self, name: &str) {
+    //     let mut v = self.valid_certificates.lock().unwrap();
+    //     v.remove(name);
+    // }
 }
 
 impl rustls::client::danger::ServerCertVerifier for ServerCertVerifier {

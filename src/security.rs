@@ -103,6 +103,7 @@ impl Ed25519SigningKey {
     ///
     /// new key using a random number
     ///
+    #[cfg(test)]
     pub fn new() -> Self {
         let random: [u8; 32] = random32();
         Ed25519SigningKey::create_from(&random)

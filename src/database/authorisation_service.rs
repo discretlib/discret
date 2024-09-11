@@ -992,23 +992,23 @@ impl RoomAuthorisations {
         Ok(room.users())
     }
 
-    pub fn validate_peer_nodes_request(
-        &self,
-        room_id: Uid,
-        keys: Vec<Vec<u8>>,
-    ) -> Result<Vec<Vec<u8>>> {
-        let room = self
-            .rooms
-            .get(&room_id)
-            .ok_or(Error::UnknownRoom(uid_encode(&room_id)))?;
+    // pub fn validate_peer_nodes_request(
+    //     &self,
+    //     room_id: Uid,
+    //     keys: Vec<Vec<u8>>,
+    // ) -> Result<Vec<Vec<u8>>> {
+    //     let room = self
+    //         .rooms
+    //         .get(&room_id)
+    //         .ok_or(Error::UnknownRoom(uid_encode(&room_id)))?;
 
-        for key in &keys {
-            if !room.has_user(key) {
-                return Err(Error::InvalidUser(uid_encode(&room_id)));
-            }
-        }
-        Ok(keys)
-    }
+    //     for key in &keys {
+    //         if !room.has_user(key) {
+    //             return Err(Error::InvalidUser(uid_encode(&room_id)));
+    //         }
+    //     }
+    //     Ok(keys)
+    // }
 
     pub const LOAD_QUERY: &'static str = "
         query LOAD_ROOMS{

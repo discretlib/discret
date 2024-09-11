@@ -355,26 +355,26 @@ impl GraphDatabaseService {
     // Perform a SQL Selection query on the database
     // SQL mutation query are forbidden
     //
-    #[cfg(test)]
-    pub async fn select<T: Send + Sized + 'static>(
-        &self,
-        query: String,
-        params: Vec<Box<dyn rusqlite::ToSql + Sync + Send>>,
-        mapping: super::sqlite_database::RowMappingFn<T>,
-    ) -> Result<Vec<T>> {
-        let (reply, receive) = oneshot::channel::<Result<Vec<T>>>();
+    // #[cfg(test)]
+    // pub async fn select<T: Send + Sized + 'static>(
+    //     &self,
+    //     query: String,
+    //     params: Vec<Box<dyn rusqlite::ToSql + Sync + Send>>,
+    //     mapping: super::sqlite_database::RowMappingFn<T>,
+    // ) -> Result<Vec<T>> {
+    //     let (reply, receive) = oneshot::channel::<Result<Vec<T>>>();
 
-        self.db
-            .reader
-            .send_async(Box::new(move |conn| {
-                let result =
-                    super::sqlite_database::DatabaseReader::select(&query, &params, &mapping, conn)
-                        .map_err(Error::from);
-                let _ = reply.send(result);
-            }))
-            .await?;
-        receive.await?
-    }
+    //     self.db
+    //         .reader
+    //         .send_async(Box::new(move |conn| {
+    //             let result =
+    //                 super::sqlite_database::DatabaseReader::select(&query, &params, &mapping, conn)
+    //                     .map_err(Error::from);
+    //             let _ = reply.send(result);
+    //         }))
+    //         .await?;
+    //     receive.await?
+    // }
 
     ///
     /// Update the existing data model definition with a new one  

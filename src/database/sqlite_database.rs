@@ -1,7 +1,10 @@
 #[cfg(feature = "log")]
 use log::{error, info};
 
-use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row, ToSql};
+#[cfg(test)]
+use rusqlite::ToSql;
+
+use rusqlite::{functions::FunctionFlags, Connection, OptionalExtension, Row};
 
 use std::{
     path::PathBuf,
@@ -256,12 +259,12 @@ impl DatabaseReader {
         Ok(Self { sender })
     }
 
-    pub fn send_blocking(&self, query: QueryFn) -> Result<()> {
-        self.sender
-            .send(query)
-            .map_err(|e| Error::ChannelSend(e.to_string()))?;
-        Ok(())
-    }
+    // pub fn send_blocking(&self, query: QueryFn) -> Result<()> {
+    //     self.sender
+    //         .send(query)
+    //         .map_err(|e| Error::ChannelSend(e.to_string()))?;
+    //     Ok(())
+    // }
 
     pub async fn send_async(&self, query: QueryFn) -> Result<()> {
         self.sender
@@ -271,22 +274,22 @@ impl DatabaseReader {
         Ok(())
     }
 
-    pub fn query_blocking<T: Send + Sized + 'static>(
-        &self,
-        query: String,
-        params: Vec<Box<dyn ToSql + Sync + Send>>,
-        mapping: RowMappingFn<T>,
-    ) -> Result<Vec<T>> {
-        let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
+    // pub fn query_blocking<T: Send + Sized + 'static>(
+    //     &self,
+    //     query: String,
+    //     params: Vec<Box<dyn ToSql + Sync + Send>>,
+    //     mapping: RowMappingFn<T>,
+    // ) -> Result<Vec<T>> {
+    //     let (send_response, receive_response) = oneshot::channel::<Result<Vec<T>>>();
 
-        self.send_blocking(Box::new(move |conn| {
-            let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
-            let _ = send_response.send(result);
-        }))?;
+    //     self.send_blocking(Box::new(move |conn| {
+    //         let result = Self::select(&query, &params, &mapping, conn).map_err(Error::from);
+    //         let _ = send_response.send(result);
+    //     }))?;
 
-        receive_response.blocking_recv()?
-    }
-
+    //     receive_response.blocking_recv()?
+    // }
+    #[cfg(test)]
     pub async fn query_async<T: Send + Sized + 'static>(
         &self,
         query: String,
@@ -303,7 +306,7 @@ impl DatabaseReader {
 
         receive_response.await?
     }
-
+    #[cfg(test)]
     pub fn select<T: Send + Sized + 'static>(
         query: &str,
         params: &Vec<Box<dyn ToSql + Sync + Send>>,
@@ -741,31 +744,31 @@ impl BufferedDatabaseWriter {
         Ok(())
     }
 
-    ///
-    /// send a write message without waiting for the query to finish
-    ///
-    pub fn send_blocking(&self, msg: WriteMessage) -> Result<()> {
-        self.sender
-            .blocking_send(msg)
-            .map_err(|e| Error::ChannelSend(e.to_string()))
-    }
+    // ///
+    // /// send a write message without waiting for the query to finish
+    // ///
+    // pub fn send_blocking(&self, msg: WriteMessage) -> Result<()> {
+    //     self.sender
+    //         .blocking_send(msg)
+    //         .map_err(|e| Error::ChannelSend(e.to_string()))
+    // }
 
-    ///
-    /// Optimize the sqlite database
-    /// should be called from time to time, and after large insertions
-    ///
-    pub async fn optimize(&self) -> Result<WriteStmt> {
-        self.write(Box::new(Optimize {})).await
-    }
+    // ///
+    // /// Optimize the sqlite database
+    // /// should be called from time to time, and after large insertions
+    // ///
+    // pub async fn optimize(&self) -> Result<WriteStmt> {
+    //     self.write(Box::new(Optimize {})).await
+    // }
 }
 
-struct Optimize {}
-impl Writeable for Optimize {
-    fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
-        conn.execute("PRAGMA OPTIMIZE", [])?;
-        Ok(())
-    }
-}
+// struct Optimize {}
+// impl Writeable for Optimize {
+//     fn write(&mut self, conn: &Connection) -> std::result::Result<(), rusqlite::Error> {
+//         conn.execute("PRAGMA OPTIMIZE", [])?;
+//         Ok(())
+//     }
+// }
 
 ///
 /// Creates a Sqlite function to encode and decode base64 in sql queries
